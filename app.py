@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import json
 import os
 import urllib.parse
 from http.server import ThreadingHTTPServer
-from typing import Any
 
+from nanocms import projection, resolve_page
 from raw_json_mapper import build_raw_json_graph
 from structureprojector import (
     APP_HOST,
@@ -18,11 +17,11 @@ from structureprojector import (
     load_snapshot,
 )
 
-INDEX_HTML = os.path.join(os.path.dirname(__file__), 'static', 'index_v02.html')
+INDEX_HTML = os.path.join(os.path.dirname(__file__), 'static', 'index_v03.html')
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.2'
+    server_version = 'StructureProjector/0.3'
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
@@ -37,6 +36,18 @@ class Handler(BaseHandler):
                 self.wfile.write(payload)
                 return
 
+            if parsed.path == '/api/nanocms':
+                qs = urllib.parse.parse_qs(parsed.query)
+                page = qs.get('page', [None])[0]
+                try:
+                    self._json(200, projection(page))
+                except KeyError:
+                    self._json(404, {
+                        'valid': False,
+                        'errors': [{'id': 'SP_NANOCMS_PAGE_NOT_FOUND', 'message': f'Unknown nanoCMS page: {page}'}]
+                    })
+                return
+
             if parsed.path == '/api/branches':
                 self._json(200, {'repository': SOURCE_REPO, 'branches': list_branches()})
                 return
@@ -44,8 +55,28 @@ class Handler(BaseHandler):
             if parsed.path == '/api/project':
                 qs = urllib.parse.parse_qs(parsed.query)
                 branch = qs.get('branch', ['main'])[0]
-                ruleset = qs.get('ruleset', ['CanonicalContract'])[0]
+                page_id = qs.get('page', ['canonical-structure'])[0]
                 selected_path = qs.get('path', [None])[0]
+
+                try:
+                    page = resolve_page(page_id)
+                except KeyError:
+                    self._json(400, {
+                        'valid': False,
+                        'errors': [{'id': 'SP_NANOCMS_PAGE_NOT_FOUND', 'message': f'Unknown nanoCMS page: {page_id}'}]
+                    })
+                    return
+
+                placements = page.get('placements', [])
+                if len(placements) != 1:
+                    self._json(500, {
+                        'valid': False,
+                        'errors': [{'id': 'SP_NANOCMS_PLACEMENT', 'message': f'Page {page_id} must resolve to exactly one view placement in v0.3.'}]
+                    })
+                    return
+
+                placement = placements[0]
+                ruleset = placement['ruleset']
                 snapshot = load_snapshot(branch)
 
                 if ruleset == 'CanonicalContract':
@@ -54,12 +85,14 @@ class Handler(BaseHandler):
                 elif ruleset == 'RawJSON':
                     result = build_raw_json_graph(snapshot, selected_path)
                 else:
-                    self._json(400, {
+                    self._json(500, {
                         'valid': False,
-                        'errors': [{'id': 'SP_UNKNOWN_RULESET', 'message': f'Unknown ruleset: {ruleset}'}]
+                        'errors': [{'id': 'SP_UNKNOWN_RULESET', 'message': f'Unknown ruleset in placement: {ruleset}'}]
                     })
                     return
 
+                result['page'] = page
+                result['placement'] = placement
                 self._json(200 if result['valid'] else 422, result)
                 return
 
@@ -67,7 +100,8 @@ class Handler(BaseHandler):
                 self._json(200, {
                     'ok': True,
                     'service': 'StructureProjector',
-                    'version': '0.2.0',
+                    'version': '0.3.0',
+                    'view_shell': 'nanoCMS',
                     'rulesets': ['CanonicalContract', 'RawJSON'],
                 })
                 return
@@ -81,9 +115,9 @@ class Handler(BaseHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer((APP_HOST, APP_PORT), Handler)
-    print(f'StructureProjector 0.2.0: http://{APP_HOST}:{APP_PORT}')
+    print(f'StructureProjector 0.3.0: http://{APP_HOST}:{APP_PORT}')
     print(f'Source: {SOURCE_REPO}')
-    print('Rulesets: CanonicalContract, RawJSON')
+    print('View shell: nanoCMS')
     try:
         server.serve_forever()
     except KeyboardInterrupt:
