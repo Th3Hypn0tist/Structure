@@ -5,33 +5,39 @@ from typing import Any
 
 # StructureProjector-local nanoCMS projection.
 #
-# The model intentionally follows the AIGMos nanoCMSStructure contract:
-# recursive Page identities + ordered child references + ordered placements.
-# This standalone copy owns only StructureProjector view placement/navigation.
-# It does not own the semantics of the rulesets, graphs or renderers it places.
+# Page represents a stable inspection context/tree branch. Placements represent
+# alternative views of that same context. Changing a placement MUST NOT change
+# the selected semantic/tree context.
+#
+# This follows the nanoCMSStructure ownership boundary: nanoCMS owns recursive
+# Page structure, ordering and placement; placed rulesets/renderers retain their
+# own semantics.
 
 PAGES: dict[str, dict[str, Any]] = {
     "structureprojector": {
         "id": "structureprojector",
         "title": "StructureProjector",
         "menuitem": "StructureProjector",
-        "description": "Read-only structural projection views.",
-        "children": ["canonical-structure", "raw-json"],
+        "description": "Read-only structural projection contexts.",
+        "children": ["canonical", "raw-json"],
         "placements": [],
     },
-    "canonical-structure": {
-        "id": "canonical-structure",
-        "title": "Canonical Structure",
+    "canonical": {
+        "id": "canonical",
+        "title": "Canonical",
         "menuitem": "Canonical",
-        "description": "CanonicalContract semantic structure map.",
+        "description": "CanonicalContract semantic tree context.",
         "children": [],
-        "placements": ["view.canonical_structure_map"],
+        "placements": [
+            "view.canonical_structure_map",
+            "view.semantic_space_3d",
+        ],
     },
     "raw-json": {
         "id": "raw-json",
         "title": "Raw JSON",
         "menuitem": "Raw JSON",
-        "description": "Raw JSON object/array/key/value containment view.",
+        "description": "Raw JSON structural tree context.",
         "children": [],
         "placements": ["view.raw_json_tree"],
     },
@@ -40,22 +46,35 @@ PAGES: dict[str, dict[str, Any]] = {
 PLACEMENTS: dict[str, dict[str, Any]] = {
     "view.canonical_structure_map": {
         "id": "view.canonical_structure_map",
+        "title": "Structure 2D",
         "type": "structureprojector_view",
         "view": "canonical_structure_map",
         "ruleset": "CanonicalContract",
         "renderer": "svg",
+        "context_model": "semantic_identity",
+    },
+    "view.semantic_space_3d": {
+        "id": "view.semantic_space_3d",
+        "title": "Semantic Space 3D",
+        "type": "structureprojector_view",
+        "view": "semantic_space_3d",
+        "ruleset": "CanonicalContract",
+        "renderer": "javascript_3d",
+        "context_model": "semantic_identity",
     },
     "view.raw_json_tree": {
         "id": "view.raw_json_tree",
+        "title": "JSON Tree",
         "type": "structureprojector_view",
         "view": "raw_json_tree",
         "ruleset": "RawJSON",
         "renderer": "svg",
+        "context_model": "json_pointer",
     },
 }
 
 ROOT_PAGE = "structureprojector"
-DEFAULT_PAGE = "canonical-structure"
+DEFAULT_PAGE = "canonical"
 
 
 def _validate() -> None:
@@ -77,6 +96,13 @@ def _validate() -> None:
             if placement_ref not in PLACEMENTS:
                 raise ValueError(f"nanoCMS page {page_id} has unresolved placement {placement_ref}")
 
+    for placement_id, placement in PLACEMENTS.items():
+        if placement.get("id") != placement_id:
+            raise ValueError(f"nanoCMS placement identity mismatch: {placement_id}")
+        for field in ("title", "view", "ruleset", "renderer", "context_model"):
+            if field not in placement:
+                raise ValueError(f"nanoCMS placement {placement_id} missing {field}")
+
 
 _validate()
 
@@ -89,6 +115,19 @@ def resolve_page(page_id: str | None) -> dict[str, Any]:
     page["children"] = [deepcopy(PAGES[child]) for child in page["children"]]
     page["placements"] = [deepcopy(PLACEMENTS[p]) for p in page["placements"]]
     return page
+
+
+def resolve_view(page_id: str | None, view_id: str | None = None) -> dict[str, Any]:
+    page = resolve_page(page_id)
+    placements = page["placements"]
+    if not placements:
+        raise KeyError(view_id or "")
+    if view_id is None:
+        return deepcopy(placements[0])
+    for placement in placements:
+        if placement["id"] == view_id or placement["view"] == view_id:
+            return deepcopy(placement)
+    raise KeyError(view_id)
 
 
 def navigation() -> list[dict[str, str]]:
@@ -104,13 +143,17 @@ def navigation() -> list[dict[str, str]]:
     ]
 
 
-def projection(page_id: str | None = None) -> dict[str, Any]:
-    selected = page_id or DEFAULT_PAGE
+def projection(page_id: str | None = None, view_id: str | None = None) -> dict[str, Any]:
+    selected_page = page_id or DEFAULT_PAGE
+    page = resolve_page(selected_page)
+    selected_view = resolve_view(selected_page, view_id)
     return {
         "name": "StructureProjector nanoCMS",
-        "model": "recursive Page + ordered children + placements",
+        "model": "recursive Page context + ordered alternative view placements",
+        "context_rule": "Changing view placement preserves the selected tree/semantic context.",
         "root": deepcopy(PAGES[ROOT_PAGE]),
         "default_page": DEFAULT_PAGE,
-        "selected_page": resolve_page(selected),
+        "selected_page": page,
+        "selected_view": selected_view,
         "navigation": navigation(),
     }
