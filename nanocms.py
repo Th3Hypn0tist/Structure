@@ -39,7 +39,10 @@ PAGES: dict[str, dict[str, Any]] = {
         "menuitem": "Raw JSON",
         "description": "Raw JSON structural tree context.",
         "children": [],
-        "placements": ["view.raw_json_tree"],
+        "placements": [
+            "view.raw_json_tree",
+            "view.raw_json_master_map",
+        ],
     },
 }
 
@@ -52,6 +55,7 @@ PLACEMENTS: dict[str, dict[str, Any]] = {
         "ruleset": "CanonicalContract",
         "renderer": "svg",
         "context_model": "semantic_identity",
+        "render_ruleset": None,
     },
     "view.semantic_space_3d": {
         "id": "view.semantic_space_3d",
@@ -61,6 +65,7 @@ PLACEMENTS: dict[str, dict[str, Any]] = {
         "ruleset": "CanonicalContract",
         "renderer": "javascript_3d",
         "context_model": "semantic_identity",
+        "render_ruleset": None,
     },
     "view.raw_json_tree": {
         "id": "view.raw_json_tree",
@@ -70,6 +75,17 @@ PLACEMENTS: dict[str, dict[str, Any]] = {
         "ruleset": "RawJSON",
         "renderer": "svg",
         "context_model": "json_pointer",
+        "render_ruleset": None,
+    },
+    "view.raw_json_master_map": {
+        "id": "view.raw_json_master_map",
+        "title": "Map 2D",
+        "type": "structureprojector_view",
+        "view": "raw_json_master_map",
+        "ruleset": "RawJSON",
+        "renderer": "svg_master_map",
+        "context_model": "json_pointer",
+        "render_ruleset": "render.aigmos_master_map",
     },
 }
 
@@ -99,7 +115,7 @@ def _validate() -> None:
     for placement_id, placement in PLACEMENTS.items():
         if placement.get("id") != placement_id:
             raise ValueError(f"nanoCMS placement identity mismatch: {placement_id}")
-        for field in ("title", "view", "ruleset", "renderer", "context_model"):
+        for field in ("title", "view", "ruleset", "renderer", "context_model", "render_ruleset"):
             if field not in placement:
                 raise ValueError(f"nanoCMS placement {placement_id} missing {field}")
 
