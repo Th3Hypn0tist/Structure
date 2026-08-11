@@ -4,6 +4,7 @@ import os
 import urllib.parse
 from http.server import ThreadingHTTPServer
 
+from master_map_renderer import build_master_map_projection
 from nanocms import projection, resolve_page, resolve_view
 from raw_json_mapper import build_raw_json_graph
 from structureprojector import (
@@ -17,11 +18,11 @@ from structureprojector import (
     load_snapshot,
 )
 
-INDEX_HTML = os.path.join(os.path.dirname(__file__), 'static', 'index_v05.html')
+INDEX_HTML = os.path.join(os.path.dirname(__file__), 'static', 'index_v06.html')
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.5'
+    server_version = 'StructureProjector/0.6'
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
@@ -59,6 +60,7 @@ class Handler(BaseHandler):
                 page_id = qs.get('page', ['canonical'])[0]
                 view_id = qs.get('view', [None])[0]
                 selected_path = qs.get('path', [None])[0]
+                context_id = qs.get('context', [None])[0]
 
                 try:
                     page = resolve_page(page_id)
@@ -87,6 +89,13 @@ class Handler(BaseHandler):
 
                 result['page'] = page
                 result['placement'] = placement
+                result['context'] = context_id
+
+                if result['valid'] and placement.get('renderer') == 'svg_master_map':
+                    result['projection'] = build_master_map_projection(
+                        result['graph'], context_id=context_id
+                    )
+
                 self._json(200 if result['valid'] else 422, result)
                 return
 
@@ -94,11 +103,12 @@ class Handler(BaseHandler):
                 self._json(200, {
                     'ok': True,
                     'service': 'StructureProjector',
-                    'version': '0.5.0',
+                    'version': '0.6.0',
                     'view_shell': 'nanoCMS',
                     'rulesets': ['CanonicalContract', 'RawJSON'],
                     'render_rulesets': ['render.aigmos_master_map'],
                     'renderers': ['svg', 'svg_master_map', 'javascript_3d'],
+                    'viewport': 'cursor_anchored_wheel_zoom',
                 })
                 return
 
@@ -111,10 +121,10 @@ class Handler(BaseHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer((APP_HOST, APP_PORT), Handler)
-    print(f'StructureProjector 0.5.0: http://{APP_HOST}:{APP_PORT}')
+    print(f'StructureProjector 0.6.0: http://{APP_HOST}:{APP_PORT}')
     print(f'Source: {SOURCE_REPO}')
     print('View shell: nanoCMS')
-    print('Renderers: SVG tree, ruleset-driven SVG map, JavaScript 3D')
+    print('2D viewport: cursor-anchored wheel zoom + drag pan')
     try:
         server.serve_forever()
     except KeyboardInterrupt:
