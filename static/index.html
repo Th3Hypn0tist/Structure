@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>StructureProjector</title>
+<style>
+:root{color-scheme:dark;--bg:#020304;--panel:#0a0d12;--line:#252c38;--text:#f8faff;--muted:#aab2c2;--blue:#087cff;--red:#ff176b}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace;height:100vh;overflow:hidden}
+header{height:58px;display:flex;align-items:center;gap:14px;padding:0 16px;border-bottom:1px solid var(--line);background:#05070a}header strong{font-size:16px}.meta{color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.spacer{flex:1}select,button{background:#0c1118;color:var(--text);border:1px solid #30394a;border-radius:5px;padding:7px 9px;font:inherit}button{cursor:pointer}.layout{height:calc(100vh - 58px);display:grid;grid-template-columns:minmax(0,1fr) 360px}.view{position:relative;overflow:hidden}.toolbar{position:absolute;left:12px;top:12px;z-index:2;background:#070a0fdd;border:1px solid var(--line);border-radius:6px;padding:8px;display:flex;gap:10px;flex-wrap:wrap}.toolbar label{display:flex;gap:5px;align-items:center;color:var(--muted);font-size:12px}.toolbar input{accent-color:var(--blue)}#canvas{width:100%;height:100%;display:block}.inspector{border-left:1px solid var(--line);background:var(--panel);overflow:auto;padding:14px}.inspector h2{margin:0 0 8px;font-size:15px}.kv{margin:0 0 12px}.kv dt{color:var(--muted);font-size:11px;text-transform:uppercase;margin-top:8px}.kv dd{margin:2px 0;word-break:break-word}.edges{font-size:12px}.edgeRow{border-top:1px solid var(--line);padding:7px 0}.error{padding:14px;color:#ffd9e7}.error strong{color:var(--red)}pre{white-space:pre-wrap;word-break:break-word;background:#05070a;border:1px solid var(--line);padding:9px;border-radius:5px;font-size:11px}.status{padding:2px 6px;border-radius:10px;border:1px solid #30394a;color:var(--muted)}.ok{color:#8bd4ff}.bad{color:var(--red)}
+svg text{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.node{cursor:pointer}.node rect{fill:#0c1118;stroke:#58647a;stroke-width:1}.node:hover rect,.node.selected rect{stroke:var(--blue);stroke-width:2}.node .name{fill:var(--text);font-size:13px;font-weight:700}.node .type{fill:var(--muted);font-size:10px}.edge{fill:none;stroke-width:1.6;opacity:.72}.edge.containment{stroke:#8794aa}.edge.relations{stroke:var(--blue)}.edge.ownership{stroke:#d8dde7}.edge.authority{stroke:var(--red)}.edge.dependencies{stroke:#8794aa;stroke-dasharray:5 4}.edgeLabel{fill:var(--muted);font-size:9px;pointer-events:none}
+</style>
+</head>
+<body>
+<header>
+  <strong>StructureProjector</strong><span class="status" id="status">idle</span>
+  <span class="meta" id="repo">AIGMos_docs</span>
+  <div class="spacer"></div>
+  <label>Branch <select id="branch"></select></label>
+  <button id="reload">Reload</button>
+  <span class="meta" id="revision"></span>
+</header>
+<div class="layout">
+<section class="view">
+  <div class="toolbar" id="toolbar">
+    <label><input type="checkbox" data-dim="containment" checked>containment</label>
+    <label><input type="checkbox" data-dim="relations" checked>relations</label>
+    <label><input type="checkbox" data-dim="ownership" checked>ownership</label>
+    <label><input type="checkbox" data-dim="authority" checked>authority</label>
+    <label><input type="checkbox" data-dim="dependencies" checked>dependencies</label>
+  </div>
+  <svg id="canvas" xmlns="http://www.w3.org/2000/svg"></svg>
+</section>
+<aside class="inspector" id="inspector"><h2>Inspector</h2><div class="meta">Select a semantic identity.</div></aside>
+</div>
+<script>
+const state={data:null,selected:null,visible:new Set(['containment','relations','ownership','authority','dependencies'])};
+const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function status(text,bad=false){$('#status').textContent=text;$('#status').className='status '+(bad?'bad':'ok')}
+async function json(url){const r=await fetch(url);const d=await r.json();if(!r.ok){throw d}return d}
+async function init(){status('branches');try{const d=await json('/api/branches');$('#repo').textContent=d.repository;$('#branch').innerHTML=d.branches.map(b=>`<option value="${esc(b.name)}">${esc(b.name)}</option>`).join('');if(d.branches.some(b=>b.name==='main'))$('#branch').value='main';await load()}catch(e){showErrors(e.errors||[{id:'SP_UI',message:String(e)}])}}
+async function load(){const branch=$('#branch').value;status('loading');state.selected=null;try{const d=await json('/api/project?branch='+encodeURIComponent(branch));state.data=d;$('#revision').textContent=d.source.revision.slice(0,12);status(`${d.source.contracts} contracts / ${d.graph.nodes.length} identities`);render();inspect(null)}catch(e){state.data=e;$('#revision').textContent=e.source?.revision?.slice(0,12)||'';showErrors(e.errors||[{id:'SP_UI',message:String(e)}]);status('invalid',true)}}
+function showErrors(errors){$('#canvas').innerHTML='';$('#inspector').innerHTML=`<h2>Preflight failed</h2><div class="error">${errors.map(x=>`<p><strong>${esc(x.id)}</strong><br>${esc(x.message)}${x.contract?`<br><span class="meta">${esc(x.contract)}</span>`:''}</p>`).join('')}</div>`}
+function layout(nodes,edges){const parents=new Map(),children=new Map();for(const n of nodes)children.set(n.id,[]);for(const e of edges.filter(e=>e.dimension==='containment')){parents.set(e.target,e.source);if(children.has(e.source))children.get(e.source).push(e.target)}
+ const roots=nodes.filter(n=>!parents.has(n.id));const levels=[];const seen=new Set();function walk(ids,d){if(!levels[d])levels[d]=[];for(const id of ids){if(seen.has(id))continue;seen.add(id);levels[d].push(id);walk(children.get(id)||[],d+1)}}walk(roots.map(n=>n.id),0);for(const n of nodes)if(!seen.has(n.id)){if(!levels[0])levels[0]=[];levels[0].push(n.id)}
+ const pos=new Map();const xGap=220,yGap=120;levels.forEach((ids,d)=>{ids.forEach((id,i)=>pos.set(id,{x:80+i*xGap,y:100+d*yGap}))});return {pos,width:Math.max(900,...levels.map(l=>l.length*xGap+160)),height:Math.max(600,levels.length*yGap+160)}}
+function render(){if(!state.data?.valid)return;const nodes=state.data.graph.nodes,edges=state.data.graph.edges;const {pos,width,height}=layout(nodes,edges);const svg=$('#canvas');svg.setAttribute('viewBox',`0 0 ${width} ${height}`);let out='<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#8794aa"/></marker></defs>';
+ for(const e of edges){if(!state.visible.has(e.dimension))continue;const a=pos.get(e.source),b=pos.get(e.target);if(!a||!b)continue;const x1=a.x+85,y1=a.y+26,x2=b.x+85,y2=b.y+26;const mx=(x1+x2)/2;out+=`<path class="edge ${esc(e.dimension)}" marker-end="url(#arrow)" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}"/><text class="edgeLabel" x="${mx+4}" y="${(y1+y2)/2-4}">${esc(e.type)}</text>`}
+ for(const n of nodes){const p=pos.get(n.id);if(!p)continue;out+=`<g class="node ${state.selected===n.id?'selected':''}" data-id="${esc(n.id)}" transform="translate(${p.x},${p.y})"><rect width="170" height="52" rx="5"/><text class="name" x="9" y="20">${esc((n.name||n.id).slice(0,24))}</text><text class="type" x="9" y="39">${esc((n.type||n.kind||'').slice(0,27))}</text></g>`}svg.innerHTML=out;svg.querySelectorAll('.node').forEach(el=>el.addEventListener('click',()=>{state.selected=el.dataset.id;render();inspect(state.selected)}))}
+function inspect(id){const box=$('#inspector');if(!id||!state.data?.valid){box.innerHTML='<h2>Inspector</h2><div class="meta">Select a semantic identity.</div>';return}const n=state.data.graph.nodes.find(n=>n.id===id);const incoming=state.data.graph.edges.filter(e=>e.target===id),outgoing=state.data.graph.edges.filter(e=>e.source===id);box.innerHTML=`<h2>${esc(n.name)}</h2><dl class="kv"><dt>Identity</dt><dd>${esc(n.id)}</dd><dt>Type</dt><dd>${esc(n.type)}</dd><dt>Status</dt><dd>${esc(n.status)}</dd><dt>Source</dt><dd>${esc(n.source)}</dd></dl><h2>Incoming</h2><div class="edges">${edgeRows(incoming)}</div><h2>Outgoing</h2><div class="edges">${edgeRows(outgoing)}</div><h2>Raw source</h2><pre>${esc(JSON.stringify(n.raw,null,2))}</pre>`}
+function edgeRows(es){return es.length?es.map(e=>`<div class="edgeRow"><b>${esc(e.dimension)}</b> · ${esc(e.type)}<br><span class="meta">${esc(e.source)} → ${esc(e.target)}</span></div>`).join(''):'<div class="meta">none</div>'}
+$('#reload').addEventListener('click',load);$('#branch').addEventListener('change',load);document.querySelectorAll('[data-dim]').forEach(cb=>cb.addEventListener('change',()=>{cb.checked?state.visible.add(cb.dataset.dim):state.visible.delete(cb.dataset.dim);render()}));init();
+</script>
+</body>
+</html>
