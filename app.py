@@ -17,11 +17,11 @@ from structureprojector import (
     load_snapshot,
 )
 
-INDEX_HTML = os.path.join(os.path.dirname(__file__), 'static', 'index_v04.html')
+INDEX_HTML = os.path.join(os.path.dirname(__file__), 'static', 'index_v05.html')
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.4'
+    server_version = 'StructureProjector/0.5'
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
@@ -94,10 +94,11 @@ class Handler(BaseHandler):
                 self._json(200, {
                     'ok': True,
                     'service': 'StructureProjector',
-                    'version': '0.4.0',
+                    'version': '0.5.0',
                     'view_shell': 'nanoCMS',
                     'rulesets': ['CanonicalContract', 'RawJSON'],
-                    'renderers': ['svg', 'javascript_3d'],
+                    'render_rulesets': ['render.aigmos_master_map'],
+                    'renderers': ['svg', 'svg_master_map', 'javascript_3d'],
                 })
                 return
 
@@ -110,10 +111,10 @@ class Handler(BaseHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer((APP_HOST, APP_PORT), Handler)
-    print(f'StructureProjector 0.4.0: http://{APP_HOST}:{APP_PORT}')
+    print(f'StructureProjector 0.5.0: http://{APP_HOST}:{APP_PORT}')
     print(f'Source: {SOURCE_REPO}')
     print('View shell: nanoCMS')
-    print('Renderers: SVG, JavaScript 3D')
+    print('Renderers: SVG tree, ruleset-driven SVG map, JavaScript 3D')
     try:
         server.serve_forever()
     except KeyboardInterrupt:
