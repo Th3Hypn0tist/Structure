@@ -82,15 +82,16 @@ def build_master_map_projection(
     geom = rules["geometry"]
     layout = rules["layout"]
     width = int(rules["canvas"]["reference_width"])
-    margin = int(layout["outer_margin_px"])
+    margin = int(layout.get("outer_margin_px", 50))
     frame_pad = int(geom["frame"]["padding_px"])
     section_pad = int(geom["section"]["padding_px"])
     card_w = int(geom["card"]["preferred_width_px"])
-    card_gap = int(layout["card_gap_px"])
-    row_gap = int(layout["row_gap_px"])
-    section_gap = int(layout["section_gap_px"])
-    max_cols = int(layout["max_columns"])
-    chip_h = int(geom["chip"]["height_px"])
+    card_gap = int(layout.get("card_gap_px", layout.get("preferred_inter_card_gap_px", 20)))
+    row_gap = int(layout.get("row_gap_px", layout.get("preferred_inter_card_gap_px", 20)))
+    section_gap = int(layout.get("section_gap_px", layout.get("minimum_inter_section_gap_px", 25)))
+    max_cols = int(layout.get("max_columns", 6))
+    chip_height = geom["chip"].get("height_px", 24)
+    chip_h = int(chip_height[0] if isinstance(chip_height, list) else chip_height)
     card_min_h = int(geom["card"]["min_height_px"])
 
     occurrences: list[dict[str, Any]] = []
@@ -106,7 +107,6 @@ def build_master_map_projection(
     for section_id in sections:
         section_node = by_id[section_id]
         card_ids = children.get(section_id, []) or [section_id]
-
         usable_w = frame_w - frame_pad * 2 - section_pad * 2
         columns = max(1, min(max_cols, int((usable_w + card_gap) // (card_w + card_gap))))
         actual_card_w = int((usable_w - (columns - 1) * card_gap) / columns)
@@ -128,12 +128,8 @@ def build_master_map_projection(
         section_w = frame_w - frame_pad * 2
 
         occurrences.append({
-            "id": section_id,
-            "role": "section",
-            "x": section_x,
-            "y": current_y,
-            "width": section_w,
-            "height": section_h,
+            "id": section_id, "role": "section", "x": section_x, "y": current_y,
+            "width": section_w, "height": section_h,
             "title": section_node.get("name") or section_id,
             "subtitle": section_node.get("type") or section_node.get("kind") or "",
         })
@@ -145,44 +141,30 @@ def build_master_map_projection(
                 card_node = by_id[card_id]
                 card_x = section_x + section_pad + col * (actual_card_w + card_gap)
                 occurrences.append({
-                    "id": card_id,
-                    "role": "card",
-                    "x": card_x,
-                    "y": card_y,
-                    "width": actual_card_w,
-                    "height": card_h,
+                    "id": card_id, "role": "card", "x": card_x, "y": card_y,
+                    "width": actual_card_w, "height": card_h,
                     "title": card_node.get("name") or card_id,
                     "subtitle": card_node.get("type") or card_node.get("kind") or "",
-                    "value": card_node.get("value"),
-                    "deeper_descendants": deeper,
+                    "value": card_node.get("value"), "deeper_descendants": deeper,
                 })
                 chip_y = card_y + 66
                 for chip_id in chip_ids:
                     chip_node = by_id[chip_id]
                     occurrences.append({
-                        "id": chip_id,
-                        "role": "chip",
-                        "x": card_x + 16,
-                        "y": chip_y,
-                        "width": actual_card_w - 32,
-                        "height": chip_h,
+                        "id": chip_id, "role": "chip", "x": card_x + 16, "y": chip_y,
+                        "width": actual_card_w - 32, "height": chip_h,
                         "title": chip_node.get("name") or chip_id,
                         "subtitle": chip_node.get("type") or chip_node.get("kind") or "",
                         "value": chip_node.get("value"),
                     })
                     chip_y += chip_h + 4
             card_y += row_h + row_gap
-
         current_y += section_h + section_gap
 
     frame_h = max(180, current_y - frame_y + frame_pad - section_gap)
     occurrences.insert(0, {
-        "id": root_id,
-        "role": "frame",
-        "x": frame_x,
-        "y": frame_y,
-        "width": frame_w,
-        "height": frame_h,
+        "id": root_id, "role": "frame", "x": frame_x, "y": frame_y,
+        "width": frame_w, "height": frame_h,
         "title": root_node.get("name") or root_id,
         "subtitle": root_node.get("type") or root_node.get("kind") or "",
     })
@@ -192,7 +174,7 @@ def build_master_map_projection(
         1 for node in nodes
         if node["id"] not in visible_ids and _is_descendant_of(node["id"], root_id, parent)
     )
-
+    policy = rules.get("projection_policy", {})
     return {
         "ruleset": rules["id"],
         "ruleset_version": rules.get("version"),
@@ -201,8 +183,8 @@ def build_master_map_projection(
         "root": root_id,
         "occurrences": occurrences,
         "scope": {
-            "visible_depth": rules.get("projection_policy", {}).get("visible_depth", 3),
+            "visible_depth": policy.get("visible_depth", 3),
             "omitted_deeper_descendants": omitted,
-            "omission_policy": rules.get("projection_policy", {}).get("deeper_descendants", "summarize_count"),
+            "omission_policy": policy.get("deeper_descendants", "summarize_count"),
         },
     }
