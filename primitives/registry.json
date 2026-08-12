@@ -1,0 +1,17 @@
+{
+  "format": "STRUCTUREPROJECTOR_PRIMITIVE_REGISTRY",
+  "version": "1.0",
+  "fallback_node": "box",
+  "fallback_connection": "line",
+  "primitives": {
+    "box": {"kind": "solid"},
+    "sphere": {"kind": "solid"},
+    "cylinder": {"kind": "solid"},
+    "cone": {"kind": "solid"},
+    "plane": {"kind": "surface"},
+    "torus": {"kind": "solid"},
+    "tube": {"kind": "connection"},
+    "line": {"kind": "connection"},
+    "point": {"kind": "point"}
+  }
+}
