@@ -83,7 +83,7 @@ def build_dependency_flow_3d(graph: dict[str, Any]) -> dict[str, Any]:
         members = sorted(by_depth[depth], key=lambda n: str(n.get("id", "")))
         cols = max(1, min(9, math.ceil(math.sqrt(len(members) * 1.8))))
         rows = max(1, math.ceil(len(members) / cols))
-        y = (depth - max_depth / 2.0) * layer_gap
+        y = -(depth - max_depth / 2.0) * layer_gap
         groups.append({
             "id": str(depth),
             "title": f"dependency depth {depth}",
@@ -137,7 +137,7 @@ def build_dependency_flow_3d(graph: dict[str, Any]) -> dict[str, Any]:
         "camera_hint": {"rot_x": -12, "rot_y": 18},
         "coordinate_contract": {
             "x": "within-layer horizontal distribution",
-            "y": "dependency depth",
+            "y": "dependency depth, shallow at positive Y and deep at negative Y",
             "z": "within-layer secondary row depth",
         },
     }
