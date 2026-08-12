@@ -27,7 +27,7 @@ from structureprojector import (
 from view_rules import MAX_BINDING_DEPTH, ViewRuleError, binding_children, binding_tree
 
 BASE_DIR = os.path.dirname(__file__)
-SCENE_VIEWER_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v3.html')
+SCENE_VIEWER_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v31.html')
 LEGACY_INDEX_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v2.html')
 
 ALL_CANONICAL_PROJECTIONS = {
@@ -113,7 +113,7 @@ def _compose_scene_result(snapshot, page: str, views: list[str]) -> dict:
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.21.0'
+    server_version = 'StructureProjector/0.21.1'
 
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode('utf-8')
@@ -146,7 +146,7 @@ class Handler(BaseHandler):
                     'server': self.server_version,
                     'input_model': 'StructureTree/1.0',
                     'scene_model': 'Scene/1.1',
-                    'renderer': 'webgl2_instanced_scene_v3',
+                    'renderer': 'webgl2_instanced_scene_v3.1',
                     'effects': 'none',
                 })
             if path == '/api/primitives':
