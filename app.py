@@ -21,18 +21,32 @@ from structureprojector import (
 )
 from view_rules import MAX_BINDING_DEPTH, ViewRuleError, binding_children, binding_tree
 
-INDEX_HTML = os.path.join(os.path.dirname(__file__), 'static', 'index_v12.html')
+BASE_DIR = os.path.dirname(__file__)
+INDEX_HTML = os.path.join(BASE_DIR, 'static', 'index_v12.html')
+FX_CSS = os.path.join(BASE_DIR, 'static', 'fx_v13.css')
+FX_JS = os.path.join(BASE_DIR, 'static', 'fx_v13.js')
+
+
+def _index_payload() -> bytes:
+    with open(INDEX_HTML, 'r', encoding='utf-8') as handle:
+        html = handle.read()
+    with open(FX_CSS, 'r', encoding='utf-8') as handle:
+        css = handle.read()
+    with open(FX_JS, 'r', encoding='utf-8') as handle:
+        js = handle.read()
+    html = html.replace('</head>', f'<style id="sp-fx-v13">{css}</style></head>')
+    html = html.replace('</body>', f'<script id="sp-fx-v13-script">{js}</script></body>')
+    return html.encode('utf-8')
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.12.3'
+    server_version = 'StructureProjector/0.13.0'
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         try:
             if parsed.path == '/':
-                with open(INDEX_HTML, 'rb') as f:
-                    payload = f.read()
+                payload = _index_payload()
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/html; charset=utf-8')
                 self.send_header('Content-Length', str(len(payload)))
@@ -177,14 +191,15 @@ class Handler(BaseHandler):
                 self._json(200, {
                     'ok': True,
                     'service': 'StructureProjector',
-                    'version': '0.12.3',
+                    'version': '0.13.0',
                     'view_shell': 'nanoCMS',
                     'rulesets': ['CanonicalContract', 'RawJSON'],
                     'canonical_contract_format': 'bootstrap-driven',
                     'canonical_projections': PROJECTIONS,
                     'projection_controls': 'presentation-only fail-soft controls + local browser presets',
                     'canonical_projection_policy': 'project proven explicit structure even when validation is degraded',
-                    'renderers': ['canonical_projection_2d', 'canonical_projection_3d', 'svg', 'svg_master_map'],
+                    'renderers': ['canonical_projection_2d', 'canonical_projection_3d+fx', 'svg', 'svg_master_map'],
+                    'fx_layer': 'isolated CSS 3D extrusion + emissive status edges + adjustable glow',
                     'viewport': 'cursor_anchored_wheel_zoom + drag_pan',
                     'default_recursion_depth': 1,
                     'max_recursion_depth': MAX_BINDING_DEPTH,
@@ -203,12 +218,11 @@ class Handler(BaseHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer((APP_HOST, APP_PORT), Handler)
-    print(f'StructureProjector 0.12.3: http://{APP_HOST}:{APP_PORT}')
+    print(f'StructureProjector 0.13.0: http://{APP_HOST}:{APP_PORT}')
     print(f'Source: {SOURCE_REPO}')
     print('Canonical projections: 5 x 2D + 5 x 3D')
     print('Canonical degraded mode: proven explicit graph remains projectable')
-    print('Projection controls: presentation-only; failures cannot invalidate canonical source')
-    print('Viewport: cursor-anchored wheel zoom + drag pan')
+    print('3D FX: extrusion + emissive glow + edge glow, presentation-only')
     try:
         server.serve_forever()
     except KeyboardInterrupt:
