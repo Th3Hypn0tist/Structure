@@ -4,14 +4,8 @@ from copy import deepcopy
 from typing import Any
 
 # StructureProjector-local nanoCMS projection.
-#
-# Page represents a stable inspection context/tree branch. Placements represent
-# alternative views of that same context. Changing a placement MUST NOT change
-# the selected semantic/tree context.
-#
-# This follows the nanoCMSStructure ownership boundary: nanoCMS owns recursive
-# Page structure, ordering and placement; placed rulesets/renderers retain their
-# own semantics.
+# Page = stable inspection context. Placement = alternative view of that context.
+# Changing a placement MUST NOT change the selected semantic/tree context.
 
 PAGES: dict[str, dict[str, Any]] = {
     "structureprojector": {
@@ -26,11 +20,14 @@ PAGES: dict[str, dict[str, Any]] = {
         "id": "canonical",
         "title": "Canonical",
         "menuitem": "Canonical",
-        "description": "CanonicalContract semantic tree context.",
+        "description": "Canonical AIGMos inspection context.",
         "children": [],
         "placements": [
+            "view.aigmos.master",
+            "view.aigmos.core",
+            "view.aigmos.composition",
             "view.canonical_structure_map",
-            "view.semantic_space_3d",
+            "view.semantic_space_3d"
         ],
     },
     "raw-json": {
@@ -41,18 +38,52 @@ PAGES: dict[str, dict[str, Any]] = {
         "children": [],
         "placements": [
             "view.raw_json_tree",
-            "view.raw_json_master_map",
+            "view.raw_json_master_map"
         ],
     },
 }
 
 PLACEMENTS: dict[str, dict[str, Any]] = {
+    "view.aigmos.master": {
+        "id": "view.aigmos.master",
+        "title": "Master",
+        "type": "structureprojector_view",
+        "view": "aigmos_master",
+        "ruleset": "ExplicitJSONView",
+        "view_ruleset": "view.aigmos.master",
+        "renderer": "svg_view_rules",
+        "context_model": "canonical_revision",
+        "render_ruleset": "render.aigmos_master_map",
+    },
+    "view.aigmos.core": {
+        "id": "view.aigmos.core",
+        "title": "Core Runtime",
+        "type": "structureprojector_view",
+        "view": "aigmos_core",
+        "ruleset": "ExplicitJSONView",
+        "view_ruleset": "view.aigmos.core",
+        "renderer": "svg_view_rules",
+        "context_model": "canonical_revision",
+        "render_ruleset": "render.aigmos_master_map",
+    },
+    "view.aigmos.composition": {
+        "id": "view.aigmos.composition",
+        "title": "Composition",
+        "type": "structureprojector_view",
+        "view": "aigmos_composition",
+        "ruleset": "ExplicitJSONView",
+        "view_ruleset": "view.aigmos.composition",
+        "renderer": "svg_view_rules",
+        "context_model": "canonical_revision",
+        "render_ruleset": "render.aigmos_master_map",
+    },
     "view.canonical_structure_map": {
         "id": "view.canonical_structure_map",
         "title": "Structure 2D",
         "type": "structureprojector_view",
         "view": "canonical_structure_map",
         "ruleset": "CanonicalContract",
+        "view_ruleset": None,
         "renderer": "svg",
         "context_model": "semantic_identity",
         "render_ruleset": None,
@@ -63,6 +94,7 @@ PLACEMENTS: dict[str, dict[str, Any]] = {
         "type": "structureprojector_view",
         "view": "semantic_space_3d",
         "ruleset": "CanonicalContract",
+        "view_ruleset": None,
         "renderer": "javascript_3d",
         "context_model": "semantic_identity",
         "render_ruleset": None,
@@ -73,6 +105,7 @@ PLACEMENTS: dict[str, dict[str, Any]] = {
         "type": "structureprojector_view",
         "view": "raw_json_tree",
         "ruleset": "RawJSON",
+        "view_ruleset": None,
         "renderer": "svg",
         "context_model": "json_pointer",
         "render_ruleset": None,
@@ -83,6 +116,7 @@ PLACEMENTS: dict[str, dict[str, Any]] = {
         "type": "structureprojector_view",
         "view": "raw_json_master_map",
         "ruleset": "RawJSON",
+        "view_ruleset": None,
         "renderer": "svg_master_map",
         "context_model": "json_pointer",
         "render_ruleset": "render.aigmos_master_map",
@@ -115,7 +149,7 @@ def _validate() -> None:
     for placement_id, placement in PLACEMENTS.items():
         if placement.get("id") != placement_id:
             raise ValueError(f"nanoCMS placement identity mismatch: {placement_id}")
-        for field in ("title", "view", "ruleset", "renderer", "context_model", "render_ruleset"):
+        for field in ("title", "view", "ruleset", "renderer", "context_model", "render_ruleset", "view_ruleset"):
             if field not in placement:
                 raise ValueError(f"nanoCMS placement {placement_id} missing {field}")
 
