@@ -53,5 +53,12 @@ def resolve_primitive(primitive_ref: str | None, *, connection: bool = False) ->
     registry = load_registry()
     primitives = registry["primitives"]
     fallback_key = "fallback_connection" if connection else "fallback_node"
-    resolved = primitive_ref if isinstance(primitive_ref, str) and primitive_ref in primitives else registry[fallback_key]
+    if primitive_ref is None:
+        resolved = registry[fallback_key]
+    elif not isinstance(primitive_ref, str) or not primitive_ref:
+        raise PrimitiveRegistryError(f"Invalid primitive_ref: {primitive_ref!r}")
+    elif primitive_ref not in primitives:
+        raise PrimitiveRegistryError(f"Unknown primitive_ref: {primitive_ref}")
+    else:
+        resolved = primitive_ref
     return resolved, primitives[resolved]
