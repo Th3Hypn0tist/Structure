@@ -17,6 +17,7 @@
 
   function effectGroups(){return S.data?.projection?.effect_library?.groups||[];}
   function activeValues(){return S.params.get(S.view)||S.data?.projection?.control_values||{};}
+  function renderY(y){return -(Number(y)||0);}
 
   function currentEffectGroup(){
     const values=activeValues();
@@ -62,22 +63,25 @@
 
     let h='';
     for(const g of p.groups||[]){
-      if(g.y!==undefined&&p.kind==='layers')h+=`<div class="plane3d fx-plane" style="width:1200px;height:800px;transform:translate3d(-600px,${g.y-400}px,-400px) rotateX(90deg)"></div>`;
+      if(g.y!==undefined&&p.kind==='layers')h+=`<div class="plane3d fx-plane" style="width:1200px;height:800px;transform:translate3d(-600px,${renderY(g.y)-400}px,-400px) rotateX(90deg)"></div>`;
     }
 
     /*
+      Projection coordinates use a mathematical right-handed convention where
+      +Y is up. CSS translate3d uses +Y down, so the renderer alone performs
+      Y_render = -Y_projection. Projection modules never compensate for CSS.
+
       Nodes are true cuboids. Their visible front face sits at local
       +extrusion/2 on Z, and parent node_scale scales that depth as well.
-      Edges therefore must use the same front-plane anchor instead of the
-      semantic node centre. Otherwise camera pitch projects the Z difference
-      into a visible screen-Y offset between an edge and the node it belongs to.
+      Edges therefore use the same front-plane anchor instead of the semantic
+      node centre.
     */
     const edgeAnchorZ=(Math.max(0,Number(extrusion)||0)*Math.max(0,Number(nodeScale)||0))/2;
 
     for(const e of p.edges||[]){
       const a=pos.get(String(e.source)),b=pos.get(String(e.target));if(!a||!b)continue;
-      const ax=Number(a.x)||0,ay=Number(a.y)||0,az=(Number(a.z)||0)+edgeAnchorZ;
-      const bx=Number(b.x)||0,by=Number(b.y)||0,bz=(Number(b.z)||0)+edgeAnchorZ;
+      const ax=Number(a.x)||0,ay=renderY(a.y),az=(Number(a.z)||0)+edgeAnchorZ;
+      const bx=Number(b.x)||0,by=renderY(b.y),bz=(Number(b.z)||0)+edgeAnchorZ;
       const dx=bx-ax,dy=by-ay,dz=bz-az;
       const len=Math.sqrt(dx*dx+dy*dy+dz*dz),yaw=Math.atan2(dz,dx)*180/Math.PI,pitch=-Math.atan2(dy,Math.sqrt(dx*dx+dz*dz))*180/Math.PI;
       const dim=esc(e.dimension||'');
@@ -87,7 +91,7 @@
       const sel=S.selected===n.id?' selected':'';
       const title=esc((n.name||n.id).slice(0,34));
       const sub=esc((n.type||n.source_role||'').slice(0,38));
-      h+=`<div class="node3d fx-box${sel}" data-id="${esc(n.id)}" title="${esc(n.name||n.id)}" style="--fx:${fxStatusColor(n.status)};--glow:${glow};--extrusion:${extrusion}px;--depth-shadow:${depthShadow};--face-contrast:${faceContrast};font-size:${11*labelScale}px;transform:translate3d(${n.x}px,${n.y}px,${n.z}px) translate(-50%,-50%) scale(${nodeScale})"><div class="fx-face fx-front"><span class="fx-title">${title}</span><span class="fx-sub">${sub}</span></div><div class="fx-face fx-back"></div><div class="fx-face fx-left"></div><div class="fx-face fx-right"></div><div class="fx-face fx-top"></div><div class="fx-face fx-bottom"></div></div>`;
+      h+=`<div class="node3d fx-box${sel}" data-id="${esc(n.id)}" title="${esc(n.name||n.id)}" style="--fx:${fxStatusColor(n.status)};--glow:${glow};--extrusion:${extrusion}px;--depth-shadow:${depthShadow};--face-contrast:${faceContrast};font-size:${11*labelScale}px;transform:translate3d(${n.x}px,${renderY(n.y)}px,${n.z}px) translate(-50%,-50%) scale(${nodeScale})"><div class="fx-face fx-front"><span class="fx-title">${title}</span><span class="fx-sub">${sub}</span></div><div class="fx-face fx-back"></div><div class="fx-face fx-left"></div><div class="fx-face fx-right"></div><div class="fx-face fx-top"></div><div class="fx-face fx-bottom"></div></div>`;
     }
     scene.innerHTML=h;
     scene.querySelectorAll('.node3d').forEach(el=>el.onclick=e=>{e.stopPropagation();const n=pos.get(el.dataset.id);if(n){S.selected=n.id;inspect(n);render3d()}});
