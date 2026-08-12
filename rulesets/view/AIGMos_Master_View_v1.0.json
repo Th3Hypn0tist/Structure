@@ -1,0 +1,129 @@
+{
+  "id": "view.aigmos.master",
+  "name": "AIGMos Master Architecture",
+  "version": "1.0.0",
+  "status": "locked",
+  "title": "AIGMos 2.0",
+  "subtitle": "Semantic Master Architecture",
+  "render_ruleset": "render.aigmos_master_map",
+  "sections": [
+    {
+      "id": "core-runtime",
+      "title": "Core Runtime",
+      "template": "large_frame",
+      "accent": "authority",
+      "blocks": [
+        {
+          "id": "primitive-user-modules",
+          "title": "Primitive UserModules",
+          "template": "chip_grid",
+          "binding": {
+            "source_path": "canonical/json/00_Master.json",
+            "pointer": "/locked_core_boundaries/primitive_user_modules",
+            "mode": "array"
+          },
+          "item_role": "chip"
+        },
+        {
+          "id": "core-invariants",
+          "title": "Core Invariants",
+          "template": "card_grid",
+          "binding": {
+            "source_path": "canonical/json/contracts/core_invariants.json",
+            "pointer": "/core_axioms",
+            "mode": "array"
+          },
+          "item_role": "card"
+        }
+      ]
+    },
+    {
+      "id": "meta-semantic-model",
+      "title": "Meta Semantic Model",
+      "template": "large_frame",
+      "accent": "primary",
+      "blocks": [
+        {
+          "id": "universal-families",
+          "title": "Universal Families",
+          "template": "chip_grid",
+          "binding": {
+            "source_path": "canonical/json/00_Master.json",
+            "pointer": "/locked_core_boundaries/universal_families",
+            "mode": "array"
+          },
+          "item_role": "chip"
+        },
+        {
+          "id": "composition-membership",
+          "title": "Composition MetaModules",
+          "template": "registry_grid",
+          "items": [
+            {
+              "id": "domain-profiles",
+              "title": "Domain Profiles",
+              "binding": {
+                "source_path": "canonical/json/52_Composition_Module_Registry.json",
+                "pointer": "/domain_profiles/entries"
+              },
+              "role": "registry"
+            },
+            {
+              "id": "suite-applications",
+              "title": "Suite Applications",
+              "binding": {
+                "source_path": "canonical/json/52_Composition_Module_Registry.json",
+                "pointer": "/suite_applications/entries"
+              },
+              "role": "registry"
+            },
+            {
+              "id": "system-applications",
+              "title": "System Applications",
+              "binding": {
+                "source_path": "canonical/json/52_Composition_Module_Registry.json",
+                "pointer": "/system_applications"
+              },
+              "role": "registry"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "expose",
+      "title": "Expose",
+      "template": "large_frame",
+      "accent": "primary",
+      "blocks": [
+        {
+          "id": "web-base",
+          "title": "Web Base",
+          "template": "chip_grid",
+          "binding": {
+            "source_path": "canonical/json/00_Master.json",
+            "pointer": "/locked_core_boundaries/web_base",
+            "mode": "array"
+          },
+          "item_role": "chip"
+        },
+        {
+          "id": "gui-universal",
+          "title": "GUI Universal",
+          "template": "chip_grid",
+          "binding": {
+            "source_path": "canonical/json/00_Master.json",
+            "pointer": "/locked_core_boundaries/gui_universal",
+            "mode": "array"
+          },
+          "item_role": "chip"
+        }
+      ]
+    }
+  ],
+  "hard_gates": [
+    "binding source_path does not exist in selected revision",
+    "binding JSON Pointer does not resolve",
+    "renderer infers additional architecture sections from label text"
+  ]
+}
