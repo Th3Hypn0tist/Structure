@@ -7,6 +7,19 @@ from typing import Any
 # Page = stable inspection context. Placement = alternative view of that context.
 # Changing a placement MUST NOT change the selected semantic/tree context.
 
+CANONICAL_PROJECTION_PLACEMENTS = [
+    "view.atlas_2d",
+    "view.relation_web_2d",
+    "view.adjacency_matrix_2d",
+    "view.lifecycle_lanes_2d",
+    "view.dependency_flow_2d",
+    "view.semantic_galaxy_3d",
+    "view.role_layers_3d",
+    "view.dependency_tower_3d",
+    "view.authority_space_3d",
+    "view.relation_orbits_3d",
+]
+
 PAGES: dict[str, dict[str, Any]] = {
     "structureprojector": {
         "id": "structureprojector",
@@ -22,13 +35,7 @@ PAGES: dict[str, dict[str, Any]] = {
         "menuitem": "Canonical",
         "description": "Canonical AIGMos inspection context.",
         "children": [],
-        "placements": [
-            "view.aigmos.master",
-            "view.aigmos.core",
-            "view.aigmos.composition",
-            "view.canonical_structure_map",
-            "view.semantic_space_3d"
-        ],
+        "placements": CANONICAL_PROJECTION_PLACEMENTS,
     },
     "raw-json": {
         "id": "raw-json",
@@ -36,69 +43,42 @@ PAGES: dict[str, dict[str, Any]] = {
         "menuitem": "Raw JSON",
         "description": "Raw JSON structural tree context.",
         "children": [],
-        "placements": [
-            "view.raw_json_tree",
-            "view.raw_json_master_map"
-        ],
+        "placements": ["view.raw_json_tree", "view.raw_json_master_map"],
     },
 }
 
+
+def _canonical_projection(
+    placement_id: str,
+    title: str,
+    projection_id: str,
+    renderer: str,
+) -> dict[str, Any]:
+    return {
+        "id": placement_id,
+        "title": title,
+        "type": "structureprojector_view",
+        "view": projection_id,
+        "ruleset": "CanonicalContract",
+        "view_ruleset": None,
+        "renderer": renderer,
+        "context_model": "semantic_identity",
+        "render_ruleset": projection_id,
+        "projection_id": projection_id,
+    }
+
+
 PLACEMENTS: dict[str, dict[str, Any]] = {
-    "view.aigmos.master": {
-        "id": "view.aigmos.master",
-        "title": "Master",
-        "type": "structureprojector_view",
-        "view": "aigmos_master",
-        "ruleset": "ExplicitJSONView",
-        "view_ruleset": "view.aigmos.master",
-        "renderer": "svg_view_rules",
-        "context_model": "canonical_revision",
-        "render_ruleset": "render.aigmos_master_map",
-    },
-    "view.aigmos.core": {
-        "id": "view.aigmos.core",
-        "title": "Core Runtime",
-        "type": "structureprojector_view",
-        "view": "aigmos_core",
-        "ruleset": "ExplicitJSONView",
-        "view_ruleset": "view.aigmos.core",
-        "renderer": "svg_view_rules",
-        "context_model": "canonical_revision",
-        "render_ruleset": "render.aigmos_master_map",
-    },
-    "view.aigmos.composition": {
-        "id": "view.aigmos.composition",
-        "title": "Composition",
-        "type": "structureprojector_view",
-        "view": "aigmos_composition",
-        "ruleset": "ExplicitJSONView",
-        "view_ruleset": "view.aigmos.composition",
-        "renderer": "svg_view_rules",
-        "context_model": "canonical_revision",
-        "render_ruleset": "render.aigmos_master_map",
-    },
-    "view.canonical_structure_map": {
-        "id": "view.canonical_structure_map",
-        "title": "Structure 2D",
-        "type": "structureprojector_view",
-        "view": "canonical_structure_map",
-        "ruleset": "CanonicalContract",
-        "view_ruleset": None,
-        "renderer": "svg",
-        "context_model": "semantic_identity",
-        "render_ruleset": None,
-    },
-    "view.semantic_space_3d": {
-        "id": "view.semantic_space_3d",
-        "title": "Semantic Space 3D",
-        "type": "structureprojector_view",
-        "view": "semantic_space_3d",
-        "ruleset": "CanonicalContract",
-        "view_ruleset": None,
-        "renderer": "javascript_3d",
-        "context_model": "semantic_identity",
-        "render_ruleset": None,
-    },
+    "view.atlas_2d": _canonical_projection("view.atlas_2d", "Atlas 2D", "atlas_2d", "canonical_projection_2d"),
+    "view.relation_web_2d": _canonical_projection("view.relation_web_2d", "Relation Web", "relation_web_2d", "canonical_projection_2d"),
+    "view.adjacency_matrix_2d": _canonical_projection("view.adjacency_matrix_2d", "Matrix", "adjacency_matrix_2d", "canonical_projection_2d"),
+    "view.lifecycle_lanes_2d": _canonical_projection("view.lifecycle_lanes_2d", "Lifecycle", "lifecycle_lanes_2d", "canonical_projection_2d"),
+    "view.dependency_flow_2d": _canonical_projection("view.dependency_flow_2d", "Dependency Flow", "dependency_flow_2d", "canonical_projection_2d"),
+    "view.semantic_galaxy_3d": _canonical_projection("view.semantic_galaxy_3d", "Galaxy 3D", "semantic_galaxy_3d", "canonical_projection_3d"),
+    "view.role_layers_3d": _canonical_projection("view.role_layers_3d", "Role Layers", "role_layers_3d", "canonical_projection_3d"),
+    "view.dependency_tower_3d": _canonical_projection("view.dependency_tower_3d", "Dependency Tower", "dependency_tower_3d", "canonical_projection_3d"),
+    "view.authority_space_3d": _canonical_projection("view.authority_space_3d", "Authority Space", "authority_space_3d", "canonical_projection_3d"),
+    "view.relation_orbits_3d": _canonical_projection("view.relation_orbits_3d", "Relation Orbits", "relation_orbits_3d", "canonical_projection_3d"),
     "view.raw_json_tree": {
         "id": "view.raw_json_tree",
         "title": "JSON Tree",
@@ -132,7 +112,6 @@ def _validate() -> None:
         raise ValueError("nanoCMS root page is missing")
     if DEFAULT_PAGE not in PAGES:
         raise ValueError("nanoCMS default page is missing")
-
     for page_id, page in PAGES.items():
         if page.get("id") != page_id:
             raise ValueError(f"nanoCMS page identity mismatch: {page_id}")
@@ -145,7 +124,6 @@ def _validate() -> None:
         for placement_ref in page["placements"]:
             if placement_ref not in PLACEMENTS:
                 raise ValueError(f"nanoCMS page {page_id} has unresolved placement {placement_ref}")
-
     for placement_id, placement in PLACEMENTS.items():
         if placement.get("id") != placement_id:
             raise ValueError(f"nanoCMS placement identity mismatch: {placement_id}")
