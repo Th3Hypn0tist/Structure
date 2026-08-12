@@ -15,17 +15,12 @@
     return '#AAB2C2';
   }
 
-  function effectGroups(){
-    return S.data?.projection?.effect_library?.groups||[];
-  }
+  function effectGroups(){return S.data?.projection?.effect_library?.groups||[];}
+  function activeValues(){return S.params.get(S.view)||S.data?.projection?.control_values||{};}
 
   function currentEffectGroup(){
-    const p=S.data?.projection;if(!p)return null;
-    const values=S.params.get(S.view)||p.control_values||{};
-    const close=(a,b)=>{
-      if(typeof b==='number')return Math.abs(Number(a??0)-Number(b))<.051;
-      return String(a??'')===String(b??'');
-    };
+    const values=activeValues();
+    const close=(a,b)=>typeof b==='number'?Math.abs(Number(a??0)-Number(b))<.051:String(a??'')===String(b??'');
     for(const group of effectGroups()){
       const entries=Object.entries(group.values||{});
       if(entries.length&&entries.every(([k,v])=>close(values[k],v)))return group.id;
@@ -36,7 +31,7 @@
   function applyEffectGroup(groupId){
     const p=S.data?.projection;if(!p)return;
     const group=effectGroups().find(g=>g.id===groupId);if(!group)return;
-    const current={...(S.params.get(S.view)||p.control_values||{})};
+    const current={...activeValues()};
     Object.assign(current,group.values||{});
     S.params.set(S.view,current);
     load({keepCamera:true});
@@ -45,16 +40,26 @@
   window.__spOriginalRender3d = typeof render3d==='function' ? render3d : null;
   render3d=function(){
     const p=S.data?.projection;if(!p)return;
-    const scene=$('#scene3d'),nodes=p.nodes||[],pos=new Map(nodes.map(n=>[String(n.id),n]));
-    const local=S.params.get(S.view)||{};
+    const scene=$('#scene3d'),space=$('#space3d'),nodes=p.nodes||[],pos=new Map(nodes.map(n=>[String(n.id),n]));
+    const local=activeValues();
     const op=local.edge_opacity??p.style?.edge_opacity??.22;
     const nodeScale=local.node_scale??p.style?.node_scale??1;
     const labelScale=local.label_scale??p.style?.label_scale??1;
     const glow=local.glow??p.style?.glow??.65;
     const extrusion=local.extrusion??p.style?.extrusion??40;
     const edgeGlow=local.edge_glow??p.style?.edge_glow??.45;
-    $('#space3d').classList.add('fx-space');
-    $('#space3d').style.perspective=(local.perspective??p.style?.perspective??1100)+'px';
+    const perspective=local.perspective??p.style?.perspective??1100;
+    const sceneGlow=local.scene_glow??p.style?.scene_glow??.35;
+    const vignette=local.vignette??p.style?.vignette??.65;
+    const depthShadow=local.depth_shadow??p.style?.depth_shadow??.65;
+    const faceContrast=local.face_contrast??p.style?.face_contrast??.75;
+
+    space.classList.add('fx-space');
+    space.style.perspective=perspective+'px';
+    space.style.setProperty('--scene-glow',sceneGlow);
+    space.style.setProperty('--vignette',vignette);
+    space.style.background=`radial-gradient(circle at 50% 44%, rgba(8,124,255,${Math.min(.24,.025+.13*sceneGlow)}), transparent 34%),radial-gradient(circle at 50% 80%, rgba(8,124,255,${Math.min(.12,.012+.06*sceneGlow)}), transparent 40%),#020304`;
+
     let h='';
     for(const g of p.groups||[]){
       if(g.y!==undefined&&p.kind==='layers')h+=`<div class="plane3d fx-plane" style="width:1200px;height:800px;transform:translate3d(-600px,${g.y-400}px,-400px) rotateX(90deg)"></div>`;
@@ -69,7 +74,7 @@
       const sel=S.selected===n.id?' selected':'';
       const title=esc((n.name||n.id).slice(0,34));
       const sub=esc((n.type||n.source_role||'').slice(0,38));
-      h+=`<div class="node3d fx-box${sel}" data-id="${esc(n.id)}" title="${esc(n.name||n.id)}" style="--fx:${fxStatusColor(n.status)};--glow:${glow};--extrusion:${extrusion}px;font-size:${11*labelScale}px;transform:translate3d(${n.x}px,${n.y}px,${n.z}px) translate(-50%,-50%) scale(${nodeScale})"><div class="fx-face fx-front"><span class="fx-title">${title}</span><span class="fx-sub">${sub}</span></div><div class="fx-face fx-back"></div><div class="fx-face fx-left"></div><div class="fx-face fx-right"></div><div class="fx-face fx-top"></div><div class="fx-face fx-bottom"></div></div>`;
+      h+=`<div class="node3d fx-box${sel}" data-id="${esc(n.id)}" title="${esc(n.name||n.id)}" style="--fx:${fxStatusColor(n.status)};--glow:${glow};--extrusion:${extrusion}px;--depth-shadow:${depthShadow};--face-contrast:${faceContrast};font-size:${11*labelScale}px;transform:translate3d(${n.x}px,${n.y}px,${n.z}px) translate(-50%,-50%) scale(${nodeScale})"><div class="fx-face fx-front"><span class="fx-title">${title}</span><span class="fx-sub">${sub}</span></div><div class="fx-face fx-back"></div><div class="fx-face fx-left"></div><div class="fx-face fx-right"></div><div class="fx-face fx-top"></div><div class="fx-face fx-bottom"></div></div>`;
     }
     scene.innerHTML=h;
     scene.querySelectorAll('.node3d').forEach(el=>el.onclick=e=>{e.stopPropagation();const n=pos.get(el.dataset.id);if(n){S.selected=n.id;inspect(n);render3d()}});
@@ -77,13 +82,7 @@
   };
 
   const fitButton=$('#fit');
-  if(fitButton){
-    fitButton.addEventListener('click',function(e){
-      const p=S.data?.projection;if(!p)return;
-      e.preventDefault();e.stopImmediatePropagation();
-      S.z3=1;apply3d();
-    },true);
-  }
+  if(fitButton){fitButton.addEventListener('click',function(e){const p=S.data?.projection;if(!p)return;e.preventDefault();e.stopImmediatePropagation();S.z3=1;apply3d();},true);}
 
   const originalRenderControls=typeof renderControls==='function'?renderControls:null;
   if(originalRenderControls){
@@ -91,16 +90,13 @@
       originalRenderControls();
       const p=S.data?.projection;if(!p)return;
       const panel=$('#controls');if(!panel)return;
-      const heading=panel.querySelector('h2');
-      const row=document.createElement('div');
+      const heading=panel.querySelector('h2'),row=document.createElement('div');
       row.className='preset-row sp-fx-mode';
-      const current=currentEffectGroup();
-      const groups=effectGroups();
+      const current=currentEffectGroup(),groups=effectGroups();
       const options=groups.map(g=>`<option value="${esc(g.id)}" ${current===g.id?'selected':''}>${esc(g.title||g.id)}</option>`).join('');
       row.innerHTML=`<label style="min-width:78px;color:var(--silver);font-size:12px">Effect Group</label><select id="spEffectGroup" style="flex:1">${options}<option value="custom" ${current==='custom'?'selected':''} disabled>Custom</option></select>`;
       if(heading&&heading.nextSibling)panel.insertBefore(row,heading.nextSibling);else panel.prepend(row);
-      const selector=row.querySelector('#spEffectGroup');
-      if(selector)selector.onchange=e=>applyEffectGroup(e.target.value);
+      const selector=row.querySelector('#spEffectGroup');if(selector)selector.onchange=e=>applyEffectGroup(e.target.value);
     };
   }
 })();
