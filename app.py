@@ -88,8 +88,7 @@ def _build_result(snapshot, page: str, view: str | None = None) -> dict:
 
     tree = read_canonical(snapshot)
     result = _result_from_tree(tree, 'canonical_contract')
-    selected_page = resolve_page(page)
-    selected_view = resolve_view(selected_page, view)
+    selected_view = resolve_view(page, view)
     projection_id = selected_view['projection_id']
     base_projection = _build_canonical_projection(result['graph'], projection_id)
     _attach_scene(result, base_projection)
@@ -99,8 +98,7 @@ def _build_result(snapshot, page: str, view: str | None = None) -> dict:
 def _compose_scene_result(snapshot, page: str, views: list[str]) -> dict:
     tree = read_canonical(snapshot)
     result = _result_from_tree(tree, 'canonical_contract')
-    selected_page = resolve_page(page)
-    selected_views = [resolve_view(selected_page, view_id) for view_id in views]
+    selected_views = [resolve_view(page, view_id) for view_id in views]
     projections = [_build_canonical_projection(result['graph'], item['projection_id']) for item in selected_views]
     scene = compose_scene(projections, tree)
     result['scene'] = scene
@@ -113,7 +111,7 @@ def _compose_scene_result(snapshot, page: str, views: list[str]) -> dict:
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.21.2'
+    server_version = 'StructureProjector/0.21.3'
 
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode('utf-8')
@@ -190,7 +188,7 @@ class Handler(BaseHandler):
                 tree = read_canonical(snapshot)
                 return self._write_json(binding_children(tree_to_graph(tree), node_id=node_id))
             return super().do_GET()
-        except (ProjectorError, ViewRuleError, ValueError, KeyError) as exc:
+        except (ProjectorError, ViewRuleError, ValueError, KeyError, TypeError) as exc:
             if isinstance(exc, ProjectorError):
                 payload = {'ok': False, 'error': exc.to_dict()}
             else:
