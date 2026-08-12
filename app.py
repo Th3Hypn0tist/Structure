@@ -24,7 +24,7 @@ INDEX_HTML = os.path.join(os.path.dirname(__file__), 'static', 'index_v08.html')
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.8'
+    server_version = 'StructureProjector/0.8.1'
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
@@ -86,6 +86,7 @@ class Handler(BaseHandler):
                         'graph': {'nodes': [], 'edges': []},
                         'view_projection': view_projection,
                         'projection': geometry,
+                        'geometry': geometry,
                         'errors': [],
                     }
                 elif ruleset == 'CanonicalContract':
@@ -111,7 +112,7 @@ class Handler(BaseHandler):
                 self._json(200, {
                     'ok': True,
                     'service': 'StructureProjector',
-                    'version': '0.8.0',
+                    'version': '0.8.1',
                     'view_shell': 'nanoCMS',
                     'rulesets': ['ExplicitJSONView', 'CanonicalContract', 'RawJSON'],
                     'render_rulesets': ['render.aigmos_master_map'],
@@ -131,7 +132,7 @@ class Handler(BaseHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer((APP_HOST, APP_PORT), Handler)
-    print(f'StructureProjector 0.8.0: http://{APP_HOST}:{APP_PORT}')
+    print(f'StructureProjector 0.8.1: http://{APP_HOST}:{APP_PORT}')
     print(f'Source: {SOURCE_REPO}')
     print('View shell: nanoCMS')
     print('Navigation: click focus + exact Up restore + cursor-anchored wheel zoom')
