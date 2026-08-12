@@ -8,6 +8,7 @@ VERSION = "1.0"
 
 DEFAULT_CHANNEL_STYLES = {
     "structural": {"enabled": True, "color": "#AAB2C2"},
+    "containment": {"enabled": True, "color": "#AAB2C2"},
     "semantic": {"enabled": True, "color": "#087CFF"},
     "relations": {"enabled": True, "color": "#087CFF"},
     "dependencies": {"enabled": True, "color": "#FFD83D"},
@@ -18,51 +19,61 @@ DEFAULT_CHANNEL_STYLES = {
 }
 
 
-def new_scene(*, projection_id: str, source_tree: dict[str, Any]) -> dict[str, Any]:
+def _zero_transform() -> dict[str, Any]:
+    return {
+        "position": {"x": 0.0, "y": 0.0, "z": 0.0},
+        "rotation": {"x": 0.0, "y": 0.0, "z": 0.0},
+        "scale": {"x": 1.0, "y": 1.0, "z": 1.0},
+    }
+
+
+def new_scene(*, source_tree: dict[str, Any] | None = None) -> dict[str, Any]:
+    tree = source_tree or {}
     return {
         "format": FORMAT,
         "version": VERSION,
-        "projection_id": projection_id,
         "source_tree": {
-            "format": source_tree.get("format"),
-            "version": source_tree.get("version"),
-            "input_module": source_tree.get("input_module"),
-            "source": deepcopy(source_tree.get("source", {})),
+            "format": tree.get("format"),
+            "version": tree.get("version"),
+            "input_module": tree.get("input_module"),
+            "source": deepcopy(tree.get("source", {})),
         },
         "variables": {},
         "objects": [],
         "connections": [],
         "connection_channels": deepcopy(DEFAULT_CHANNEL_STYLES),
-        "groups": [],
         "bounds": None,
         "camera_hint": None,
     }
 
 
-def projection_to_scene(
+def projection_to_object(
     projection: dict[str, Any],
     source_tree: dict[str, Any],
     *,
+    object_id: str | None = None,
+    transform: dict[str, Any] | None = None,
     primitive: str = "box",
-    connection_primitive: str = "line",
 ) -> dict[str, Any]:
-    """Translate projection layout into the Scene Contract.
+    """Convert one projection into one SceneObject.
 
-    The projection owns spatial placement. SceneObject owns one or more Nodes.
-    Node owns primitive/geometry/style. Connections remain independent semantic
-    records and may be enabled concurrently by channel.
+    SceneObject is the callable/composable projection instance. Its Nodes are
+    the renderable parts. A Node owns primitive, transform, geometry, style,
+    anchors and bindings. Spatial coordinates are local to the SceneObject.
     """
-    scene = new_scene(projection_id=str(projection.get("id") or "projection"), source_tree=source_tree)
+    projection_id = str(projection.get("id") or "projection")
     entry_index = {str(e.get("id")): e for e in source_tree.get("entries", [])}
-    link_index = {str(l.get("id")): l for l in source_tree.get("links", []) if l.get("id") is not None}
+    nodes: list[dict[str, Any]] = []
 
     for projected in projection.get("nodes", []):
         entry_id = str(projected.get("id"))
+        if not entry_id:
+            continue
         entry = entry_index.get(entry_id, {})
-        scene["objects"].append({
-            "id": f"object:{entry_id}",
+        nodes.append({
+            "id": entry_id,
             "source_ref": entry_id,
-            "variables": {},
+            "primitive": primitive,
             "transform": {
                 "position": {
                     "x": float(projected.get("x", 0) or 0),
@@ -72,54 +83,97 @@ def projection_to_scene(
                 "rotation": {"x": 0.0, "y": 0.0, "z": 0.0},
                 "scale": {"x": 1.0, "y": 1.0, "z": 1.0},
             },
-            "nodes": [{
-                "id": "body",
-                "primitive": primitive,
-                "geometry": {
-                    "width": projected.get("width"),
-                    "height": projected.get("height"),
-                    "depth": projected.get("depth"),
-                    "radius": projected.get("radius"),
-                },
-                "transform": {
-                    "position": {"x": 0.0, "y": 0.0, "z": 0.0},
-                    "rotation": {"x": 0.0, "y": 0.0, "z": 0.0},
-                    "scale": {"x": 1.0, "y": 1.0, "z": 1.0},
-                },
-                "style": {},
-                "properties": {
-                    "name": entry.get("name", projected.get("name")),
-                    "type": entry.get("type", projected.get("type")),
-                    "status": entry.get("status", projected.get("status")),
-                },
-                "anchors": {
-                    "center": {"x": 0.0, "y": 0.0, "z": 0.0},
-                },
-                "bindings": [],
-            }],
+            "geometry": {
+                "width": projected.get("width"),
+                "height": projected.get("height"),
+                "depth": projected.get("depth"),
+                "radius": projected.get("radius"),
+            },
+            "style": {},
+            "properties": {
+                "name": entry.get("name", projected.get("name")),
+                "type": entry.get("type", projected.get("type")),
+                "status": entry.get("status", projected.get("status")),
+                "kind": entry.get("kind", projected.get("kind")),
+            },
+            "anchors": {
+                "center": {"x": 0.0, "y": 0.0, "z": 0.0},
+            },
+            "bindings": [],
         })
+
+    return {
+        "id": object_id or f"projection:{projection_id}",
+        "kind": "projection",
+        "projection_id": projection_id,
+        "title": projection.get("title") or projection_id,
+        "source_ref": {
+            "input_module": source_tree.get("input_module"),
+            "revision": source_tree.get("source", {}).get("revision"),
+        },
+        "variables": {},
+        "transform": deepcopy(transform or _zero_transform()),
+        "nodes": nodes,
+        "groups": deepcopy(projection.get("groups", [])),
+        "bounds": deepcopy(projection.get("bounds3d") or projection.get("bounds")),
+        "extent": projection.get("extent"),
+    }
+
+
+def projection_connections(
+    projection: dict[str, Any],
+    source_tree: dict[str, Any],
+    *,
+    object_id: str,
+    connection_primitive: str = "line",
+) -> list[dict[str, Any]]:
+    link_index = {str(l.get("id")): l for l in source_tree.get("links", []) if l.get("id") is not None}
+    node_ids = {str(n.get("id")) for n in projection.get("nodes", [])}
+    connections: list[dict[str, Any]] = []
 
     for edge in projection.get("edges", []):
         source_id = str(edge.get("source"))
         target_id = str(edge.get("target"))
+        if source_id not in node_ids or target_id not in node_ids:
+            continue
         raw_link = link_index.get(str(edge.get("id")), {})
         channel = str(edge.get("dimension") or raw_link.get("dimension") or "semantic")
-        if channel not in scene["connection_channels"]:
-            scene["connection_channels"][channel] = {"enabled": True, "color": "#AAB2C2"}
-        scene["connections"].append({
-            "id": edge.get("id") or f"connection:{channel}:{source_id}->{target_id}",
+        connections.append({
+            "id": f"{object_id}:{edge.get('id') or f'{channel}:{source_id}->{target_id}'}",
+            "scope": "projection",
             "channel": channel,
             "type": edge.get("type") or raw_link.get("type") or channel,
             "source_ref": raw_link.get("id") or edge.get("id"),
-            "from": {"object": f"object:{source_id}", "node": "body", "anchor": "center"},
-            "to": {"object": f"object:{target_id}", "node": "body", "anchor": "center"},
+            "from": {"object": object_id, "node": source_id, "anchor": "center"},
+            "to": {"object": object_id, "node": target_id, "anchor": "center"},
             "primitive": connection_primitive,
             "style_ref": channel,
             "style": {},
         })
+    return connections
 
-    scene["groups"] = deepcopy(projection.get("groups", []))
-    scene["bounds"] = deepcopy(projection.get("bounds3d") or projection.get("bounds"))
+
+def projection_to_scene(
+    projection: dict[str, Any],
+    source_tree: dict[str, Any],
+    *,
+    primitive: str = "box",
+    connection_primitive: str = "line",
+) -> dict[str, Any]:
+    """Compatibility helper: compose a Scene containing one projection object."""
+    scene = new_scene(source_tree=source_tree)
+    obj = projection_to_object(projection, source_tree, primitive=primitive)
+    scene["objects"].append(obj)
+    scene["connections"].extend(projection_connections(
+        projection,
+        source_tree,
+        object_id=obj["id"],
+        connection_primitive=connection_primitive,
+    ))
+    for connection in scene["connections"]:
+        channel = connection["channel"]
+        scene["connection_channels"].setdefault(channel, {"enabled": True, "color": "#AAB2C2"})
+    scene["bounds"] = deepcopy(obj.get("bounds"))
     scene["camera_hint"] = deepcopy(projection.get("camera_hint"))
     return scene
 
@@ -153,7 +207,16 @@ def validate_scene(scene: dict[str, Any]) -> list[dict[str, Any]]:
             if not node.get("primitive"):
                 errors.append({"id": "SP_SCENE_NODE_PRIMITIVE", "message": f"Node {oid}/{nid} requires primitive"})
 
+    connection_ids: set[str] = set()
     for connection in scene.get("connections", []):
+        cid = connection.get("id")
+        if isinstance(cid, str):
+            if cid in connection_ids:
+                errors.append({"id": "SP_SCENE_DUPLICATE_CONNECTION", "message": f"Duplicate SceneConnection: {cid}"})
+            connection_ids.add(cid)
+        channel = connection.get("channel")
+        if not isinstance(channel, str) or not channel:
+            errors.append({"id": "SP_SCENE_CONNECTION_CHANNEL", "message": "SceneConnection requires channel"})
         for endpoint_name in ("from", "to"):
             endpoint = connection.get(endpoint_name) or {}
             oid = endpoint.get("object")
