@@ -8,6 +8,7 @@ from explicit_view_renderer import build_explicit_view_geometry
 from master_map_renderer import build_master_map_projection
 from nanocms import projection, resolve_page, resolve_view
 from raw_json_mapper import build_raw_json_graph
+from source_adapter import list_branches, load_snapshot
 from structureprojector import (
     APP_HOST,
     APP_PORT,
@@ -15,8 +16,6 @@ from structureprojector import (
     Handler as BaseHandler,
     ProjectorError,
     build_graph,
-    list_branches,
-    load_snapshot,
 )
 from view_rules import (
     MAX_BINDING_DEPTH,
@@ -30,7 +29,7 @@ INDEX_HTML = os.path.join(os.path.dirname(__file__), 'static', 'index_v10.html')
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.10.0'
+    server_version = 'StructureProjector/0.10.1'
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
@@ -126,7 +125,7 @@ class Handler(BaseHandler):
 
             if parsed.path == '/api/health':
                 self._json(200, {
-                    'ok': True, 'service': 'StructureProjector', 'version': '0.10.0',
+                    'ok': True, 'service': 'StructureProjector', 'version': '0.10.1',
                     'view_shell': 'nanoCMS', 'rulesets': ['ExplicitJSONView', 'CanonicalContract', 'RawJSON'],
                     'render_rulesets': ['render.aigmos_master_map'],
                     'renderers': ['svg_view_rules', 'svg', 'svg_master_map', 'javascript_3d'],
@@ -134,6 +133,7 @@ class Handler(BaseHandler):
                     'binding_navigation': 'bounded recursive JSON traversal by source_path + JSON Pointer',
                     'default_recursion_depth': 1,
                     'max_recursion_depth': MAX_BINDING_DEPTH,
+                    'source_adapter': 'cached_commit_snapshot + GitHub API/Atom branch resolution fallback',
                 })
                 return
 
@@ -148,9 +148,10 @@ class Handler(BaseHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer((APP_HOST, APP_PORT), Handler)
-    print(f'StructureProjector 0.10.0: http://{APP_HOST}:{APP_PORT}')
+    print(f'StructureProjector 0.10.1: http://{APP_HOST}:{APP_PORT}')
     print(f'Source: {SOURCE_REPO}')
     print(f'Navigation: local reflow + bounded recursion depth 0..{MAX_BINDING_DEPTH} + cursor-anchored wheel zoom')
+    print('Source adapter: cached immutable commit snapshots')
     try:
         server.serve_forever()
     except KeyboardInterrupt:
