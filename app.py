@@ -4,7 +4,7 @@ import os
 import urllib.parse
 from http.server import ThreadingHTTPServer
 
-from explicit_view_renderer import build_explicit_view_geometry
+from canonical_projections import PROJECTIONS, build_canonical_projection
 from master_map_renderer import build_master_map_projection
 from nanocms import projection, resolve_page, resolve_view
 from raw_json_mapper import build_raw_json_graph
@@ -17,19 +17,13 @@ from structureprojector import (
     ProjectorError,
     build_graph,
 )
-from view_rules import (
-    MAX_BINDING_DEPTH,
-    ViewRuleError,
-    binding_children,
-    binding_tree,
-    build_view_projection,
-)
+from view_rules import MAX_BINDING_DEPTH, ViewRuleError, binding_children, binding_tree
 
-INDEX_HTML = os.path.join(os.path.dirname(__file__), 'static', 'index_v10.html')
+INDEX_HTML = os.path.join(os.path.dirname(__file__), 'static', 'index_v11.html')
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.10.1'
+    server_version = 'StructureProjector/0.11.0'
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
@@ -51,7 +45,10 @@ class Handler(BaseHandler):
                 try:
                     self._json(200, projection(page, view))
                 except KeyError as exc:
-                    self._json(404, {'valid': False, 'errors': [{'id': 'SP_NANOCMS_RESOLUTION', 'message': f'Unknown nanoCMS page/view: {exc.args[0]}'}]})
+                    self._json(404, {
+                        'valid': False,
+                        'errors': [{'id': 'SP_NANOCMS_RESOLUTION', 'message': f'Unknown nanoCMS page/view: {exc.args[0]}'}],
+                    })
                 return
 
             if parsed.path == '/api/branches':
@@ -64,20 +61,30 @@ class Handler(BaseHandler):
                 source_path = qs.get('source_path', [None])[0]
                 pointer = qs.get('pointer', ['/'])[0]
                 if not source_path:
-                    self._json(400, {'valid': False, 'errors': [{'id': 'SP_BINDING_SOURCE_REQUIRED', 'message': 'source_path is required'}]})
+                    self._json(400, {
+                        'valid': False,
+                        'errors': [{'id': 'SP_BINDING_SOURCE_REQUIRED', 'message': 'source_path is required'}],
+                    })
                     return
                 snapshot = load_snapshot(branch)
                 if parsed.path == '/api/binding-tree':
                     try:
                         requested_depth = int(qs.get('depth', ['1'])[0])
                     except ValueError:
-                        self._json(400, {'valid': False, 'errors': [{'id': 'SP_DEPTH_INVALID', 'message': 'depth must be an integer'}]})
+                        self._json(400, {
+                            'valid': False,
+                            'errors': [{'id': 'SP_DEPTH_INVALID', 'message': 'depth must be an integer'}],
+                        })
                         return
                     result = binding_tree(snapshot, source_path, pointer, requested_depth)
                 else:
                     result = binding_children(snapshot, source_path, pointer)
                 result['valid'] = True
-                result['source'] = {'repository': snapshot.repo, 'branch': snapshot.branch, 'revision': snapshot.revision}
+                result['source'] = {
+                    'repository': snapshot.repo,
+                    'branch': snapshot.branch,
+                    'revision': snapshot.revision,
+                }
                 self._json(200, result)
                 return
 
@@ -88,52 +95,60 @@ class Handler(BaseHandler):
                 view_id = qs.get('view', [None])[0]
                 selected_path = qs.get('path', [None])[0]
                 context_id = qs.get('context', [None])[0]
+
                 try:
                     page = resolve_page(page_id)
                     placement = resolve_view(page_id, view_id)
                 except KeyError as exc:
-                    self._json(400, {'valid': False, 'errors': [{'id': 'SP_NANOCMS_RESOLUTION', 'message': f'Unknown nanoCMS page/view: {exc.args[0]}'}]})
+                    self._json(400, {
+                        'valid': False,
+                        'errors': [{'id': 'SP_NANOCMS_RESOLUTION', 'message': f'Unknown nanoCMS page/view: {exc.args[0]}'}],
+                    })
                     return
 
                 snapshot = load_snapshot(branch)
                 ruleset = placement['ruleset']
-                if ruleset == 'ExplicitJSONView':
-                    view_projection = build_view_projection(snapshot, placement['view_ruleset'])
-                    geometry = build_explicit_view_geometry(view_projection)
-                    result = {
-                        'valid': True, 'ruleset': 'ExplicitJSONView',
-                        'source': {'repository': snapshot.repo, 'branch': snapshot.branch, 'revision': snapshot.revision, 'files': len(snapshot.files)},
-                        'graph': {'nodes': [], 'edges': []}, 'view_projection': view_projection,
-                        'projection': geometry, 'geometry': geometry, 'errors': [],
-                    }
-                elif ruleset == 'CanonicalContract':
+
+                if ruleset == 'CanonicalContract':
                     result = build_graph(snapshot)
                     result['ruleset'] = 'CanonicalContract'
+                    if result['valid'] and placement.get('projection_id'):
+                        result['projection'] = build_canonical_projection(
+                            result['graph'], placement['projection_id']
+                        )
                 elif ruleset == 'RawJSON':
                     result = build_raw_json_graph(snapshot, selected_path)
+                    if result['valid'] and placement.get('renderer') == 'svg_master_map':
+                        result['projection'] = build_master_map_projection(
+                            result['graph'], context_id=context_id
+                        )
                 else:
-                    self._json(500, {'valid': False, 'errors': [{'id': 'SP_UNKNOWN_RULESET', 'message': f'Unknown ruleset in placement: {ruleset}'}]})
+                    self._json(500, {
+                        'valid': False,
+                        'errors': [{'id': 'SP_UNKNOWN_RULESET', 'message': f'Unknown ruleset in placement: {ruleset}'}],
+                    })
                     return
 
                 result['page'] = page
                 result['placement'] = placement
                 result['context'] = context_id
-                if result['valid'] and placement.get('renderer') == 'svg_master_map':
-                    result['projection'] = build_master_map_projection(result['graph'], context_id=context_id)
                 self._json(200 if result['valid'] else 422, result)
                 return
 
             if parsed.path == '/api/health':
                 self._json(200, {
-                    'ok': True, 'service': 'StructureProjector', 'version': '0.10.1',
-                    'view_shell': 'nanoCMS', 'rulesets': ['ExplicitJSONView', 'CanonicalContract', 'RawJSON'],
-                    'render_rulesets': ['render.aigmos_master_map'],
-                    'renderers': ['svg_view_rules', 'svg', 'svg_master_map', 'javascript_3d'],
-                    'viewport': 'cursor_anchored_wheel_zoom + local_reflow_navigation',
-                    'binding_navigation': 'bounded recursive JSON traversal by source_path + JSON Pointer',
+                    'ok': True,
+                    'service': 'StructureProjector',
+                    'version': '0.11.0',
+                    'view_shell': 'nanoCMS',
+                    'rulesets': ['CanonicalContract', 'RawJSON'],
+                    'canonical_contract_format': 'bootstrap-driven',
+                    'canonical_projections': PROJECTIONS,
+                    'renderers': ['canonical_projection_2d', 'canonical_projection_3d', 'svg', 'svg_master_map'],
+                    'viewport': 'cursor_anchored_wheel_zoom + drag_pan',
                     'default_recursion_depth': 1,
                     'max_recursion_depth': MAX_BINDING_DEPTH,
-                    'source_adapter': 'cached_commit_snapshot + GitHub API/Atom branch resolution fallback',
+                    'source_adapter': 'cached immutable commit snapshots',
                 })
                 return
 
@@ -148,10 +163,10 @@ class Handler(BaseHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer((APP_HOST, APP_PORT), Handler)
-    print(f'StructureProjector 0.10.1: http://{APP_HOST}:{APP_PORT}')
+    print(f'StructureProjector 0.11.0: http://{APP_HOST}:{APP_PORT}')
     print(f'Source: {SOURCE_REPO}')
-    print(f'Navigation: local reflow + bounded recursion depth 0..{MAX_BINDING_DEPTH} + cursor-anchored wheel zoom')
-    print('Source adapter: cached immutable commit snapshots')
+    print('Canonical projections: 5 x 2D + 5 x 3D')
+    print('Viewport: cursor-anchored wheel zoom + drag pan')
     try:
         server.serve_forever()
     except KeyboardInterrupt:
