@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import urllib.parse
 from http.server import ThreadingHTTPServer
@@ -8,6 +9,7 @@ from canonical_graph import build_graph
 from canonical_projections import PROJECTIONS, build_canonical_projection
 from master_map_renderer import build_master_map_projection
 from nanocms import projection, resolve_page, resolve_view
+from projection_controls import apply_controls
 from raw_json_mapper import build_raw_json_graph
 from source_adapter import list_branches, load_snapshot
 from structureprojector import (
@@ -19,11 +21,11 @@ from structureprojector import (
 )
 from view_rules import MAX_BINDING_DEPTH, ViewRuleError, binding_children, binding_tree
 
-INDEX_HTML = os.path.join(os.path.dirname(__file__), 'static', 'index_v11.html')
+INDEX_HTML = os.path.join(os.path.dirname(__file__), 'static', 'index_v12.html')
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.11.0'
+    server_version = 'StructureProjector/0.12.0'
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
@@ -95,6 +97,24 @@ class Handler(BaseHandler):
                 view_id = qs.get('view', [None])[0]
                 selected_path = qs.get('path', [None])[0]
                 context_id = qs.get('context', [None])[0]
+                supplied_params: dict[str, object] = {}
+                raw_params = qs.get('params', [''])[0]
+                if raw_params:
+                    try:
+                        decoded = json.loads(raw_params)
+                    except json.JSONDecodeError:
+                        self._json(400, {
+                            'valid': False,
+                            'errors': [{'id': 'SP_PARAMS_INVALID', 'message': 'params must be a JSON object'}],
+                        })
+                        return
+                    if not isinstance(decoded, dict):
+                        self._json(400, {
+                            'valid': False,
+                            'errors': [{'id': 'SP_PARAMS_INVALID', 'message': 'params must be a JSON object'}],
+                        })
+                        return
+                    supplied_params = decoded
 
                 try:
                     page = resolve_page(page_id)
@@ -113,9 +133,10 @@ class Handler(BaseHandler):
                     result = build_graph(snapshot)
                     result['ruleset'] = 'CanonicalContract'
                     if result['valid'] and placement.get('projection_id'):
-                        result['projection'] = build_canonical_projection(
+                        base_projection = build_canonical_projection(
                             result['graph'], placement['projection_id']
                         )
+                        result['projection'] = apply_controls(base_projection, supplied_params)
                 elif ruleset == 'RawJSON':
                     result = build_raw_json_graph(snapshot, selected_path)
                     if result['valid'] and placement.get('renderer') == 'svg_master_map':
@@ -139,11 +160,12 @@ class Handler(BaseHandler):
                 self._json(200, {
                     'ok': True,
                     'service': 'StructureProjector',
-                    'version': '0.11.0',
+                    'version': '0.12.0',
                     'view_shell': 'nanoCMS',
                     'rulesets': ['CanonicalContract', 'RawJSON'],
                     'canonical_contract_format': 'bootstrap-driven',
                     'canonical_projections': PROJECTIONS,
+                    'projection_controls': 'declarative backend schema + bounded values + local browser presets',
                     'renderers': ['canonical_projection_2d', 'canonical_projection_3d', 'svg', 'svg_master_map'],
                     'viewport': 'cursor_anchored_wheel_zoom + drag_pan',
                     'default_recursion_depth': 1,
@@ -163,9 +185,10 @@ class Handler(BaseHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer((APP_HOST, APP_PORT), Handler)
-    print(f'StructureProjector 0.11.0: http://{APP_HOST}:{APP_PORT}')
+    print(f'StructureProjector 0.12.0: http://{APP_HOST}:{APP_PORT}')
     print(f'Source: {SOURCE_REPO}')
     print('Canonical projections: 5 x 2D + 5 x 3D')
+    print('Projection controls: declarative schemas + browser-local presets')
     print('Viewport: cursor-anchored wheel zoom + drag pan')
     try:
         server.serve_forever()
