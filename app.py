@@ -30,6 +30,7 @@ from view_rules import ViewRuleError, binding_children, binding_tree
 BASE_DIR = os.path.dirname(__file__)
 SCENE_VIEWER_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v4.html')
 SCENE_VIEWER_JS = os.path.join(BASE_DIR, 'static', 'scene_viewer_v4.js')
+SCENE_VIEWER_CARDS_JS = os.path.join(BASE_DIR, 'static', 'scene_viewer_v4_cards.js')
 LEGACY_INDEX_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v31.html')
 
 ALL_CANONICAL_PROJECTIONS = {**CORE_PROJECTIONS, **EXTRA_PROJECTIONS}
@@ -149,7 +150,7 @@ def _compose_projection_instance_result(snapshot, specs: list[dict]) -> dict:
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.22.1'
+    server_version = 'StructureProjector/0.22.2'
 
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode('utf-8')
@@ -193,6 +194,8 @@ class Handler(BaseHandler):
                 return self._write_file(SCENE_VIEWER_HTML, 'text/html; charset=utf-8')
             if path == '/static/scene_viewer_v4.js':
                 return self._write_file(SCENE_VIEWER_JS, 'application/javascript; charset=utf-8')
+            if path == '/static/scene_viewer_v4_cards.js':
+                return self._write_file(SCENE_VIEWER_CARDS_JS, 'application/javascript; charset=utf-8')
             if path == '/legacy':
                 return self._write_file(LEGACY_INDEX_HTML, 'text/html; charset=utf-8')
             if path == '/api/health':
@@ -202,7 +205,8 @@ class Handler(BaseHandler):
                     'input_model': 'StructureTree/1.0',
                     'scene_model': 'Scene/1.1',
                     'projection_instances': True,
-                    'renderer': 'webgl2_projection_instances_v4',
+                    'relation_expansion': 'all_explicit_documented_links',
+                    'renderer': 'webgl2_projection_instances_v4_cards',
                     'effects': 'none',
                 })
             if path == '/api/primitives':
@@ -219,7 +223,8 @@ class Handler(BaseHandler):
                 return self._write_json({
                     'styles': style_catalog(),
                     'topics': [{'id': 'all', 'label': 'all', 'entry_count': len(tree.get('entries', []))}] + topic_catalog(tree),
-                    'dependency_depth': {'min': 0, 'max': 32, 'default': 0},
+                    'relation_depth': {'min': 0, 'max': 32, 'default': 1},
+                    'wire_compatibility': {'dependency_depth': 'relation_depth'},
                     'defaults': {'even': '#087CFF', 'odd': '#AAB2C2', 'label_text': '#FFFFFF'},
                 })
             if path == '/api/scene':
