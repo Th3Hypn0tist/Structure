@@ -75,16 +75,23 @@
     renderControls=function(){
       originalRenderControls();
       const p=S.data?.projection;
-      if(!p||p.dimension!=='3d')return;
+      if(!p)return;
       const panel=$('#controls');
       if(!panel)return;
-      const mode=currentFxMode();
+      const heading=panel.querySelector('h2');
       const row=document.createElement('div');
       row.className='preset-row sp-fx-mode';
-      row.innerHTML=`<label style="min-width:52px;color:var(--silver);font-size:12px">3D FX</label><select id="spFxMode" style="flex:1"><option value="off" ${mode==='off'?'selected':''}>Off</option><option value="subtle" ${mode==='subtle'?'selected':''}>Subtle</option><option value="neon" ${mode==='neon'?'selected':''}>Neon</option><option value="custom" ${mode==='custom'?'selected':''} disabled>Custom</option></select>`;
-      const heading=panel.querySelector('h2');
+
+      if(p.dimension!=='3d'){
+        row.innerHTML=`<label style="min-width:52px;color:var(--silver);font-size:12px">3D FX</label><div style="flex:1;color:var(--silver);font-size:12px;border:1px solid var(--neutral);border-radius:8px;padding:7px 9px">Available in Galaxy 3D, Role Layers, Dependency Tower, Authority Space and Relation Orbits</div>`;
+      }else{
+        const mode=currentFxMode();
+        row.innerHTML=`<label style="min-width:52px;color:var(--silver);font-size:12px">3D FX</label><select id="spFxMode" style="flex:1"><option value="off" ${mode==='off'?'selected':''}>Off</option><option value="subtle" ${mode==='subtle'?'selected':''}>Subtle</option><option value="neon" ${mode==='neon'?'selected':''}>Neon</option><option value="custom" ${mode==='custom'?'selected':''} disabled>Custom</option></select>`;
+      }
+
       if(heading&&heading.nextSibling)panel.insertBefore(row,heading.nextSibling);else panel.prepend(row);
-      row.querySelector('#spFxMode').onchange=e=>applyFxMode(e.target.value);
+      const selector=row.querySelector('#spFxMode');
+      if(selector)selector.onchange=e=>applyFxMode(e.target.value);
     };
   }
 })();
