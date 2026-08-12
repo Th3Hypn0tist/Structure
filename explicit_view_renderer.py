@@ -13,10 +13,10 @@ def _item_height(template: str, item: dict[str, Any]) -> int:
 
 
 def build_explicit_view_geometry(view: dict[str, Any]) -> dict[str, Any]:
-    """Build deterministic SVG geometry from an already-resolved view projection.
+    """Build deterministic, navigable SVG geometry from a resolved view.
 
-    This renderer consumes only the declarative view projection. It never reads
-    source files and never invents semantic groups.
+    Occurrences are a projection hierarchy only. `parent_id` allows the browser
+    to focus/reroot the observation frame without changing source semantics.
     """
     width = 3680
     margin = 44
@@ -30,11 +30,13 @@ def build_explicit_view_geometry(view: dict[str, Any]) -> dict[str, Any]:
     y = 92
 
     for section in view.get("sections", []):
+        section_id = section["id"]
         section_y = y
         block_y = section_y + title_h
         block_occurrences: list[dict[str, Any]] = []
 
         for block in section.get("blocks", []):
+            block_id = f"{section_id}::{block['id']}"
             template = block.get("template", "card_grid")
             items = block.get("items", [])
             block_title_h = 42
@@ -66,7 +68,8 @@ def build_explicit_view_geometry(view: dict[str, Any]) -> dict[str, Any]:
             block_h = block_title_h + content_h + 22
             block_occurrences.append({
                 "kind": "block",
-                "id": block["id"],
+                "id": block_id,
+                "parent_id": section_id,
                 "title": block.get("title", block["id"]),
                 "template": template,
                 "accent": block.get("accent", section.get("accent", "primary")),
@@ -74,6 +77,7 @@ def build_explicit_view_geometry(view: dict[str, Any]) -> dict[str, Any]:
                 "y": block_y,
                 "width": inner_w,
                 "height": block_h,
+                "child_count": len(items),
             })
 
             item_y0 = block_y + block_title_h
@@ -86,7 +90,8 @@ def build_explicit_view_geometry(view: dict[str, Any]) -> dict[str, Any]:
                     block_occurrences.append({
                         "kind": "item",
                         "role": item.get("role", "card"),
-                        "id": f"{section['id']}::{block['id']}::{index}",
+                        "id": f"{block_id}::{index}",
+                        "parent_id": block_id,
                         "title": item.get("title", ""),
                         "summary": item.get("summary", ""),
                         "value": item.get("value"),
@@ -95,6 +100,7 @@ def build_explicit_view_geometry(view: dict[str, Any]) -> dict[str, Any]:
                         "y": item_y,
                         "width": item_w,
                         "height": item_h,
+                        "child_count": 0,
                     })
             else:
                 row_y = item_y0
@@ -107,7 +113,8 @@ def build_explicit_view_geometry(view: dict[str, Any]) -> dict[str, Any]:
                         block_occurrences.append({
                             "kind": "item",
                             "role": item.get("role", "card"),
-                            "id": f"{section['id']}::{block['id']}::{index}",
+                            "id": f"{block_id}::{index}",
+                            "parent_id": block_id,
                             "title": item.get("title", ""),
                             "summary": item.get("summary", ""),
                             "value": item.get("value"),
@@ -116,6 +123,7 @@ def build_explicit_view_geometry(view: dict[str, Any]) -> dict[str, Any]:
                             "y": row_y,
                             "width": item_w,
                             "height": _item_height(template, item),
+                            "child_count": 0,
                         })
                     row_y += row_h + item_gap
 
@@ -124,8 +132,9 @@ def build_explicit_view_geometry(view: dict[str, Any]) -> dict[str, Any]:
         section_h = max(150, block_y - section_y + section_pad - block_gap)
         occurrences.append({
             "kind": "section",
-            "id": section["id"],
-            "title": section.get("title", section["id"]),
+            "id": section_id,
+            "parent_id": None,
+            "title": section.get("title", section_id),
             "subtitle": section.get("subtitle", ""),
             "template": section.get("template", "large_frame"),
             "accent": section.get("accent", "primary"),
@@ -133,6 +142,7 @@ def build_explicit_view_geometry(view: dict[str, Any]) -> dict[str, Any]:
             "y": section_y,
             "width": usable_w,
             "height": section_h,
+            "child_count": len(section.get("blocks", [])),
         })
         occurrences.extend(block_occurrences)
         y += section_h + section_gap
@@ -144,4 +154,8 @@ def build_explicit_view_geometry(view: dict[str, Any]) -> dict[str, Any]:
         "subtitle": view.get("subtitle"),
         "view_box": {"width": width, "height": max(900, y + 60)},
         "occurrences": occurrences,
+        "navigation": {
+            "focusable_kinds": ["section", "block", "item"],
+            "rule": "Focus changes only the projection frame. Source semantics remain unchanged.",
+        },
     }
