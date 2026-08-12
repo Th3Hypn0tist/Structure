@@ -8,6 +8,11 @@ from typing import Any
 # Changing a placement MUST NOT change the selected semantic/tree context.
 
 CANONICAL_PROJECTION_PLACEMENTS = [
+    "view.atlas_3d",
+    "view.relation_web_3d",
+    "view.adjacency_matrix_3d",
+    "view.lifecycle_lanes_3d",
+    "view.dependency_flow_3d",
     "view.semantic_galaxy_3d",
     "view.role_layers_3d",
     "view.dependency_tower_3d",
@@ -59,6 +64,11 @@ def _canonical_projection(placement_id: str, title: str, projection_id: str) -> 
 
 
 PLACEMENTS: dict[str, dict[str, Any]] = {
+    "view.atlas_3d": _canonical_projection("view.atlas_3d", "Atlas 3D", "atlas_3d"),
+    "view.relation_web_3d": _canonical_projection("view.relation_web_3d", "Relation Web 3D", "relation_web_3d"),
+    "view.adjacency_matrix_3d": _canonical_projection("view.adjacency_matrix_3d", "Matrix 3D", "adjacency_matrix_3d"),
+    "view.lifecycle_lanes_3d": _canonical_projection("view.lifecycle_lanes_3d", "Lifecycle 3D", "lifecycle_lanes_3d"),
+    "view.dependency_flow_3d": _canonical_projection("view.dependency_flow_3d", "Dependency Flow 3D", "dependency_flow_3d"),
     "view.semantic_galaxy_3d": _canonical_projection("view.semantic_galaxy_3d", "Galaxy", "semantic_galaxy_3d"),
     "view.role_layers_3d": _canonical_projection("view.role_layers_3d", "Role Layers", "role_layers_3d"),
     "view.dependency_tower_3d": _canonical_projection("view.dependency_tower_3d", "Dependency Tower", "dependency_tower_3d"),
@@ -106,7 +116,7 @@ def _validate() -> None:
             if field not in placement:
                 raise ValueError(f"nanoCMS placement {placement_id} missing {field}")
         if placement.get("renderer") != "canonical_projection_3d":
-            raise ValueError(f"Active projection must be 3D: {placement_id}")
+            raise ValueError(f"SP_3D_ONLY_VIOLATION: active projection must be 3D: {placement_id}")
 
 
 _validate()
