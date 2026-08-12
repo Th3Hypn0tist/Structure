@@ -4,6 +4,7 @@ import os
 import urllib.parse
 from http.server import ThreadingHTTPServer
 
+from explicit_view_renderer import build_explicit_view_geometry
 from master_map_renderer import build_master_map_projection
 from nanocms import projection, resolve_page, resolve_view
 from raw_json_mapper import build_raw_json_graph
@@ -17,12 +18,13 @@ from structureprojector import (
     list_branches,
     load_snapshot,
 )
+from view_rules import ViewRuleError, build_view_projection
 
-INDEX_HTML = os.path.join(os.path.dirname(__file__), 'static', 'index_v06.html')
+INDEX_HTML = os.path.join(os.path.dirname(__file__), 'static', 'index_v07.html')
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.6'
+    server_version = 'StructureProjector/0.7'
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
@@ -72,14 +74,30 @@ class Handler(BaseHandler):
                     })
                     return
 
-                ruleset = placement['ruleset']
                 snapshot = load_snapshot(branch)
+                ruleset = placement['ruleset']
 
                 if ruleset == 'CanonicalContract':
                     result = build_graph(snapshot)
                     result['ruleset'] = 'CanonicalContract'
                 elif ruleset == 'RawJSON':
                     result = build_raw_json_graph(snapshot, selected_path)
+                elif ruleset == 'ExplicitJSONView':
+                    view_projection = build_view_projection(snapshot, placement['view_ruleset'])
+                    result = {
+                        'valid': True,
+                        'ruleset': 'ExplicitJSONView',
+                        'source': {
+                            'repository': snapshot.repo,
+                            'branch': snapshot.branch,
+                            'revision': snapshot.revision,
+                            'files': len(snapshot.files),
+                        },
+                        'graph': {'nodes': [], 'edges': []},
+                        'view_projection': view_projection,
+                        'projection': build_explicit_view_geometry(view_projection),
+                        'errors': [],
+                    }
                 else:
                     self._json(500, {
                         'valid': False,
@@ -103,16 +121,19 @@ class Handler(BaseHandler):
                 self._json(200, {
                     'ok': True,
                     'service': 'StructureProjector',
-                    'version': '0.6.0',
+                    'version': '0.7.0',
                     'view_shell': 'nanoCMS',
-                    'rulesets': ['CanonicalContract', 'RawJSON'],
+                    'rulesets': ['CanonicalContract', 'RawJSON', 'ExplicitJSONView'],
+                    'view_rulesets': ['view.aigmos.master', 'view.aigmos.core', 'view.aigmos.composition'],
                     'render_rulesets': ['render.aigmos_master_map'],
-                    'renderers': ['svg', 'svg_master_map', 'javascript_3d'],
+                    'renderers': ['svg', 'svg_master_map', 'svg_view_rules', 'javascript_3d'],
                     'viewport': 'cursor_anchored_wheel_zoom',
                 })
                 return
 
             self._json(404, {'error': 'not found'})
+        except ViewRuleError as exc:
+            self._json(422, {'valid': False, 'errors': [{'id': 'SP_VIEW_RULE', 'message': str(exc)}]})
         except ProjectorError as exc:
             self._json(502, {'valid': False, 'errors': [exc.as_dict()]})
         except Exception as exc:
@@ -121,7 +142,7 @@ class Handler(BaseHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer((APP_HOST, APP_PORT), Handler)
-    print(f'StructureProjector 0.6.0: http://{APP_HOST}:{APP_PORT}')
+    print(f'StructureProjector 0.7.0: http://{APP_HOST}:{APP_PORT}')
     print(f'Source: {SOURCE_REPO}')
     print('View shell: nanoCMS')
     print('2D viewport: cursor-anchored wheel zoom + drag pan')
