@@ -25,7 +25,7 @@ INDEX_HTML = os.path.join(os.path.dirname(__file__), 'static', 'index_v12.html')
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.12.1'
+    server_version = 'StructureProjector/0.12.2'
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
@@ -47,10 +47,7 @@ class Handler(BaseHandler):
                 try:
                     self._json(200, projection(page, view))
                 except KeyError as exc:
-                    self._json(404, {
-                        'valid': False,
-                        'errors': [{'id': 'SP_NANOCMS_RESOLUTION', 'message': f'Unknown nanoCMS page/view: {exc.args[0]}'}],
-                    })
+                    self._json(404, {'valid': False, 'errors': [{'id': 'SP_NANOCMS_RESOLUTION', 'message': f'Unknown nanoCMS page/view: {exc.args[0]}'}]})
                 return
 
             if parsed.path == '/api/branches':
@@ -63,30 +60,20 @@ class Handler(BaseHandler):
                 source_path = qs.get('source_path', [None])[0]
                 pointer = qs.get('pointer', ['/'])[0]
                 if not source_path:
-                    self._json(400, {
-                        'valid': False,
-                        'errors': [{'id': 'SP_BINDING_SOURCE_REQUIRED', 'message': 'source_path is required'}],
-                    })
+                    self._json(400, {'valid': False, 'errors': [{'id': 'SP_BINDING_SOURCE_REQUIRED', 'message': 'source_path is required'}]})
                     return
                 snapshot = load_snapshot(branch)
                 if parsed.path == '/api/binding-tree':
                     try:
                         requested_depth = int(qs.get('depth', ['1'])[0])
                     except ValueError:
-                        self._json(400, {
-                            'valid': False,
-                            'errors': [{'id': 'SP_DEPTH_INVALID', 'message': 'depth must be an integer'}],
-                        })
+                        self._json(400, {'valid': False, 'errors': [{'id': 'SP_DEPTH_INVALID', 'message': 'depth must be an integer'}]})
                         return
                     result = binding_tree(snapshot, source_path, pointer, requested_depth)
                 else:
                     result = binding_children(snapshot, source_path, pointer)
                 result['valid'] = True
-                result['source'] = {
-                    'repository': snapshot.repo,
-                    'branch': snapshot.branch,
-                    'revision': snapshot.revision,
-                }
+                result['source'] = {'repository': snapshot.repo, 'branch': snapshot.branch, 'revision': snapshot.revision}
                 self._json(200, result)
                 return
 
@@ -103,16 +90,10 @@ class Handler(BaseHandler):
                     try:
                         decoded = json.loads(raw_params)
                     except json.JSONDecodeError:
-                        self._json(400, {
-                            'valid': False,
-                            'errors': [{'id': 'SP_PARAMS_INVALID', 'message': 'params must be a JSON object'}],
-                        })
+                        self._json(400, {'valid': False, 'errors': [{'id': 'SP_PARAMS_INVALID', 'message': 'params must be a JSON object'}]})
                         return
                     if not isinstance(decoded, dict):
-                        self._json(400, {
-                            'valid': False,
-                            'errors': [{'id': 'SP_PARAMS_INVALID', 'message': 'params must be a JSON object'}],
-                        })
+                        self._json(400, {'valid': False, 'errors': [{'id': 'SP_PARAMS_INVALID', 'message': 'params must be a JSON object'}]})
                         return
                     supplied_params = decoded
 
@@ -120,10 +101,7 @@ class Handler(BaseHandler):
                     page = resolve_page(page_id)
                     placement = resolve_view(page_id, view_id)
                 except KeyError as exc:
-                    self._json(400, {
-                        'valid': False,
-                        'errors': [{'id': 'SP_NANOCMS_RESOLUTION', 'message': f'Unknown nanoCMS page/view: {exc.args[0]}'}],
-                    })
+                    self._json(400, {'valid': False, 'errors': [{'id': 'SP_NANOCMS_RESOLUTION', 'message': f'Unknown nanoCMS page/view: {exc.args[0]}'}]})
                     return
 
                 snapshot = load_snapshot(branch)
@@ -134,34 +112,23 @@ class Handler(BaseHandler):
                     result['ruleset'] = 'CanonicalContract'
                     if result['valid'] and placement.get('projection_id'):
                         projection_id = placement['projection_id']
-                        base_projection = build_canonical_projection(result['graph'], projection_id)
+                        base_projection = build_canonical_projection(result['graph'], projection_id, context_id=context_id)
                         try:
                             result['projection'] = apply_controls(base_projection, supplied_params)
                         except Exception as exc:
-                            # Projection parameters are presentation state only.
-                            # A control/layout failure MUST NOT invalidate a proven
-                            # canonical source graph.
                             result['projection'] = base_projection
                             schema = schema_for(projection_id)
                             result['projection']['control_schema'] = schema.get('controls', [])
                             result['projection']['control_schema_version'] = schema.get('version', 1)
                             result['projection']['control_values'] = defaults_for(projection_id)
                             result['projection']['builtin_presets'] = schema.get('presets', {})
-                            result.setdefault('warnings', []).append({
-                                'id': 'SP_PROJECTION_CONTROLS_FALLBACK',
-                                'message': f'Projection controls failed; canonical projection rendered with base geometry: {exc}',
-                            })
+                            result.setdefault('warnings', []).append({'id': 'SP_PROJECTION_CONTROLS_FALLBACK', 'message': f'Projection controls failed; canonical projection rendered with base geometry: {exc}'})
                 elif ruleset == 'RawJSON':
                     result = build_raw_json_graph(snapshot, selected_path)
                     if result['valid'] and placement.get('renderer') == 'svg_master_map':
-                        result['projection'] = build_master_map_projection(
-                            result['graph'], context_id=context_id
-                        )
+                        result['projection'] = build_master_map_projection(result['graph'], context_id=context_id)
                 else:
-                    self._json(500, {
-                        'valid': False,
-                        'errors': [{'id': 'SP_UNKNOWN_RULESET', 'message': f'Unknown ruleset in placement: {ruleset}'}],
-                    })
+                    self._json(500, {'valid': False, 'errors': [{'id': 'SP_UNKNOWN_RULESET', 'message': f'Unknown ruleset in placement: {ruleset}'}]})
                     return
 
                 result['page'] = page
@@ -174,12 +141,13 @@ class Handler(BaseHandler):
                 self._json(200, {
                     'ok': True,
                     'service': 'StructureProjector',
-                    'version': '0.12.1',
+                    'version': '0.12.2',
                     'view_shell': 'nanoCMS',
                     'rulesets': ['CanonicalContract', 'RawJSON'],
                     'canonical_contract_format': 'bootstrap-driven',
                     'canonical_projections': PROJECTIONS,
                     'projection_controls': 'presentation-only fail-soft controls + local browser presets',
+                    'semantic_context': 'projection root passed explicitly as context identity',
                     'renderers': ['canonical_projection_2d', 'canonical_projection_3d', 'svg', 'svg_master_map'],
                     'viewport': 'cursor_anchored_wheel_zoom + drag_pan',
                     'default_recursion_depth': 1,
@@ -199,11 +167,11 @@ class Handler(BaseHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer((APP_HOST, APP_PORT), Handler)
-    print(f'StructureProjector 0.12.1: http://{APP_HOST}:{APP_PORT}')
+    print(f'StructureProjector 0.12.2: http://{APP_HOST}:{APP_PORT}')
     print(f'Source: {SOURCE_REPO}')
-    print('Canonical projections: 5 x 2D + 5 x 3D')
+    print('Canonical projections: 5 x 2D + 6 x 3D')
+    print('Spatial Dependency: explicit semantic root + bounded forward projection')
     print('Projection controls: presentation-only; failures cannot invalidate canonical source')
-    print('Viewport: cursor-anchored wheel zoom + drag pan')
     try:
         server.serve_forever()
     except KeyboardInterrupt:
