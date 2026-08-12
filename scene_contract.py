@@ -29,6 +29,37 @@ def _zero_transform() -> dict[str, Any]:
     }
 
 
+def _hierarchy_depths(source_tree: dict[str, Any]) -> dict[str, int | None]:
+    """Resolve explicit parent_id depth only; never infer hierarchy from names/paths."""
+    parents = {
+        str(entry.get("id")): (str(entry.get("parent_id")) if entry.get("parent_id") is not None else None)
+        for entry in source_tree.get("entries", [])
+        if entry.get("id") is not None
+    }
+    memo: dict[str, int | None] = {}
+
+    def depth(entry_id: str, stack: set[str]) -> int | None:
+        if entry_id in memo:
+            return memo[entry_id]
+        if entry_id in stack:
+            memo[entry_id] = None
+            return None
+        parent_id = parents.get(entry_id)
+        if parent_id is None:
+            memo[entry_id] = 0
+            return 0
+        if parent_id not in parents:
+            memo[entry_id] = None
+            return None
+        parent_depth = depth(parent_id, stack | {entry_id})
+        memo[entry_id] = None if parent_depth is None else parent_depth + 1
+        return memo[entry_id]
+
+    for entry_id in parents:
+        depth(entry_id, set())
+    return memo
+
+
 def new_scene(*, source_tree: dict[str, Any] | None = None) -> dict[str, Any]:
     tree = source_tree or {}
     return {
@@ -74,6 +105,7 @@ def projection_to_object(
     """
     projection_id = str(projection.get("id") or "projection")
     entry_index = {str(e.get("id")): e for e in source_tree.get("entries", [])}
+    hierarchy_depths = _hierarchy_depths(source_tree)
     primitive_ref, _definition = resolve_primitive(primitive)
     nodes: list[dict[str, Any]] = []
 
@@ -102,6 +134,7 @@ def projection_to_object(
                 "type": entry.get("type", projected.get("type")),
                 "status": entry.get("status", projected.get("status")),
                 "kind": entry.get("kind", projected.get("kind")),
+                "hierarchy_depth": hierarchy_depths.get(entry_id),
             },
             "bindings": [],
         })
