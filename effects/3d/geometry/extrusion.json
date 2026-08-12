@@ -1,0 +1,11 @@
+{
+  "id": "3d.geometry.extrusion",
+  "type": "structureprojector_3d_effect",
+  "group": "geometry",
+  "version": 1,
+  "controls": [
+    {"id": "extrusion", "label": "Extrusion", "type": "range", "min": 0, "max": 120, "step": 2, "default": 40}
+  ],
+  "style_targets": {"extrusion": "extrusion"},
+  "renderer_contract": "Node is a true six-face cuboid; extrusion is physical Z depth."
+}
