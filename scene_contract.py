@@ -3,8 +3,10 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from primitive_registry import resolve_primitive
+
 FORMAT = "STRUCTUREPROJECTOR_SCENE"
-VERSION = "1.0"
+VERSION = "1.1"
 
 DEFAULT_CHANNEL_STYLES = {
     "structural": {"enabled": True, "color": "#AAB2C2"},
@@ -47,6 +49,15 @@ def new_scene(*, source_tree: dict[str, Any] | None = None) -> dict[str, Any]:
     }
 
 
+def _node_geometry_parameters(projected: dict[str, Any]) -> dict[str, Any]:
+    params: dict[str, Any] = {}
+    for key in ("width", "height", "depth", "radius"):
+        value = projected.get(key)
+        if value is not None:
+            params[key] = value
+    return params
+
+
 def projection_to_object(
     projection: dict[str, Any],
     source_tree: dict[str, Any],
@@ -55,14 +66,15 @@ def projection_to_object(
     transform: dict[str, Any] | None = None,
     primitive: str = "box",
 ) -> dict[str, Any]:
-    """Convert one projection into one SceneObject.
+    """Convert one projection into one composable SceneObject.
 
-    SceneObject is the callable/composable projection instance. Its Nodes are
-    the renderable parts. A Node owns primitive, transform, geometry, style,
-    anchors and bindings. Spatial coordinates are local to the SceneObject.
+    SceneObject is the projection instance. Nodes are lightweight primitive
+    instances: they reference shared primitive geometry and carry only local
+    transform, geometry parameters, style and source properties.
     """
     projection_id = str(projection.get("id") or "projection")
     entry_index = {str(e.get("id")): e for e in source_tree.get("entries", [])}
+    primitive_ref, _definition = resolve_primitive(primitive)
     nodes: list[dict[str, Any]] = []
 
     for projected in projection.get("nodes", []):
@@ -73,7 +85,7 @@ def projection_to_object(
         nodes.append({
             "id": entry_id,
             "source_ref": entry_id,
-            "primitive": primitive,
+            "primitive_ref": primitive_ref,
             "transform": {
                 "position": {
                     "x": float(projected.get("x", 0) or 0),
@@ -83,21 +95,13 @@ def projection_to_object(
                 "rotation": {"x": 0.0, "y": 0.0, "z": 0.0},
                 "scale": {"x": 1.0, "y": 1.0, "z": 1.0},
             },
-            "geometry": {
-                "width": projected.get("width"),
-                "height": projected.get("height"),
-                "depth": projected.get("depth"),
-                "radius": projected.get("radius"),
-            },
+            "geometry_parameters": _node_geometry_parameters(projected),
             "style": {},
             "properties": {
                 "name": entry.get("name", projected.get("name")),
                 "type": entry.get("type", projected.get("type")),
                 "status": entry.get("status", projected.get("status")),
                 "kind": entry.get("kind", projected.get("kind")),
-            },
-            "anchors": {
-                "center": {"x": 0.0, "y": 0.0, "z": 0.0},
             },
             "bindings": [],
         })
@@ -129,6 +133,7 @@ def projection_connections(
 ) -> list[dict[str, Any]]:
     link_index = {str(l.get("id")): l for l in source_tree.get("links", []) if l.get("id") is not None}
     node_ids = {str(n.get("id")) for n in projection.get("nodes", [])}
+    primitive_ref, _definition = resolve_primitive(connection_primitive, connection=True)
     connections: list[dict[str, Any]] = []
 
     for edge in projection.get("edges", []):
@@ -146,7 +151,7 @@ def projection_connections(
             "source_ref": raw_link.get("id") or edge.get("id"),
             "from": {"object": object_id, "node": source_id, "anchor": "center"},
             "to": {"object": object_id, "node": target_id, "anchor": "center"},
-            "primitive": connection_primitive,
+            "primitive_ref": primitive_ref,
             "style_ref": channel,
             "style": {},
         })
@@ -160,7 +165,6 @@ def projection_to_scene(
     primitive: str = "box",
     connection_primitive: str = "line",
 ) -> dict[str, Any]:
-    """Compatibility helper: compose a Scene containing one projection object."""
     scene = new_scene(source_tree=source_tree)
     obj = projection_to_object(projection, source_tree, primitive=primitive)
     scene["objects"].append(obj)
@@ -204,8 +208,13 @@ def validate_scene(scene: dict[str, Any]) -> list[dict[str, Any]]:
             if nid in node_ids[oid]:
                 errors.append({"id": "SP_SCENE_DUPLICATE_NODE", "message": f"Duplicate Node {oid}/{nid}"})
             node_ids[oid].add(nid)
-            if not node.get("primitive"):
-                errors.append({"id": "SP_SCENE_NODE_PRIMITIVE", "message": f"Node {oid}/{nid} requires primitive"})
+            primitive_ref = node.get("primitive_ref")
+            try:
+                resolve_primitive(primitive_ref)
+            except Exception:
+                errors.append({"id": "SP_SCENE_NODE_PRIMITIVE", "message": f"Unresolved primitive_ref for Node {oid}/{nid}: {primitive_ref}"})
+            if "geometry" in node or "primitive" in node:
+                errors.append({"id": "SP_SCENE_NODE_INSTANCE_ONLY", "message": f"Node {oid}/{nid} must not embed primitive geometry"})
 
     connection_ids: set[str] = set()
     for connection in scene.get("connections", []):
@@ -217,6 +226,10 @@ def validate_scene(scene: dict[str, Any]) -> list[dict[str, Any]]:
         channel = connection.get("channel")
         if not isinstance(channel, str) or not channel:
             errors.append({"id": "SP_SCENE_CONNECTION_CHANNEL", "message": "SceneConnection requires channel"})
+        try:
+            resolve_primitive(connection.get("primitive_ref"), connection=True)
+        except Exception:
+            errors.append({"id": "SP_SCENE_CONNECTION_PRIMITIVE", "message": f"Unresolved connection primitive_ref: {connection.get('primitive_ref')}"})
         for endpoint_name in ("from", "to"):
             endpoint = connection.get(endpoint_name) or {}
             oid = endpoint.get("object")
