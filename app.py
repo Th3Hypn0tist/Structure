@@ -18,13 +18,19 @@ from structureprojector import (
     list_branches,
     load_snapshot,
 )
-from view_rules import ViewRuleError, binding_children, build_view_projection
+from view_rules import (
+    MAX_BINDING_DEPTH,
+    ViewRuleError,
+    binding_children,
+    binding_tree,
+    build_view_projection,
+)
 
-INDEX_HTML = os.path.join(os.path.dirname(__file__), 'static', 'index_v09.html')
+INDEX_HTML = os.path.join(os.path.dirname(__file__), 'static', 'index_v10.html')
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.9.0'
+    server_version = 'StructureProjector/0.10.0'
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
@@ -53,7 +59,7 @@ class Handler(BaseHandler):
                 self._json(200, {'repository': SOURCE_REPO, 'branches': list_branches()})
                 return
 
-            if parsed.path == '/api/binding-children':
+            if parsed.path in ('/api/binding-children', '/api/binding-tree'):
                 qs = urllib.parse.parse_qs(parsed.query)
                 branch = qs.get('branch', ['main'])[0]
                 source_path = qs.get('source_path', [None])[0]
@@ -62,7 +68,15 @@ class Handler(BaseHandler):
                     self._json(400, {'valid': False, 'errors': [{'id': 'SP_BINDING_SOURCE_REQUIRED', 'message': 'source_path is required'}]})
                     return
                 snapshot = load_snapshot(branch)
-                result = binding_children(snapshot, source_path, pointer)
+                if parsed.path == '/api/binding-tree':
+                    try:
+                        requested_depth = int(qs.get('depth', ['1'])[0])
+                    except ValueError:
+                        self._json(400, {'valid': False, 'errors': [{'id': 'SP_DEPTH_INVALID', 'message': 'depth must be an integer'}]})
+                        return
+                    result = binding_tree(snapshot, source_path, pointer, requested_depth)
+                else:
+                    result = binding_children(snapshot, source_path, pointer)
                 result['valid'] = True
                 result['source'] = {'repository': snapshot.repo, 'branch': snapshot.branch, 'revision': snapshot.revision}
                 self._json(200, result)
@@ -112,12 +126,14 @@ class Handler(BaseHandler):
 
             if parsed.path == '/api/health':
                 self._json(200, {
-                    'ok': True, 'service': 'StructureProjector', 'version': '0.9.0',
+                    'ok': True, 'service': 'StructureProjector', 'version': '0.10.0',
                     'view_shell': 'nanoCMS', 'rulesets': ['ExplicitJSONView', 'CanonicalContract', 'RawJSON'],
                     'render_rulesets': ['render.aigmos_master_map'],
                     'renderers': ['svg_view_rules', 'svg', 'svg_master_map', 'javascript_3d'],
                     'viewport': 'cursor_anchored_wheel_zoom + local_reflow_navigation',
-                    'binding_navigation': 'recursive direct JSON children by source_path + JSON Pointer',
+                    'binding_navigation': 'bounded recursive JSON traversal by source_path + JSON Pointer',
+                    'default_recursion_depth': 1,
+                    'max_recursion_depth': MAX_BINDING_DEPTH,
                 })
                 return
 
@@ -132,9 +148,9 @@ class Handler(BaseHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer((APP_HOST, APP_PORT), Handler)
-    print(f'StructureProjector 0.9.0: http://{APP_HOST}:{APP_PORT}')
+    print(f'StructureProjector 0.10.0: http://{APP_HOST}:{APP_PORT}')
     print(f'Source: {SOURCE_REPO}')
-    print('Navigation: local reflow + recursive binding children + cursor-anchored wheel zoom')
+    print(f'Navigation: local reflow + bounded recursion depth 0..{MAX_BINDING_DEPTH} + cursor-anchored wheel zoom')
     try:
         server.serve_forever()
     except KeyboardInterrupt:
