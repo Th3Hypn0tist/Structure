@@ -20,6 +20,10 @@ STRUCTURE_DIMS = ("containment", "relations", "ownership", "authority", "depende
 BEHAVIOR_DIMS = ("states", "interfaces", "operations", "events")
 
 
+class CanonicalGraphError(ValueError):
+    pass
+
+
 def _json_file(snapshot: SourceSnapshot, path: str) -> dict[str, Any]:
     raw = snapshot.files.get(path)
     if raw is None:
@@ -135,7 +139,7 @@ def _load_contracts(snapshot: SourceSnapshot, format_spec: dict[str, Any]) -> tu
     for path in sorted(snapshot.files):
         content = snapshot.files[path]
         inventory.append({"path": path, "size": len(content), "type": "file"})
-        if path in (BOOTSTRAP_PATH,) or not path.startswith(CANONICAL_ROOT) or not path.lower().endswith(".json"):
+        if path == BOOTSTRAP_PATH or not path.startswith(CANONICAL_ROOT) or not path.lower().endswith(".json"):
             continue
         try:
             data = json.loads(content.decode("utf-8"))
@@ -197,7 +201,6 @@ def build_graph(snapshot: SourceSnapshot) -> dict[str, Any]:
     refs_to_check: list[tuple[str, str, str]] = []
     registry_members: list[tuple[str, dict[str, Any]]] = []
 
-    # Pass 1: explicit architecture definitions and non-registry owned members.
     for item in architecture_contracts:
         path, data = item["path"], item["data"]
         role = data.get("source_role")
@@ -220,9 +223,6 @@ def build_graph(snapshot: SourceSnapshot) -> dict[str, Any]:
             else:
                 nodes[member_id] = _node_from_member(path, member, registry=False)
 
-    # Pass 2: a registry member becomes a node only when no more specific
-    # canonical definition/member already owns that same semantic identity.
-    # This implements the master's composition_registry_rule without duplication.
     for path, member in registry_members:
         member_id = member["id"]
         if member_id not in nodes:
@@ -245,9 +245,6 @@ def build_graph(snapshot: SourceSnapshot) -> dict[str, Any]:
         refs_to_check.append((str(source), str(normalized["id"] or dimension), "source"))
         refs_to_check.append((str(target), str(normalized["id"] or dimension), "target"))
 
-    # Edges and references are read only from lifecycle-active canonical contracts.
-    # Non-node source roles may describe migration/history but may not introduce
-    # active architecture structure.
     for item in architecture_contracts:
         data = item["data"]
         structure = data.get("structure", {})
@@ -265,18 +262,32 @@ def build_graph(snapshot: SourceSnapshot) -> dict[str, Any]:
             if isinstance(ref, dict) and ref.get("target_ref"):
                 refs_to_check.append((str(ref["target_ref"]), str(ref.get("id") or "reference"), "target_ref"))
 
+    unresolved_refs: list[dict[str, Any]] = []
     for target_ref, owner, role in refs_to_check:
         if target_ref not in nodes:
-            errors.append({
+            error = {
                 "id": "CF_UNRESOLVED_REFERENCE",
                 "message": f"Unresolved active reference {target_ref} in {owner} ({role})",
-            })
+            }
+            errors.append(error)
+            unresolved_refs.append(error)
 
-    valid = not errors
+    validation_valid = not errors
     lifecycle_active_count = sum(1 for c in contracts if c["lifecycle_active"])
     excluded_non_node_count = sum(1 for c in contracts if c["lifecycle_active"] and not c["architecture_active"])
+
+    # Projection availability is intentionally separate from package validation.
+    # Every node and edge below originates from explicit active canonical data.
+    # Validation errors remain visible and MUST NOT be silently reinterpreted,
+    # but they also MUST NOT erase already-proven structure from a read-only
+    # projector. Edges with unresolved endpoints remain in the diagnostic graph;
+    # renderers naturally draw only edges whose endpoints are present.
+    projectable = bool(nodes)
+
     return {
-        "valid": valid,
+        "valid": validation_valid,
+        "projectable": projectable,
+        "projection_status": "valid" if validation_valid else "degraded",
         "source": {
             "repository": snapshot.repo,
             "branch": snapshot.branch,
@@ -302,8 +313,12 @@ def build_graph(snapshot: SourceSnapshot) -> dict[str, Any]:
         },
         "inventory": inventory,
         "graph": {
-            "nodes": list(nodes.values()) if valid else [],
-            "edges": edges if valid else [],
+            "nodes": list(nodes.values()),
+            "edges": edges,
+        },
+        "diagnostics": {
+            "validation_error_count": len(errors),
+            "unresolved_reference_count": len(unresolved_refs),
         },
         "errors": errors,
     }
