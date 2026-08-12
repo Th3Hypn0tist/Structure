@@ -87,37 +87,42 @@ def _summary(value: Any) -> str:
     return str(value)
 
 
-def _binding_value(snapshot: Any, binding: dict[str, Any], cache: dict[str, Any]) -> tuple[Any, dict[str, str]]:
+def _explicit_status(value: Any, document: Any) -> str | None:
+    if isinstance(value, dict) and isinstance(value.get("status"), str):
+        return value["status"]
+    if isinstance(document, dict) and isinstance(document.get("status"), str):
+        return document["status"]
+    return None
+
+
+def _binding_value(snapshot: Any, binding: dict[str, Any], cache: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
     source_path = binding["source_path"]
     pointer = binding.get("pointer", "")
-    data = _read_json(snapshot, source_path, cache)
-    value = resolve_pointer(data, pointer)
-    provenance = {"source_path": source_path, "pointer": pointer or "/"}
+    document = _read_json(snapshot, source_path, cache)
+    value = resolve_pointer(document, pointer)
+    provenance = {
+        "source_path": source_path,
+        "pointer": pointer or "/",
+        "source_status": document.get("status") if isinstance(document, dict) else None,
+    }
     return value, provenance
 
 
-def _materialize_collection(
-    snapshot: Any,
-    binding: dict[str, Any],
-    cache: dict[str, Any],
-    role: str,
-) -> list[dict[str, Any]]:
+def _materialize_collection(snapshot: Any, binding: dict[str, Any], cache: dict[str, Any], role: str) -> list[dict[str, Any]]:
     value, provenance = _binding_value(snapshot, binding, cache)
+    document = _read_json(snapshot, provenance["source_path"], cache)
     mode = binding.get("mode", "value")
     limit = binding.get("limit")
     items: list[dict[str, Any]] = []
 
     if mode == "array":
-        if not isinstance(value, list):
-            raise ViewRuleError(f"Expected array at {provenance}")
+        if not isinstance(value, list): raise ViewRuleError(f"Expected array at {provenance}")
         iterable = list(enumerate(value))
     elif mode == "object_entries":
-        if not isinstance(value, dict):
-            raise ViewRuleError(f"Expected object at {provenance}")
+        if not isinstance(value, dict): raise ViewRuleError(f"Expected object at {provenance}")
         iterable = list(value.items())
     elif mode == "object_keys":
-        if not isinstance(value, dict):
-            raise ViewRuleError(f"Expected object at {provenance}")
+        if not isinstance(value, dict): raise ViewRuleError(f"Expected object at {provenance}")
         iterable = [(key, key) for key in value.keys()]
     elif mode == "value":
         iterable = [(binding.get("label", "value"), value)]
@@ -139,10 +144,16 @@ def _materialize_collection(
             "key": str(key),
             "title": _label(item, str(key)),
             "summary": _summary(item),
+            "status": _explicit_status(item, document),
             "value": deepcopy(item) if not isinstance(item, (dict, list)) else None,
-            "provenance": {"source_path": provenance["source_path"], "pointer": item_pointer or "/"},
+            "provenance": {"source_path": provenance["source_path"], "pointer": item_pointer or "/", "source_status": provenance.get("source_status")},
         })
     return items
+
+
+def _uniform_status(items: list[dict[str, Any]]) -> str | None:
+    statuses = {item.get("status") for item in items if item.get("status")}
+    return next(iter(statuses)) if len(statuses) == 1 else None
 
 
 def build_view_projection(snapshot: Any, ruleset_id: str) -> dict[str, Any]:
@@ -151,58 +162,22 @@ def build_view_projection(snapshot: Any, ruleset_id: str) -> dict[str, Any]:
     sections: list[dict[str, Any]] = []
 
     for section in rules.get("sections", []):
-        projected = {
-            "id": section["id"],
-            "title": section.get("title", section["id"]),
-            "subtitle": section.get("subtitle", ""),
-            "template": section.get("template", "section"),
-            "accent": section.get("accent", "primary"),
-            "blocks": [],
-        }
+        projected = {"id": section["id"], "title": section.get("title", section["id"]), "subtitle": section.get("subtitle", ""), "template": section.get("template", "section"), "accent": section.get("accent", "primary"), "blocks": []}
         for block in section.get("blocks", []):
-            materialized = {
-                "id": block["id"],
-                "title": block.get("title", block["id"]),
-                "template": block.get("template", "card_grid"),
-                "accent": block.get("accent", section.get("accent", "primary")),
-                "items": [],
-            }
+            materialized = {"id": block["id"], "title": block.get("title", block["id"]), "template": block.get("template", "card_grid"), "accent": block.get("accent", section.get("accent", "primary")), "items": []}
             if "binding" in block:
-                materialized["items"] = _materialize_collection(
-                    snapshot, block["binding"], cache, block.get("item_role", "card")
-                )
+                materialized["items"] = _materialize_collection(snapshot, block["binding"], cache, block.get("item_role", "card"))
             for item in block.get("items", []):
                 if "binding" in item:
                     value, provenance = _binding_value(snapshot, item["binding"], cache)
-                    materialized["items"].append({
-                        "role": item.get("role", "card"),
-                        "key": item["id"],
-                        "title": item.get("title") or _label(value, item["id"]),
-                        "summary": item.get("summary") or _summary(value),
-                        "value": deepcopy(value) if not isinstance(value, (dict, list)) else None,
-                        "provenance": provenance,
-                    })
+                    document = _read_json(snapshot, provenance["source_path"], cache)
+                    materialized["items"].append({"role": item.get("role", "card"), "key": item["id"], "title": item.get("title") or _label(value, item["id"]), "summary": item.get("summary") or _summary(value), "status": _explicit_status(value, document), "value": deepcopy(value) if not isinstance(value, (dict, list)) else None, "provenance": provenance})
                 else:
-                    materialized["items"].append({
-                        "role": item.get("role", "card"),
-                        "key": item["id"],
-                        "title": item.get("title", item["id"]),
-                        "summary": item.get("summary", ""),
-                        "value": item.get("value"),
-                        "provenance": item.get("provenance"),
-                    })
+                    materialized["items"].append({"role": item.get("role", "card"), "key": item["id"], "title": item.get("title", item["id"]), "summary": item.get("summary", ""), "status": item.get("status"), "value": item.get("value"), "provenance": item.get("provenance")})
+            materialized["status"] = _uniform_status(materialized["items"])
             projected["blocks"].append(materialized)
+        block_statuses = [{"status": block.get("status")} for block in projected["blocks"] if block.get("status")]
+        projected["status"] = _uniform_status(block_statuses)
         sections.append(projected)
 
-    return {
-        "id": rules["id"],
-        "name": rules.get("name", rules["id"]),
-        "version": rules.get("version"),
-        "status": rules.get("status"),
-        "title": rules.get("title", rules.get("name", rules["id"])),
-        "subtitle": rules.get("subtitle", ""),
-        "render_ruleset": rules.get("render_ruleset", "render.aigmos_master_map"),
-        "source_revision": snapshot.revision,
-        "sections": sections,
-        "hard_gates": rules.get("hard_gates", []),
-    }
+    return {"id": rules["id"], "name": rules.get("name", rules["id"]), "version": rules.get("version"), "status": rules.get("status"), "title": rules.get("title", rules.get("name", rules["id"])), "subtitle": rules.get("subtitle", ""), "render_ruleset": rules.get("render_ruleset", "render.aigmos_master_map"), "source_revision": snapshot.revision, "sections": sections, "hard_gates": rules.get("hard_gates", [])}
