@@ -41,6 +41,29 @@
     load({keepCamera:true});
   }
 
+  function contentBounds2d(p){
+    if(!p)return null;
+    if(p.kind==='matrix'){
+      const size=Number(p.label_size||0)+(p.order?.length||0)*Number(p.cell_size||0)+60;
+      return {x:0,y:0,width:Math.max(1,size),height:Math.max(1,size)};
+    }
+    const boxes=[];
+    for(const g of p.groups||[]){
+      if(Number.isFinite(+g.x)&&Number.isFinite(+g.y)&&Number.isFinite(+g.width)&&Number.isFinite(+g.height))boxes.push({x:+g.x,y:+g.y,w:+g.width,h:+g.height});
+    }
+    for(const n of p.nodes||[]){
+      if(Number.isFinite(+n.x)&&Number.isFinite(+n.y)){
+        if(Number.isFinite(+n.width)&&Number.isFinite(+n.height))boxes.push({x:+n.x,y:+n.y,w:+n.width,h:+n.height});
+        else if(Number.isFinite(+n.radius)){const r=+n.radius;boxes.push({x:+n.x-r,y:+n.y-r,w:r*2,h:r*2});}
+      }
+    }
+    if(!boxes.length)return p.bounds?{x:0,y:0,width:p.bounds.width,height:p.bounds.height}:null;
+    let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+    for(const b of boxes){minX=Math.min(minX,b.x);minY=Math.min(minY,b.y);maxX=Math.max(maxX,b.x+b.w);maxY=Math.max(maxY,b.y+b.h);}
+    const pad=Math.max(24,Math.min(100,Math.max(maxX-minX,maxY-minY)*.025));
+    return {x:minX-pad,y:minY-pad,width:(maxX-minX)+pad*2,height:(maxY-minY)+pad*2};
+  }
+
   window.__spOriginalRender3d = typeof render3d==='function' ? render3d : null;
   render3d=function(){
     const p=S.data?.projection;if(!p)return;
@@ -69,6 +92,32 @@
     scene.querySelectorAll('.node3d').forEach(el=>el.onclick=e=>{e.stopPropagation();const n=pos.get(el.dataset.id);if(n){S.selected=n.id;inspect(n);render3d()}});
     apply3d();
   };
+
+  const originalRenderCanonical2d=typeof renderCanonical2d==='function'?renderCanonical2d:null;
+  if(originalRenderCanonical2d){
+    renderCanonical2d=function(refit=true){
+      originalRenderCanonical2d(false);
+      if(refit||!S.cameras.has(S.view)){
+        const b=contentBounds2d(S.data?.projection);
+        if(b)fitBox(b,.94);else applyCam();
+      }else applyCam();
+    };
+  }
+
+  const fitButton=$('#fit');
+  if(fitButton){
+    fitButton.addEventListener('click',function(e){
+      const p=S.data?.projection;
+      if(!p)return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if(p.dimension==='3d'){
+        S.z3=1;apply3d();
+      }else{
+        const b=contentBounds2d(p);if(b)fitBox(b,.94);
+      }
+    },true);
+  }
 
   const originalRenderControls=typeof renderControls==='function'?renderControls:null;
   if(originalRenderControls){
