@@ -45,10 +45,15 @@
   render3d=function(){
     const p=S.data?.projection;if(!p)return;
     const scene=$('#scene3d'),nodes=p.nodes||[],pos=new Map(nodes.map(n=>[String(n.id),n]));
-    const op=p.style?.edge_opacity??.22,nodeScale=p.style?.node_scale??1,labelScale=p.style?.label_scale??1;
-    const glow=p.style?.glow??.65,extrusion=p.style?.extrusion??40,edgeGlow=p.style?.edge_glow??.45;
+    const local=S.params.get(S.view)||{};
+    const op=local.edge_opacity??p.style?.edge_opacity??.22;
+    const nodeScale=local.node_scale??p.style?.node_scale??1;
+    const labelScale=local.label_scale??p.style?.label_scale??1;
+    const glow=local.glow??p.style?.glow??.65;
+    const extrusion=local.extrusion??p.style?.extrusion??40;
+    const edgeGlow=local.edge_glow??p.style?.edge_glow??.45;
     $('#space3d').classList.add('fx-space');
-    $('#space3d').style.perspective=(p.style?.perspective??1100)+'px';
+    $('#space3d').style.perspective=(local.perspective??p.style?.perspective??1100)+'px';
     let h='';
     for(const g of p.groups||[]){
       if(g.y!==undefined&&p.kind==='layers')h+=`<div class="plane3d fx-plane" style="width:1200px;height:800px;transform:translate3d(-600px,${g.y-400}px,-400px) rotateX(90deg)"></div>`;
@@ -85,6 +90,12 @@
       originalRenderControls();
       const p=S.data?.projection;if(!p)return;
       const panel=$('#controls');if(!panel)return;
+      const extrusionInput=panel.querySelector('input[data-param="extrusion"]');
+      if(extrusionInput){
+        extrusionInput.max='120';
+        const local=S.params.get(S.view)||{};
+        if(local.extrusion!==undefined) extrusionInput.value=String(local.extrusion);
+      }
       const heading=panel.querySelector('h2');
       const row=document.createElement('div');
       row.className='preset-row sp-fx-mode';
