@@ -16,6 +16,10 @@ def _decode_pointer_token(token: str) -> str:
     return token.replace("~1", "/").replace("~0", "~")
 
 
+def _encode_pointer_token(token: str) -> str:
+    return token.replace("~", "~0").replace("/", "~1")
+
+
 def resolve_pointer(data: Any, pointer: str) -> Any:
     if pointer in ("", "/"):
         return data
@@ -95,6 +99,12 @@ def _explicit_status(value: Any, document: Any) -> str | None:
     return None
 
 
+def _child_count(value: Any) -> int:
+    if isinstance(value, (list, dict)):
+        return len(value)
+    return 0
+
+
 def _binding_value(snapshot: Any, binding: dict[str, Any], cache: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
     source_path = binding["source_path"]
     pointer = binding.get("pointer", "")
@@ -108,6 +118,47 @@ def _binding_value(snapshot: Any, binding: dict[str, Any], cache: dict[str, Any]
     return value, provenance
 
 
+def binding_children(snapshot: Any, source_path: str, pointer: str) -> dict[str, Any]:
+    """Return only the direct structural children of an explicit JSON binding."""
+    cache: dict[str, Any] = {}
+    document = _read_json(snapshot, source_path, cache)
+    value = resolve_pointer(document, pointer)
+    source_status = document.get("status") if isinstance(document, dict) else None
+    base = "" if pointer in ("", "/") else pointer
+    children: list[dict[str, Any]] = []
+
+    if isinstance(value, list):
+        iterable = [(str(index), child) for index, child in enumerate(value)]
+    elif isinstance(value, dict):
+        iterable = list(value.items())
+    else:
+        iterable = []
+
+    for key, child in iterable:
+        child_pointer = f"{base}/{_encode_pointer_token(str(key))}" or "/"
+        children.append({
+            "key": str(key),
+            "title": _label(child, str(key)),
+            "summary": _summary(child),
+            "status": _explicit_status(child, document),
+            "child_count": _child_count(child),
+            "value": deepcopy(child) if not isinstance(child, (dict, list)) else None,
+            "provenance": {
+                "source_path": source_path,
+                "pointer": child_pointer,
+                "source_status": source_status,
+            },
+        })
+
+    return {
+        "source_path": source_path,
+        "pointer": pointer or "/",
+        "status": _explicit_status(value, document),
+        "child_count": len(children),
+        "children": children,
+    }
+
+
 def _materialize_collection(snapshot: Any, binding: dict[str, Any], cache: dict[str, Any], role: str) -> list[dict[str, Any]]:
     value, provenance = _binding_value(snapshot, binding, cache)
     document = _read_json(snapshot, provenance["source_path"], cache)
@@ -116,13 +167,16 @@ def _materialize_collection(snapshot: Any, binding: dict[str, Any], cache: dict[
     items: list[dict[str, Any]] = []
 
     if mode == "array":
-        if not isinstance(value, list): raise ViewRuleError(f"Expected array at {provenance}")
+        if not isinstance(value, list):
+            raise ViewRuleError(f"Expected array at {provenance}")
         iterable = list(enumerate(value))
     elif mode == "object_entries":
-        if not isinstance(value, dict): raise ViewRuleError(f"Expected object at {provenance}")
+        if not isinstance(value, dict):
+            raise ViewRuleError(f"Expected object at {provenance}")
         iterable = list(value.items())
     elif mode == "object_keys":
-        if not isinstance(value, dict): raise ViewRuleError(f"Expected object at {provenance}")
+        if not isinstance(value, dict):
+            raise ViewRuleError(f"Expected object at {provenance}")
         iterable = [(key, key) for key in value.keys()]
     elif mode == "value":
         iterable = [(binding.get("label", "value"), value)]
@@ -137,16 +191,20 @@ def _materialize_collection(snapshot: Any, binding: dict[str, Any], cache: dict[
         if mode == "array":
             item_pointer = ("" if item_pointer == "/" else item_pointer) + f"/{key}"
         elif mode in ("object_entries", "object_keys"):
-            escaped = str(key).replace("~", "~0").replace("/", "~1")
-            item_pointer = ("" if item_pointer == "/" else item_pointer) + f"/{escaped}"
+            item_pointer = ("" if item_pointer == "/" else item_pointer) + f"/{_encode_pointer_token(str(key))}"
         items.append({
             "role": role,
             "key": str(key),
             "title": _label(item, str(key)),
             "summary": _summary(item),
             "status": _explicit_status(item, document),
+            "child_count": _child_count(item),
             "value": deepcopy(item) if not isinstance(item, (dict, list)) else None,
-            "provenance": {"source_path": provenance["source_path"], "pointer": item_pointer or "/", "source_status": provenance.get("source_status")},
+            "provenance": {
+                "source_path": provenance["source_path"],
+                "pointer": item_pointer or "/",
+                "source_status": provenance.get("source_status"),
+            },
         })
     return items
 
@@ -162,22 +220,66 @@ def build_view_projection(snapshot: Any, ruleset_id: str) -> dict[str, Any]:
     sections: list[dict[str, Any]] = []
 
     for section in rules.get("sections", []):
-        projected = {"id": section["id"], "title": section.get("title", section["id"]), "subtitle": section.get("subtitle", ""), "template": section.get("template", "section"), "accent": section.get("accent", "primary"), "blocks": []}
+        projected = {
+            "id": section["id"],
+            "title": section.get("title", section["id"]),
+            "subtitle": section.get("subtitle", ""),
+            "template": section.get("template", "section"),
+            "accent": section.get("accent", "primary"),
+            "blocks": [],
+        }
         for block in section.get("blocks", []):
-            materialized = {"id": block["id"], "title": block.get("title", block["id"]), "template": block.get("template", "card_grid"), "accent": block.get("accent", section.get("accent", "primary")), "items": []}
+            materialized = {
+                "id": block["id"],
+                "title": block.get("title", block["id"]),
+                "template": block.get("template", "card_grid"),
+                "accent": block.get("accent", section.get("accent", "primary")),
+                "items": [],
+            }
             if "binding" in block:
-                materialized["items"] = _materialize_collection(snapshot, block["binding"], cache, block.get("item_role", "card"))
+                materialized["items"] = _materialize_collection(
+                    snapshot, block["binding"], cache, block.get("item_role", "card")
+                )
             for item in block.get("items", []):
                 if "binding" in item:
                     value, provenance = _binding_value(snapshot, item["binding"], cache)
                     document = _read_json(snapshot, provenance["source_path"], cache)
-                    materialized["items"].append({"role": item.get("role", "card"), "key": item["id"], "title": item.get("title") or _label(value, item["id"]), "summary": item.get("summary") or _summary(value), "status": _explicit_status(value, document), "value": deepcopy(value) if not isinstance(value, (dict, list)) else None, "provenance": provenance})
+                    materialized["items"].append({
+                        "role": item.get("role", "card"),
+                        "key": item["id"],
+                        "title": item.get("title") or _label(value, item["id"]),
+                        "summary": item.get("summary") or _summary(value),
+                        "status": _explicit_status(value, document),
+                        "child_count": _child_count(value),
+                        "value": deepcopy(value) if not isinstance(value, (dict, list)) else None,
+                        "provenance": provenance,
+                    })
                 else:
-                    materialized["items"].append({"role": item.get("role", "card"), "key": item["id"], "title": item.get("title", item["id"]), "summary": item.get("summary", ""), "status": item.get("status"), "value": item.get("value"), "provenance": item.get("provenance")})
+                    materialized["items"].append({
+                        "role": item.get("role", "card"),
+                        "key": item["id"],
+                        "title": item.get("title", item["id"]),
+                        "summary": item.get("summary", ""),
+                        "status": item.get("status"),
+                        "child_count": item.get("child_count", 0),
+                        "value": item.get("value"),
+                        "provenance": item.get("provenance"),
+                    })
             materialized["status"] = _uniform_status(materialized["items"])
             projected["blocks"].append(materialized)
         block_statuses = [{"status": block.get("status")} for block in projected["blocks"] if block.get("status")]
         projected["status"] = _uniform_status(block_statuses)
         sections.append(projected)
 
-    return {"id": rules["id"], "name": rules.get("name", rules["id"]), "version": rules.get("version"), "status": rules.get("status"), "title": rules.get("title", rules.get("name", rules["id"])), "subtitle": rules.get("subtitle", ""), "render_ruleset": rules.get("render_ruleset", "render.aigmos_master_map"), "source_revision": snapshot.revision, "sections": sections, "hard_gates": rules.get("hard_gates", [])}
+    return {
+        "id": rules["id"],
+        "name": rules.get("name", rules["id"]),
+        "version": rules.get("version"),
+        "status": rules.get("status"),
+        "title": rules.get("title", rules.get("name", rules["id"])),
+        "subtitle": rules.get("subtitle", ""),
+        "render_ruleset": rules.get("render_ruleset", "render.aigmos_master_map"),
+        "source_revision": snapshot.revision,
+        "sections": sections,
+        "hard_gates": rules.get("hard_gates", []),
+    }
