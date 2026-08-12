@@ -1,0 +1,10 @@
+{
+  "id": "3d.camera.perspective",
+  "type": "structureprojector_3d_effect",
+  "group": "camera",
+  "version": 1,
+  "controls": [
+    {"id": "perspective", "label": "Perspective", "type": "range", "min": 500, "max": 2200, "step": 50, "default": 1100}
+  ],
+  "style_targets": {"perspective": "perspective"}
+}
