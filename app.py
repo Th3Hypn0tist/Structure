@@ -5,15 +5,16 @@ import os
 import urllib.parse
 from http.server import ThreadingHTTPServer
 
-from canonical_graph import build_graph
 from canonical_projections import PROJECTIONS as CORE_PROJECTIONS, build_canonical_projection
 from canonical_projections_extra3d import PROJECTIONS as EXTRA_PROJECTIONS, build_projection as build_extra_projection
 from dependency_flow_projection import build_dependency_flow_3d
-from effects3d import apply_effects, controls as effect_controls, defaults as effect_defaults, manifest as effect_manifest, presets as effect_presets
+from input_modules.canonical import read as read_canonical
+from input_modules.raw_json import read as read_raw_json
 from nanocms import projection, resolve_page, resolve_view
-from raw_json_mapper import build_raw_json_graph
 from raw_json_projection import build_raw_json_space_3d
+from scene_contract import projection_to_scene, validate_scene
 from source_adapter import list_branches, load_snapshot
+from structure_tree import tree_to_graph
 from structureprojector import (
     APP_HOST,
     APP_PORT,
@@ -25,8 +26,6 @@ from view_rules import MAX_BINDING_DEPTH, ViewRuleError, binding_children, bindi
 
 BASE_DIR = os.path.dirname(__file__)
 INDEX_HTML = os.path.join(BASE_DIR, 'static', 'index_v12.html')
-FX_CSS = os.path.join(BASE_DIR, 'static', 'fx_v13.css')
-FX_JS = os.path.join(BASE_DIR, 'static', 'fx_v13.js')
 
 ALL_CANONICAL_PROJECTIONS = {
     **{k: v for k, v in CORE_PROJECTIONS.items() if v.get('dimension') == '3d'},
@@ -36,17 +35,10 @@ ALL_CANONICAL_PROJECTIONS = {
 
 def _index_payload() -> bytes:
     with open(INDEX_HTML, 'r', encoding='utf-8') as handle:
-        html = handle.read()
-    with open(FX_CSS, 'r', encoding='utf-8') as handle:
-        css = handle.read()
-    with open(FX_JS, 'r', encoding='utf-8') as handle:
-        js = handle.read()
-    html = html.replace('</head>', f'<style id="sp-fx-v13">{css}</style></head>')
-    html = html.replace('</body>', f'<script id="sp-fx-v13-script">{js}</script></body>')
-    return html.encode('utf-8')
+        return handle.read().encode('utf-8')
 
 
-def _build_canonical_3d(graph: dict, projection_id: str) -> dict:
+def _build_canonical_projection(graph: dict, projection_id: str) -> dict:
     if projection_id == 'dependency_flow_3d':
         return build_dependency_flow_3d(graph)
     if projection_id in EXTRA_PROJECTIONS:
@@ -54,26 +46,37 @@ def _build_canonical_3d(graph: dict, projection_id: str) -> dict:
     return build_canonical_projection(graph, projection_id)
 
 
-def _apply_universal_effects(base_projection: dict, supplied_params: dict[str, object], result: dict) -> None:
-    try:
-        result['projection'] = apply_effects(base_projection, supplied_params)
-    except Exception as exc:
-        # Effects are presentation-only. A library/control failure must never
-        # invalidate a proven graph or base 3D projection.
-        result['projection'] = base_projection
-        result['projection']['control_schema'] = effect_controls()
-        result['projection']['control_schema_version'] = 1
-        result['projection']['control_values'] = effect_defaults()
-        result['projection']['builtin_presets'] = effect_presets()
-        result['projection']['effect_library'] = effect_manifest()
+def _result_from_tree(tree: dict, ruleset: str) -> dict:
+    tree_validation = list(tree.get('validation_errors', []))
+    errors = list(tree.get('errors', [])) + tree_validation
+    return {
+        'valid': bool(tree.get('valid')),
+        'projectable': bool(tree.get('projectable')),
+        'ruleset': ruleset,
+        'source': tree.get('source', {}),
+        'structure_tree': tree,
+        'graph': tree_to_graph(tree),  # temporary projection compatibility adapter
+        'errors': errors,
+        'warnings': list(tree.get('warnings', [])),
+    }
+
+
+def _attach_scene(result: dict, base_projection: dict) -> None:
+    result['projection'] = base_projection
+    scene = projection_to_scene(base_projection, result['structure_tree'])
+    result['scene'] = scene
+    scene_errors = validate_scene(scene)
+    if scene_errors:
+        result.setdefault('errors', []).extend(scene_errors)
+        result['valid'] = False
         result.setdefault('warnings', []).append({
-            'id': 'SP_3D_EFFECT_LIBRARY_FALLBACK',
-            'message': f'Universal 3D effect library failed; base projection rendered without effect transforms: {exc}',
+            'id': 'SP_SCENE_INVALID',
+            'message': 'Projection produced a Scene that does not satisfy Scene Contract v1.',
         })
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.16.0'
+    server_version = 'StructureProjector/0.17.0'
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
@@ -85,10 +88,6 @@ class Handler(BaseHandler):
                 self.send_header('Content-Length', str(len(payload)))
                 self.end_headers()
                 self.wfile.write(payload)
-                return
-
-            if parsed.path == '/api/effects/3d':
-                self._json(200, effect_manifest())
                 return
 
             if parsed.path == '/api/nanocms':
@@ -148,7 +147,9 @@ class Handler(BaseHandler):
                 view_id = qs.get('view', [None])[0]
                 selected_path = qs.get('path', [None])[0]
                 context_id = qs.get('context', [None])[0]
-                supplied_params: dict[str, object] = {}
+
+                # params remains accepted for forward-compatible projection state,
+                # but no effect/style transform is applied at this layer.
                 raw_params = qs.get('params', [''])[0]
                 if raw_params:
                     try:
@@ -165,7 +166,6 @@ class Handler(BaseHandler):
                             'errors': [{'id': 'SP_PARAMS_INVALID', 'message': 'params must be a JSON object'}],
                         })
                         return
-                    supplied_params = decoded
 
                 try:
                     page = resolve_page(page_id)
@@ -177,34 +177,26 @@ class Handler(BaseHandler):
                     })
                     return
 
-                if placement.get('renderer') != 'canonical_projection_3d':
-                    self._json(500, {
-                        'valid': False,
-                        'errors': [{'id': 'SP_3D_ONLY_VIOLATION', 'message': f'Active placement is not 3D: {placement.get("id")}'}],
-                    })
-                    return
-
                 snapshot = load_snapshot(branch)
                 ruleset = placement['ruleset']
 
                 if ruleset == 'CanonicalContract':
-                    result = build_graph(snapshot)
-                    result['ruleset'] = 'CanonicalContract'
+                    tree = read_canonical(snapshot)
+                    result = _result_from_tree(tree, 'CanonicalContract')
                     if result.get('projectable') and placement.get('projection_id'):
-                        projection_id = placement['projection_id']
-                        base_projection = _build_canonical_3d(result['graph'], projection_id)
-                        _apply_universal_effects(base_projection, supplied_params, result)
+                        base_projection = _build_canonical_projection(result['graph'], placement['projection_id'])
+                        _attach_scene(result, base_projection)
                     if result.get('projectable') and not result.get('valid'):
                         result.setdefault('warnings', []).append({
                             'id': 'SP_CANONICAL_DEGRADED',
-                            'message': 'Canonical graph contains explicit projectable structure, but one or more validation gates failed. Projection is read-only and errors remain visible.',
+                            'message': 'Canonical input contains explicit projectable structure, but validation errors remain visible.',
                         })
                 elif ruleset == 'RawJSON':
-                    result = build_raw_json_graph(snapshot, selected_path)
-                    result['ruleset'] = 'RawJSON'
-                    if result.get('valid'):
+                    tree = read_raw_json(snapshot, {'path': selected_path})
+                    result = _result_from_tree(tree, 'RawJSON')
+                    if result.get('projectable'):
                         base_projection = build_raw_json_space_3d(result['graph'])
-                        _apply_universal_effects(base_projection, supplied_params, result)
+                        _attach_scene(result, base_projection)
                 else:
                     self._json(500, {
                         'valid': False,
@@ -220,26 +212,24 @@ class Handler(BaseHandler):
                 return
 
             if parsed.path == '/api/health':
-                manifest = effect_manifest()
                 self._json(200, {
                     'ok': True,
                     'service': 'StructureProjector',
-                    'version': '0.16.0',
+                    'version': '0.17.0',
                     'view_shell': 'nanoCMS',
-                    'projection_policy': '3d_only',
+                    'input_contract': 'StructureTree/1.0',
+                    'scene_contract': 'Scene/1.0',
+                    'input_modules': ['canonical', 'raw_json'],
                     'rulesets': ['CanonicalContract', 'RawJSON'],
                     'canonical_contract_format': 'bootstrap-driven',
+                    'active_projection_family': '3d',
+                    'projection_architecture': 'dimension-neutral StructureTree -> projection -> Scene',
                     'canonical_projections': ALL_CANONICAL_PROJECTIONS,
                     'raw_json_projection': 'raw_json_space_3d',
-                    'effect_library': {
-                        'root': manifest.get('root'),
-                        'version': manifest.get('version'),
-                        'effect_count': len(manifest.get('effects', [])),
-                        'groups': [g.get('id') for g in manifest.get('groups', [])],
-                        'applies_to': 'all 3D projections from every mapper',
-                    },
+                    'effects': 'disabled',
+                    'primitive_registry': 'primitives/registry.json',
                     'canonical_projection_policy': 'project proven explicit structure even when validation is degraded',
-                    'renderers': ['canonical_projection_3d+universal_effect_library'],
+                    'renderers': ['baseline_web_renderer'],
                     'default_recursion_depth': 1,
                     'max_recursion_depth': MAX_BINDING_DEPTH,
                     'source_adapter': 'cached immutable commit snapshots',
@@ -257,11 +247,11 @@ class Handler(BaseHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer((APP_HOST, APP_PORT), Handler)
-    print(f'StructureProjector 0.16.0: http://{APP_HOST}:{APP_PORT}')
+    print(f'StructureProjector 0.17.0: http://{APP_HOST}:{APP_PORT}')
     print(f'Source: {SOURCE_REPO}')
-    print('Projection policy: 3D only')
-    print('3D effects: universal effects/3d library shared by Canonical, Raw JSON and future mappers')
-    print('Effect groups: ' + ', '.join(sorted(effect_presets())))
+    print('Input: Canonical/RawJSON -> StructureTree')
+    print('Projection: StructureTree -> Scene')
+    print('Effects: disabled until Scene/primitive baseline is locked')
     try:
         server.serve_forever()
     except KeyboardInterrupt:
