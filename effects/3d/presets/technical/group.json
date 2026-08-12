@@ -1,0 +1,19 @@
+{
+  "id": "technical",
+  "title": "Technical",
+  "type": "structureprojector_3d_effect_group",
+  "effects": [
+    "3d.core.scale",
+    "3d.geometry.extrusion",
+    "3d.material.emissive",
+    "3d.edges.emissive",
+    "3d.camera.perspective"
+  ],
+  "values": {
+    "glow": 0.3,
+    "extrusion": 40,
+    "edge_glow": 0.18,
+    "edge_opacity": 0.28,
+    "perspective": 1250
+  }
+}
