@@ -5,6 +5,8 @@
 const SP_originalBuildAtlas = Renderer.prototype.buildAtlas;
 const SP_originalBuild = Renderer.prototype.build;
 const SP_originalRenderInstances = renderInstances;
+const SP_originalLoadScene = loadScene;
+let SP_defaultRootsApplied = false;
 
 function spNodeRecord(key) {
   const split = key.lastIndexOf('::');
@@ -111,7 +113,7 @@ Renderer.prototype.buildAtlas = function(records) {
 
 Renderer.prototype.build = function(scene) {
   SP_originalBuild.call(this, scene);
-  // Expand the title surface and white label plane over most of the box face.
+  // Expand the colored title surface and white card plane over most of the face.
   for (const item of this.strips || []) item.matrix = m4mul(item.matrix, m4scale(1, 2.35, 1));
   for (const item of this.labels || []) item.matrix = m4mul(item.matrix, m4scale(1, 2.35, 1));
   this.upload();
@@ -124,4 +126,26 @@ renderInstances = function() {
       label.textContent = 'Relation depth outward (0–32)';
     }
   });
+};
+
+function spApplyPrimaryDefaults() {
+  if (SP_defaultRootsApplied || !S.catalog) return;
+  const available = new Set((S.catalog.topics || []).map(x => x.id));
+  const roots = ['IAM', 'AccessCore', 'DWH'].filter(root => available.has(root));
+  if (!roots.length) return;
+  const style = (S.catalog.styles || []).find(x => x.id === 'atlas_2d')?.id || S.catalog.styles?.[0]?.id || 'atlas_2d';
+  S.instances = roots.map((root, index) => ({
+    id: `p${index + 1}`,
+    name: root,
+    projection_style: style,
+    root_topic: root,
+    dependency_depth: 1,
+  }));
+  S.nextId = roots.length + 1;
+  SP_defaultRootsApplied = true;
+}
+
+loadScene = async function() {
+  spApplyPrimaryDefaults();
+  return SP_originalLoadScene();
 };
