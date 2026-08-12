@@ -6,9 +6,16 @@ import urllib.parse
 from http.server import ThreadingHTTPServer
 
 from canonical_graph import build_graph
-from canonical_projections import PROJECTIONS, build_canonical_projection
+from canonical_projections import PROJECTIONS as CORE_PROJECTIONS, build_canonical_projection
+from canonical_projections_extra3d import PROJECTIONS as EXTRA_PROJECTIONS, build_projection as build_extra_projection
 from nanocms import projection, resolve_page, resolve_view
 from projection_controls import apply_controls, defaults_for, schema_for
+from projection_controls_extra3d import (
+    apply_controls as apply_extra_controls,
+    defaults_for as extra_defaults_for,
+    schema_for as extra_schema_for,
+    supports as supports_extra_controls,
+)
 from raw_json_mapper import build_raw_json_graph
 from raw_json_projection import build_raw_json_space_3d
 from source_adapter import list_branches, load_snapshot
@@ -26,6 +33,11 @@ INDEX_HTML = os.path.join(BASE_DIR, 'static', 'index_v12.html')
 FX_CSS = os.path.join(BASE_DIR, 'static', 'fx_v13.css')
 FX_JS = os.path.join(BASE_DIR, 'static', 'fx_v13.js')
 
+ALL_CANONICAL_PROJECTIONS = {
+    **{k: v for k, v in CORE_PROJECTIONS.items() if v.get('dimension') == '3d'},
+    **EXTRA_PROJECTIONS,
+}
+
 
 def _index_payload() -> bytes:
     with open(INDEX_HTML, 'r', encoding='utf-8') as handle:
@@ -39,15 +51,29 @@ def _index_payload() -> bytes:
     return html.encode('utf-8')
 
 
+def _build_canonical_3d(graph: dict, projection_id: str) -> dict:
+    if projection_id in EXTRA_PROJECTIONS:
+        return build_extra_projection(graph, projection_id)
+    return build_canonical_projection(graph, projection_id)
+
+
 def _apply_projection_controls(base_projection: dict, projection_id: str, supplied_params: dict[str, object], result: dict) -> None:
     try:
-        result['projection'] = apply_controls(base_projection, supplied_params)
+        if supports_extra_controls(projection_id):
+            result['projection'] = apply_extra_controls(base_projection, supplied_params)
+        else:
+            result['projection'] = apply_controls(base_projection, supplied_params)
     except Exception as exc:
         result['projection'] = base_projection
-        schema = schema_for(projection_id)
+        if supports_extra_controls(projection_id):
+            schema = extra_schema_for(projection_id)
+            defaults = extra_defaults_for(projection_id)
+        else:
+            schema = schema_for(projection_id)
+            defaults = defaults_for(projection_id)
         result['projection']['control_schema'] = schema.get('controls', [])
         result['projection']['control_schema_version'] = schema.get('version', 1)
-        result['projection']['control_values'] = defaults_for(projection_id)
+        result['projection']['control_values'] = defaults
         result['projection']['builtin_presets'] = schema.get('presets', {})
         result.setdefault('warnings', []).append({
             'id': 'SP_PROJECTION_CONTROLS_FALLBACK',
@@ -56,7 +82,7 @@ def _apply_projection_controls(base_projection: dict, projection_id: str, suppli
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.14.0'
+    server_version = 'StructureProjector/0.15.0'
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
@@ -171,7 +197,7 @@ class Handler(BaseHandler):
                     result['ruleset'] = 'CanonicalContract'
                     if result.get('projectable') and placement.get('projection_id'):
                         projection_id = placement['projection_id']
-                        base_projection = build_canonical_projection(result['graph'], projection_id)
+                        base_projection = _build_canonical_3d(result['graph'], projection_id)
                         _apply_projection_controls(base_projection, projection_id, supplied_params, result)
                     if result.get('projectable') and not result.get('valid'):
                         result.setdefault('warnings', []).append({
@@ -203,12 +229,12 @@ class Handler(BaseHandler):
                 self._json(200, {
                     'ok': True,
                     'service': 'StructureProjector',
-                    'version': '0.14.0',
+                    'version': '0.15.0',
                     'view_shell': 'nanoCMS',
                     'projection_policy': '3d_only',
                     'rulesets': ['CanonicalContract', 'RawJSON'],
                     'canonical_contract_format': 'bootstrap-driven',
-                    'canonical_projections': {k: v for k, v in PROJECTIONS.items() if v.get('dimension') == '3d'},
+                    'canonical_projections': ALL_CANONICAL_PROJECTIONS,
                     'raw_json_projection': 'raw_json_space_3d',
                     'projection_controls': 'presentation-only fail-soft controls + local browser presets',
                     'canonical_projection_policy': 'project proven explicit structure even when validation is degraded',
@@ -231,10 +257,10 @@ class Handler(BaseHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer((APP_HOST, APP_PORT), Handler)
-    print(f'StructureProjector 0.14.0: http://{APP_HOST}:{APP_PORT}')
+    print(f'StructureProjector 0.15.0: http://{APP_HOST}:{APP_PORT}')
     print(f'Source: {SOURCE_REPO}')
     print('Projection policy: 3D only')
-    print('Canonical: Galaxy, Role Layers, Dependency Tower, Authority Space, Relation Orbits')
+    print('Canonical projections: Atlas, Relation Web, Matrix, Lifecycle, Dependency Flow, Galaxy, Role Layers, Dependency Tower, Authority Space, Relation Orbits')
     print('Raw JSON: JSON Space')
     print('3D FX: extrusion + emissive glow + edge glow, presentation-only')
     try:
