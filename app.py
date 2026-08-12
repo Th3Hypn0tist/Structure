@@ -18,13 +18,13 @@ from structureprojector import (
     list_branches,
     load_snapshot,
 )
-from view_rules import ViewRuleError, build_view_projection
+from view_rules import ViewRuleError, binding_children, build_view_projection
 
 INDEX_HTML = os.path.join(os.path.dirname(__file__), 'static', 'index_v08.html')
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.8.1'
+    server_version = 'StructureProjector/0.8.2'
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
@@ -51,6 +51,25 @@ class Handler(BaseHandler):
 
             if parsed.path == '/api/branches':
                 self._json(200, {'repository': SOURCE_REPO, 'branches': list_branches()})
+                return
+
+            if parsed.path == '/api/binding-children':
+                qs = urllib.parse.parse_qs(parsed.query)
+                branch = qs.get('branch', ['main'])[0]
+                source_path = qs.get('source_path', [None])[0]
+                pointer = qs.get('pointer', ['/'])[0]
+                if not source_path:
+                    self._json(400, {'valid': False, 'errors': [{'id': 'SP_BINDING_SOURCE_REQUIRED', 'message': 'source_path is required'}]})
+                    return
+                snapshot = load_snapshot(branch)
+                result = binding_children(snapshot, source_path, pointer)
+                result['valid'] = True
+                result['source'] = {
+                    'repository': snapshot.repo,
+                    'branch': snapshot.branch,
+                    'revision': snapshot.revision,
+                }
+                self._json(200, result)
                 return
 
             if parsed.path == '/api/project':
@@ -112,12 +131,13 @@ class Handler(BaseHandler):
                 self._json(200, {
                     'ok': True,
                     'service': 'StructureProjector',
-                    'version': '0.8.1',
+                    'version': '0.8.2',
                     'view_shell': 'nanoCMS',
                     'rulesets': ['ExplicitJSONView', 'CanonicalContract', 'RawJSON'],
                     'render_rulesets': ['render.aigmos_master_map'],
                     'renderers': ['svg_view_rules', 'svg', 'svg_master_map', 'javascript_3d'],
                     'viewport': 'cursor_anchored_wheel_zoom + hierarchical_focus_navigation',
+                    'binding_navigation': 'direct JSON children by source_path + JSON Pointer',
                 })
                 return
 
@@ -132,7 +152,7 @@ class Handler(BaseHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer((APP_HOST, APP_PORT), Handler)
-    print(f'StructureProjector 0.8.1: http://{APP_HOST}:{APP_PORT}')
+    print(f'StructureProjector 0.8.2: http://{APP_HOST}:{APP_PORT}')
     print(f'Source: {SOURCE_REPO}')
     print('View shell: nanoCMS')
     print('Navigation: click focus + exact Up restore + cursor-anchored wheel zoom')
