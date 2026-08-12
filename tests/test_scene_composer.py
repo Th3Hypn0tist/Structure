@@ -34,7 +34,7 @@ def _projection(pid, nodes):
         "id": pid,
         "title": pid,
         "nodes": [
-            {"id": node_id, "name": node_id, "x": i * 100, "y": 0, "z": 0}
+            {"id": node_id, "name": node_id, "x": i * 100, "y": 0, "z": 0, "width": 160, "height": 64, "depth": 40}
             for i, node_id in enumerate(nodes)
         ],
         "edges": [],
@@ -42,11 +42,20 @@ def _projection(pid, nodes):
     }
 
 
-def test_projection_is_one_scene_object_with_nodes():
+def test_projection_is_one_scene_object_with_primitive_instances():
     scene = compose_scene([_projection("one", ["A", "B"])], _tree())
+    assert scene["version"] == "1.1"
     assert len(scene["objects"]) == 1
-    assert scene["objects"][0]["id"] == "projection:one"
-    assert {n["id"] for n in scene["objects"][0]["nodes"]} == {"A", "B"}
+    obj = scene["objects"][0]
+    assert obj["id"] == "projection:one"
+    assert {n["id"] for n in obj["nodes"]} == {"A", "B"}
+    for node in obj["nodes"]:
+        assert node["primitive_ref"] == "box"
+        assert node["geometry_parameters"] == {"width": 160, "height": 64, "depth": 40}
+        assert "primitive" not in node
+        assert "geometry" not in node
+    assert scene["composition"]["node_instance_count"] == 2
+    assert scene["composition"]["primitive_instances"] is True
     assert validate_scene(scene) == []
 
 
@@ -60,6 +69,8 @@ def test_explicit_link_can_cross_projection_objects():
     connection = cross[0]
     assert connection["channel"] == "dependencies"
     assert connection["type"] == "depends_on"
+    assert connection["primitive_ref"] == "line"
+    assert "primitive" not in connection
     assert connection["from"] == {"object": "projection:left", "node": "A", "anchor": "center"}
     assert connection["to"] == {"object": "projection:right", "node": "B", "anchor": "center"}
     assert connection["provenance"] == {"path": "contract.json"}
