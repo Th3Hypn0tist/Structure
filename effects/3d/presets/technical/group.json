@@ -7,13 +7,19 @@
     "3d.geometry.extrusion",
     "3d.material.emissive",
     "3d.edges.emissive",
-    "3d.camera.perspective"
+    "3d.camera.perspective",
+    "3d.environment.scene",
+    "3d.lighting.depth"
   ],
   "values": {
     "glow": 0.3,
     "extrusion": 40,
     "edge_glow": 0.18,
     "edge_opacity": 0.28,
-    "perspective": 1250
+    "perspective": 1250,
+    "scene_glow": 0.28,
+    "vignette": 0.58,
+    "depth_shadow": 0.65,
+    "face_contrast": 0.82
   }
 }
