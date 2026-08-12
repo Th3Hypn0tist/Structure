@@ -25,7 +25,7 @@ INDEX_HTML = os.path.join(os.path.dirname(__file__), 'static', 'index_v12.html')
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.12.1'
+    server_version = 'StructureProjector/0.12.3'
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
@@ -132,15 +132,12 @@ class Handler(BaseHandler):
                 if ruleset == 'CanonicalContract':
                     result = build_graph(snapshot)
                     result['ruleset'] = 'CanonicalContract'
-                    if result['valid'] and placement.get('projection_id'):
+                    if result.get('projectable') and placement.get('projection_id'):
                         projection_id = placement['projection_id']
                         base_projection = build_canonical_projection(result['graph'], projection_id)
                         try:
                             result['projection'] = apply_controls(base_projection, supplied_params)
                         except Exception as exc:
-                            # Projection parameters are presentation state only.
-                            # A control/layout failure MUST NOT invalidate a proven
-                            # canonical source graph.
                             result['projection'] = base_projection
                             schema = schema_for(projection_id)
                             result['projection']['control_schema'] = schema.get('controls', [])
@@ -151,6 +148,11 @@ class Handler(BaseHandler):
                                 'id': 'SP_PROJECTION_CONTROLS_FALLBACK',
                                 'message': f'Projection controls failed; canonical projection rendered with base geometry: {exc}',
                             })
+                    if result.get('projectable') and not result.get('valid'):
+                        result.setdefault('warnings', []).append({
+                            'id': 'SP_CANONICAL_DEGRADED',
+                            'message': 'Canonical graph contains explicit projectable structure, but one or more validation gates failed. Projection is read-only and errors remain visible.',
+                        })
                 elif ruleset == 'RawJSON':
                     result = build_raw_json_graph(snapshot, selected_path)
                     if result['valid'] and placement.get('renderer') == 'svg_master_map':
@@ -167,19 +169,21 @@ class Handler(BaseHandler):
                 result['page'] = page
                 result['placement'] = placement
                 result['context'] = context_id
-                self._json(200 if result['valid'] else 422, result)
+                usable = bool(result.get('valid')) or bool(result.get('projectable'))
+                self._json(200 if usable else 422, result)
                 return
 
             if parsed.path == '/api/health':
                 self._json(200, {
                     'ok': True,
                     'service': 'StructureProjector',
-                    'version': '0.12.1',
+                    'version': '0.12.3',
                     'view_shell': 'nanoCMS',
                     'rulesets': ['CanonicalContract', 'RawJSON'],
                     'canonical_contract_format': 'bootstrap-driven',
                     'canonical_projections': PROJECTIONS,
                     'projection_controls': 'presentation-only fail-soft controls + local browser presets',
+                    'canonical_projection_policy': 'project proven explicit structure even when validation is degraded',
                     'renderers': ['canonical_projection_2d', 'canonical_projection_3d', 'svg', 'svg_master_map'],
                     'viewport': 'cursor_anchored_wheel_zoom + drag_pan',
                     'default_recursion_depth': 1,
@@ -199,9 +203,10 @@ class Handler(BaseHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer((APP_HOST, APP_PORT), Handler)
-    print(f'StructureProjector 0.12.1: http://{APP_HOST}:{APP_PORT}')
+    print(f'StructureProjector 0.12.3: http://{APP_HOST}:{APP_PORT}')
     print(f'Source: {SOURCE_REPO}')
     print('Canonical projections: 5 x 2D + 5 x 3D')
+    print('Canonical degraded mode: proven explicit graph remains projectable')
     print('Projection controls: presentation-only; failures cannot invalidate canonical source')
     print('Viewport: cursor-anchored wheel zoom + drag pan')
     try:
