@@ -1,0 +1,88 @@
+{
+  "name": "StructureProjector AIGMos Spatial Dependency Preset",
+  "type": "structureprojector_visual_projection_preset",
+  "version": "1.0.0",
+  "status": "locked",
+  "source_profile": "AIGMos",
+  "projection": {
+    "forward_depth": 2,
+    "active_root_required": true,
+    "relation_dimensions": [
+      {"id": "containment", "enabled": true, "intensity": 1.0, "style": "solid"},
+      {"id": "dependency", "enabled": true, "intensity": 1.0, "style": "dashed"},
+      {"id": "composition", "enabled": true, "intensity": 0.8, "style": "solid"},
+      {"id": "authority", "enabled": true, "intensity": 0.8, "style": "authority"},
+      {"id": "reference", "enabled": false, "intensity": 0.6, "style": "dotted"},
+      {"id": "flow", "enabled": false, "intensity": 0.5, "style": "animated"}
+    ]
+  },
+  "camera": {
+    "type": "perspective",
+    "fov_degrees": 40,
+    "default_elevation_degrees": 25,
+    "default_yaw_degrees": 22,
+    "enter_relation_dimension_turn_degrees": 90,
+    "auto_fit": true,
+    "restore_parent_camera_exactly": true,
+    "transition_ms": 520
+  },
+  "world": {"background": "#020304", "fog": "optional_subtle_black", "ground_plane": "optional_near_black"},
+  "palette": {"black": "#020304", "white": "#F8FAFF", "blue": "#087CFF", "red": "#FF176B", "silver": "#AAB2C2", "gold": "#FFD83D"},
+  "semantic_color_rules": {
+    "primary_locked": "blue",
+    "authority_locked": "red",
+    "neutral_locked": "silver",
+    "external_locked": "silver",
+    "incomplete": "gold",
+    "open": "gold",
+    "unresolved": "gold",
+    "locked_gold": "hard_fail"
+  },
+  "node": {
+    "primitive": "rounded_box",
+    "base_fill": "#020304",
+    "semantic_accent_channels": ["outline", "emissive_edge", "subtle_tint"],
+    "root_scale": 1.28,
+    "depth1_scale": 1.0,
+    "depth2_scale": 0.84,
+    "use_saturated_full_fill": false
+  },
+  "edges": {
+    "containment": {"style": "solid", "default_role": "primary"},
+    "dependency": {"style": "dashed", "default_role": "neutral", "opacity": 0.7},
+    "reference": {"style": "dotted", "default_role": "neutral", "opacity": 0.5},
+    "authority": {"style": "authority", "default_role": "authority"},
+    "flow": {"style": "animated_directional", "default_role": "source_semantic_role"}
+  },
+  "ui": {
+    "left_panel_width_px": [240, 280],
+    "right_inspector_width_px": [300, 360],
+    "relation_dimension_controls": true,
+    "up_one_leaf_control": true,
+    "inspector_position": "right",
+    "viewport_card_wrapper": false
+  },
+  "lighting": {
+    "ambient": "low_neutral",
+    "key": "soft_neutral_upper_front",
+    "rim": "very_low_neutral",
+    "colored_scene_lights_for_semantics": false,
+    "bloom": "subtle_semantic_edges_only"
+  },
+  "navigation": {
+    "node_click": ["select", "inspect", "reroot"],
+    "new_frame_direction": "away_from_current_camera",
+    "child_local_coordinates": "stable_normal_local_frame",
+    "up": "restore_stored_parent_frame_and_camera",
+    "recompute_parent_on_up": false
+  },
+  "hard_gates": [
+    "locked semantic object uses gold",
+    "external locked object uses gold",
+    "camera transform mutates local geometry",
+    "up navigation recomputes parent frame",
+    "renderer invents semantic relation",
+    "SVG and WebGL resolve different semantic colors",
+    "extrusion reverse-engineers SVG instead of scene geometry"
+  ]
+}
