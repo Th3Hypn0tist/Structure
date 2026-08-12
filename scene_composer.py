@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from primitive_registry import resolve_primitive
 from scene_contract import new_scene, projection_connections, projection_to_object, validate_scene
 
 
@@ -33,8 +34,8 @@ def compose_scene(
     """
     transforms = transforms or {}
     scene = new_scene(source_tree=source_tree)
-    projection_by_object: dict[str, dict[str, Any]] = {}
     nodes_by_object: dict[str, set[str]] = {}
+    connection_primitive_ref, _definition = resolve_primitive(connection_primitive, connection=True)
 
     for index, projection in enumerate(projections):
         projection_id = str(projection.get("id") or f"projection-{index}")
@@ -48,7 +49,6 @@ def compose_scene(
             primitive=primitive,
         )
         scene["objects"].append(obj)
-        projection_by_object[object_id] = projection
         nodes_by_object[object_id] = {str(node.get("id")) for node in obj.get("nodes", [])}
 
         if include_internal_connections:
@@ -56,7 +56,7 @@ def compose_scene(
                 projection,
                 source_tree,
                 object_id=object_id,
-                connection_primitive=connection_primitive,
+                connection_primitive=connection_primitive_ref,
             ))
 
     if include_cross_projection_connections:
@@ -81,7 +81,7 @@ def compose_scene(
                         "source_ref": link.get("id"),
                         "from": {"object": source_object, "node": source_id, "anchor": "center"},
                         "to": {"object": target_object, "node": target_id, "anchor": "center"},
-                        "primitive": connection_primitive,
+                        "primitive_ref": connection_primitive_ref,
                         "style_ref": channel,
                         "style": {},
                         "provenance": deepcopy(link.get("provenance", {})),
@@ -93,6 +93,8 @@ def compose_scene(
 
     scene["composition"] = {
         "projection_count": len(scene["objects"]),
+        "node_instance_count": sum(len(obj.get("nodes", [])) for obj in scene["objects"]),
+        "primitive_instances": True,
         "internal_connections": sum(1 for c in scene["connections"] if c.get("scope") == "projection"),
         "cross_projection_connections": sum(1 for c in scene["connections"] if c.get("scope") == "cross_projection"),
         "rule": "cross-projection connections originate only from explicit StructureTree links",
