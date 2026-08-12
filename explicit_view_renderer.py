@@ -15,8 +15,8 @@ def _item_height(template: str, item: dict[str, Any]) -> int:
 def build_explicit_view_geometry(view: dict[str, Any]) -> dict[str, Any]:
     """Build deterministic, navigable SVG geometry from a resolved view.
 
-    Occurrences are a projection hierarchy only. `parent_id` allows the browser
-    to focus/reroot the observation frame without changing source semantics.
+    Occurrences are projection-only. Status is carried through only when it is
+    explicit in the source/view projection; geometry never invents lifecycle state.
     """
     width = 3680
     margin = 44
@@ -73,6 +73,7 @@ def build_explicit_view_geometry(view: dict[str, Any]) -> dict[str, Any]:
                 "title": block.get("title", block["id"]),
                 "template": template,
                 "accent": block.get("accent", section.get("accent", "primary")),
+                "status": block.get("status"),
                 "x": margin + section_pad,
                 "y": block_y,
                 "width": inner_w,
@@ -94,6 +95,7 @@ def build_explicit_view_geometry(view: dict[str, Any]) -> dict[str, Any]:
                         "parent_id": block_id,
                         "title": item.get("title", ""),
                         "summary": item.get("summary", ""),
+                        "status": item.get("status"),
                         "value": item.get("value"),
                         "provenance": item.get("provenance"),
                         "x": item_x,
@@ -117,6 +119,7 @@ def build_explicit_view_geometry(view: dict[str, Any]) -> dict[str, Any]:
                             "parent_id": block_id,
                             "title": item.get("title", ""),
                             "summary": item.get("summary", ""),
+                            "status": item.get("status"),
                             "value": item.get("value"),
                             "provenance": item.get("provenance"),
                             "x": item_x,
@@ -138,6 +141,7 @@ def build_explicit_view_geometry(view: dict[str, Any]) -> dict[str, Any]:
             "subtitle": section.get("subtitle", ""),
             "template": section.get("template", "large_frame"),
             "accent": section.get("accent", "primary"),
+            "status": section.get("status"),
             "x": margin,
             "y": section_y,
             "width": usable_w,
@@ -152,6 +156,7 @@ def build_explicit_view_geometry(view: dict[str, Any]) -> dict[str, Any]:
         "view_id": view.get("id"),
         "title": view.get("title"),
         "subtitle": view.get("subtitle"),
+        "status": view.get("status"),
         "view_box": {"width": width, "height": max(900, y + 60)},
         "occurrences": occurrences,
         "navigation": {
