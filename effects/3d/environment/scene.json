@@ -1,0 +1,12 @@
+{
+  "id": "3d.environment.scene",
+  "type": "structureprojector_3d_effect",
+  "group": "environment",
+  "version": 1,
+  "controls": [
+    {"id": "scene_glow", "label": "Scene glow", "type": "range", "min": 0, "max": 1.5, "step": 0.05, "default": 0.35},
+    {"id": "vignette", "label": "Vignette", "type": "range", "min": 0, "max": 1, "step": 0.05, "default": 0.65}
+  ],
+  "style_targets": {"scene_glow": "scene_glow", "vignette": "vignette"},
+  "renderer_contract": "Scene environment is presentation-only and cannot encode semantics."
+}
