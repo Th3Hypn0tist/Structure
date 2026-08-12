@@ -27,8 +27,8 @@ from structureprojector import (
 from view_rules import MAX_BINDING_DEPTH, ViewRuleError, binding_children, binding_tree
 
 BASE_DIR = os.path.dirname(__file__)
-SCENE_VIEWER_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v2.html')
-LEGACY_INDEX_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v1.html')
+SCENE_VIEWER_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v3.html')
+LEGACY_INDEX_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v2.html')
 
 ALL_CANONICAL_PROJECTIONS = {
     **{k: v for k, v in CORE_PROJECTIONS.items() if v.get('dimension') == '3d'},
@@ -78,286 +78,130 @@ def _attach_scene(result: dict, base_projection: dict) -> None:
         })
 
 
-def _decode_transforms(raw: str) -> dict:
-    if not raw:
-        return {}
-    try:
-        decoded = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError('transforms must be a JSON object') from exc
-    if not isinstance(decoded, dict):
-        raise ValueError('transforms must be a JSON object')
-    return decoded
+def _build_result(snapshot, page: str, view: str | None = None) -> dict:
+    if page == 'raw-json':
+        tree = read_raw_json(snapshot, {'path': view} if view else None)
+        result = _result_from_tree(tree, 'raw_json_syntax')
+        base_projection = build_raw_json_space_3d(result['graph'])
+        _attach_scene(result, base_projection)
+        return result
+
+    tree = read_canonical(snapshot)
+    result = _result_from_tree(tree, 'canonical_contract')
+    selected_page = resolve_page(page)
+    selected_view = resolve_view(selected_page, view)
+    projection_id = selected_view['projection_id']
+    base_projection = _build_canonical_projection(result['graph'], projection_id)
+    _attach_scene(result, base_projection)
+    return result
+
+
+def _compose_scene_result(snapshot, page: str, views: list[str]) -> dict:
+    tree = read_canonical(snapshot)
+    result = _result_from_tree(tree, 'canonical_contract')
+    selected_page = resolve_page(page)
+    selected_views = [resolve_view(selected_page, view_id) for view_id in views]
+    projections = [_build_canonical_projection(result['graph'], item['projection_id']) for item in selected_views]
+    scene = compose_scene(projections, tree)
+    result['scene'] = scene
+    result['views'] = selected_views
+    scene_errors = list(scene.get('validation_errors', []))
+    if scene_errors:
+        result.setdefault('errors', []).extend(scene_errors)
+        result['valid'] = False
+    return result
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.20.0'
+    server_version = 'StructureProjector/0.21.0'
+
+    def _write_json(self, payload: dict, status: int = 200) -> None:
+        body = json.dumps(payload, indent=2, sort_keys=True).encode('utf-8')
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _write_html(self, path: str) -> None:
+        body = _html_payload(path)
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        query = urllib.parse.parse_qs(parsed.query)
         try:
-            if parsed.path == '/':
-                payload = _html_payload(SCENE_VIEWER_HTML)
-                self.send_response(200)
-                self.send_header('Content-Type', 'text/html; charset=utf-8')
-                self.send_header('Content-Length', str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
-                return
-
-            if parsed.path == '/legacy':
-                payload = _html_payload(LEGACY_INDEX_HTML)
-                self.send_response(200)
-                self.send_header('Content-Type', 'text/html; charset=utf-8')
-                self.send_header('Content-Length', str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
-                return
-
-            if parsed.path == '/api/primitives':
-                self._json(200, load_registry())
-                return
-
-            if parsed.path == '/api/nanocms':
-                qs = urllib.parse.parse_qs(parsed.query)
-                page = qs.get('page', [None])[0]
-                view = qs.get('view', [None])[0]
-                try:
-                    self._json(200, projection(page, view))
-                except KeyError as exc:
-                    self._json(404, {
-                        'valid': False,
-                        'errors': [{'id': 'SP_NANOCMS_RESOLUTION', 'message': f'Unknown nanoCMS page/view: {exc.args[0]}'}],
-                    })
-                return
-
-            if parsed.path == '/api/branches':
-                self._json(200, {'repository': SOURCE_REPO, 'branches': list_branches()})
-                return
-
-            if parsed.path in ('/api/binding-children', '/api/binding-tree'):
-                qs = urllib.parse.parse_qs(parsed.query)
-                branch = qs.get('branch', ['main'])[0]
-                source_path = qs.get('source_path', [None])[0]
-                pointer = qs.get('pointer', ['/'])[0]
-                if not source_path:
-                    self._json(400, {
-                        'valid': False,
-                        'errors': [{'id': 'SP_BINDING_SOURCE_REQUIRED', 'message': 'source_path is required'}],
-                    })
-                    return
-                snapshot = load_snapshot(branch)
-                if parsed.path == '/api/binding-tree':
-                    try:
-                        requested_depth = int(qs.get('depth', ['1'])[0])
-                    except ValueError:
-                        self._json(400, {
-                            'valid': False,
-                            'errors': [{'id': 'SP_DEPTH_INVALID', 'message': 'depth must be an integer'}],
-                        })
-                        return
-                    result = binding_tree(snapshot, source_path, pointer, requested_depth)
-                else:
-                    result = binding_children(snapshot, source_path, pointer)
-                result['valid'] = True
-                result['source'] = {
-                    'repository': snapshot.repo,
-                    'branch': snapshot.branch,
-                    'revision': snapshot.revision,
-                }
-                self._json(200, result)
-                return
-
-            if parsed.path == '/api/scene':
-                qs = urllib.parse.parse_qs(parsed.query)
-                branch = qs.get('branch', ['main'])[0]
-                page_id = qs.get('page', ['canonical'])[0]
-                raw_views = qs.get('views', [''])[0]
-                view_ids = [item.strip() for item in raw_views.split(',') if item.strip()]
-                if not view_ids:
-                    self._json(400, {
-                        'valid': False,
-                        'errors': [{'id': 'SP_SCENE_VIEWS_REQUIRED', 'message': 'views requires one or more comma-separated projection/view ids'}],
-                    })
-                    return
-                try:
-                    transforms = _decode_transforms(qs.get('transforms', [''])[0])
-                except ValueError as exc:
-                    self._json(400, {'valid': False, 'errors': [{'id': 'SP_SCENE_TRANSFORMS_INVALID', 'message': str(exc)}]})
-                    return
-
-                snapshot = load_snapshot(branch)
-                if page_id == 'canonical':
-                    tree = read_canonical(snapshot)
-                    result = _result_from_tree(tree, 'CanonicalContract')
-                    projections = []
-                    placements = []
-                    for view_id in view_ids:
-                        try:
-                            placement = resolve_view(page_id, view_id)
-                        except KeyError:
-                            self._json(400, {
-                                'valid': False,
-                                'errors': [{'id': 'SP_NANOCMS_RESOLUTION', 'message': f'Unknown canonical view: {view_id}'}],
-                            })
-                            return
-                        projection_id = placement.get('projection_id')
-                        if not projection_id:
-                            continue
-                        projections.append(_build_canonical_projection(result['graph'], projection_id))
-                        placements.append(placement)
-                elif page_id == 'raw-json':
-                    selected_path = qs.get('path', [None])[0]
-                    tree = read_raw_json(snapshot, {'path': selected_path})
-                    result = _result_from_tree(tree, 'RawJSON')
-                    projections = [build_raw_json_space_3d(result['graph'])]
-                    placements = [resolve_view('raw-json', view_ids[0])]
-                else:
-                    self._json(400, {
-                        'valid': False,
-                        'errors': [{'id': 'SP_SCENE_PAGE', 'message': f'Unsupported Scene page: {page_id}'}],
-                    })
-                    return
-
-                if not result.get('projectable'):
-                    self._json(422, result)
-                    return
-
-                scene = compose_scene(projections, tree, transforms=transforms)
-                result['scene'] = scene
-                result['placements'] = placements
-                result['projection_ids'] = [p.get('id') for p in projections]
-                scene_errors = list(scene.get('validation_errors', []))
-                if scene_errors:
-                    result.setdefault('errors', []).extend(scene_errors)
-                    result['valid'] = False
-                self._json(200, result)
-                return
-
-            if parsed.path == '/api/project':
-                qs = urllib.parse.parse_qs(parsed.query)
-                branch = qs.get('branch', ['main'])[0]
-                page_id = qs.get('page', ['canonical'])[0]
-                view_id = qs.get('view', [None])[0]
-                selected_path = qs.get('path', [None])[0]
-                context_id = qs.get('context', [None])[0]
-
-                raw_params = qs.get('params', [''])[0]
-                if raw_params:
-                    try:
-                        decoded = json.loads(raw_params)
-                    except json.JSONDecodeError:
-                        self._json(400, {
-                            'valid': False,
-                            'errors': [{'id': 'SP_PARAMS_INVALID', 'message': 'params must be a JSON object'}],
-                        })
-                        return
-                    if not isinstance(decoded, dict):
-                        self._json(400, {
-                            'valid': False,
-                            'errors': [{'id': 'SP_PARAMS_INVALID', 'message': 'params must be a JSON object'}],
-                        })
-                        return
-
-                try:
-                    page = resolve_page(page_id)
-                    placement = resolve_view(page_id, view_id)
-                except KeyError as exc:
-                    self._json(400, {
-                        'valid': False,
-                        'errors': [{'id': 'SP_NANOCMS_RESOLUTION', 'message': f'Unknown nanoCMS page/view: {exc.args[0]}'}],
-                    })
-                    return
-
-                snapshot = load_snapshot(branch)
-                ruleset = placement['ruleset']
-
-                if ruleset == 'CanonicalContract':
-                    tree = read_canonical(snapshot)
-                    result = _result_from_tree(tree, 'CanonicalContract')
-                    if result.get('projectable') and placement.get('projection_id'):
-                        base_projection = _build_canonical_projection(result['graph'], placement['projection_id'])
-                        _attach_scene(result, base_projection)
-                    if result.get('projectable') and not result.get('valid'):
-                        result.setdefault('warnings', []).append({
-                            'id': 'SP_CANONICAL_DEGRADED',
-                            'message': 'Canonical input contains explicit projectable structure, but validation errors remain visible.',
-                        })
-                elif ruleset == 'RawJSON':
-                    tree = read_raw_json(snapshot, {'path': selected_path})
-                    result = _result_from_tree(tree, 'RawJSON')
-                    if result.get('projectable'):
-                        base_projection = build_raw_json_space_3d(result['graph'])
-                        _attach_scene(result, base_projection)
-                else:
-                    self._json(500, {
-                        'valid': False,
-                        'errors': [{'id': 'SP_UNKNOWN_RULESET', 'message': f'Unknown ruleset in placement: {ruleset}'}],
-                    })
-                    return
-
-                result['page'] = page
-                result['placement'] = placement
-                result['context'] = context_id
-                usable = bool(result.get('valid')) or bool(result.get('projectable'))
-                self._json(200 if usable else 422, result)
-                return
-
-            if parsed.path == '/api/health':
-                self._json(200, {
+            if path == '/':
+                return self._write_html(SCENE_VIEWER_HTML)
+            if path == '/legacy':
+                return self._write_html(LEGACY_INDEX_HTML)
+            if path == '/api/health':
+                return self._write_json({
                     'ok': True,
-                    'service': 'StructureProjector',
-                    'version': '0.20.0',
-                    'view_shell': 'Scene Viewer v2 / WebGL2 instancing',
-                    'legacy_view': '/legacy',
-                    'input_contract': 'StructureTree/1.0',
-                    'scene_contract': 'Scene/1.1',
-                    'primitive_contract': 'PrimitiveRegistry/1.1',
-                    'primitive_api': '/api/primitives',
-                    'input_modules': ['canonical', 'raw_json'],
-                    'rulesets': ['CanonicalContract', 'RawJSON'],
-                    'canonical_contract_format': 'bootstrap-driven',
-                    'active_projection_family': '3d',
-                    'projection_architecture': 'dimension-neutral StructureTree -> multiple projections -> composited Scene -> instanced viewer',
-                    'scene_api': '/api/scene',
-                    'canonical_projections': ALL_CANONICAL_PROJECTIONS,
-                    'raw_json_projection': 'raw_json_space_3d',
+                    'server': self.server_version,
+                    'input_model': 'StructureTree/1.0',
+                    'scene_model': 'Scene/1.1',
+                    'renderer': 'webgl2_instanced_scene_v3',
                     'effects': 'none',
-                    'node_rendering': 'shared primitive geometry + per-node instance data',
-                    'connection_rendering': 'shared connection primitive + per-connection instance data',
-                    'connection_channels': 'independent enabled/color registry per Scene',
-                    'cross_projection_rule': 'only explicit StructureTree links create cross-projection connections',
-                    'canonical_projection_policy': 'project proven explicit structure even when validation is degraded',
-                    'renderers': ['scene_viewer_v2_webgl2'],
-                    'default_recursion_depth': 1,
-                    'max_recursion_depth': MAX_BINDING_DEPTH,
-                    'source_adapter': 'cached immutable commit snapshots',
                 })
-                return
-
-            self._json(404, {'error': 'not found'})
-        except ViewRuleError as exc:
-            self._json(422, {'valid': False, 'errors': [{'id': 'SP_VIEW_RULE', 'message': str(exc)}]})
-        except ProjectorError as exc:
-            self._json(502, {'valid': False, 'errors': [exc.as_dict()]})
-        except Exception as exc:
-            self._json(500, {'valid': False, 'errors': [{'id': 'SP_INTERNAL', 'message': str(exc)}]})
+            if path == '/api/primitives':
+                return self._write_json(load_registry())
+            if path == '/api/branches':
+                return self._write_json({'branches': list_branches(SOURCE_REPO)})
+            if path == '/api/nanocms':
+                page = query.get('page', ['canonical'])[0]
+                return self._write_json(projection(page))
+            if path == '/api/scene':
+                branch = query.get('branch', ['main'])[0]
+                page = query.get('page', ['canonical'])[0]
+                views_arg = query.get('views', [''])[0]
+                views = [part for part in views_arg.split(',') if part]
+                if not views:
+                    selected_page = resolve_page(page)
+                    placements = selected_page.get('placements', [])
+                    views = [item['id'] for item in placements[:2]]
+                snapshot = load_snapshot(SOURCE_REPO, branch)
+                result = _compose_scene_result(snapshot, page, views)
+                return self._write_json(result, 200 if result.get('projectable') else 422)
+            if path == '/api/project':
+                branch = query.get('branch', ['main'])[0]
+                page = query.get('page', ['canonical'])[0]
+                view = query.get('view', [None])[0]
+                snapshot = load_snapshot(SOURCE_REPO, branch)
+                result = _build_result(snapshot, page, view)
+                return self._write_json(result, 200 if result.get('projectable') else 422)
+            if path == '/api/binding-tree':
+                branch = query.get('branch', ['main'])[0]
+                root = query.get('root', [None])[0]
+                depth = int(query.get('depth', ['1'])[0])
+                budget = int(query.get('budget', ['1500'])[0])
+                snapshot = load_snapshot(SOURCE_REPO, branch)
+                tree = read_canonical(snapshot)
+                return self._write_json(binding_tree(tree_to_graph(tree), root=root, depth=depth, budget=budget))
+            if path == '/api/binding-children':
+                branch = query.get('branch', ['main'])[0]
+                node_id = query.get('node', [None])[0]
+                snapshot = load_snapshot(SOURCE_REPO, branch)
+                tree = read_canonical(snapshot)
+                return self._write_json(binding_children(tree_to_graph(tree), node_id=node_id))
+            return super().do_GET()
+        except (ProjectorError, ViewRuleError, ValueError, KeyError) as exc:
+            if isinstance(exc, ProjectorError):
+                payload = {'ok': False, 'error': exc.to_dict()}
+            else:
+                payload = {'ok': False, 'error': {'id': 'SP_REQUEST_FAILED', 'message': str(exc)}}
+            return self._write_json(payload, 400)
 
 
 def main() -> None:
     server = ThreadingHTTPServer((APP_HOST, APP_PORT), Handler)
-    print(f'StructureProjector 0.20.0: http://{APP_HOST}:{APP_PORT}')
-    print(f'Source: {SOURCE_REPO}')
-    print('Input: Canonical/RawJSON -> StructureTree')
-    print('Projection: StructureTree -> one or more SceneObjects -> Scene')
-    print('Viewer: WebGL2 primitive instancing')
-    print('Legacy Scene Viewer v1: /legacy')
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()
+    print(f'StructureProjector listening on http://{APP_HOST}:{APP_PORT}')
+    server.serve_forever()
 
 
 if __name__ == '__main__':
