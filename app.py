@@ -113,7 +113,7 @@ def _compose_scene_result(snapshot, page: str, views: list[str]) -> dict:
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.21.1'
+    server_version = 'StructureProjector/0.21.2'
 
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode('utf-8')
@@ -165,14 +165,14 @@ class Handler(BaseHandler):
                     selected_page = resolve_page(page)
                     placements = selected_page.get('placements', [])
                     views = [item['id'] for item in placements[:2]]
-                snapshot = load_snapshot(SOURCE_REPO, branch)
+                snapshot = load_snapshot(branch=branch, repo=SOURCE_REPO)
                 result = _compose_scene_result(snapshot, page, views)
                 return self._write_json(result, 200 if result.get('projectable') else 422)
             if path == '/api/project':
                 branch = query.get('branch', ['main'])[0]
                 page = query.get('page', ['canonical'])[0]
                 view = query.get('view', [None])[0]
-                snapshot = load_snapshot(SOURCE_REPO, branch)
+                snapshot = load_snapshot(branch=branch, repo=SOURCE_REPO)
                 result = _build_result(snapshot, page, view)
                 return self._write_json(result, 200 if result.get('projectable') else 422)
             if path == '/api/binding-tree':
@@ -180,13 +180,13 @@ class Handler(BaseHandler):
                 root = query.get('root', [None])[0]
                 depth = int(query.get('depth', ['1'])[0])
                 budget = int(query.get('budget', ['1500'])[0])
-                snapshot = load_snapshot(SOURCE_REPO, branch)
+                snapshot = load_snapshot(branch=branch, repo=SOURCE_REPO)
                 tree = read_canonical(snapshot)
                 return self._write_json(binding_tree(tree_to_graph(tree), root=root, depth=depth, budget=budget))
             if path == '/api/binding-children':
                 branch = query.get('branch', ['main'])[0]
                 node_id = query.get('node', [None])[0]
-                snapshot = load_snapshot(SOURCE_REPO, branch)
+                snapshot = load_snapshot(branch=branch, repo=SOURCE_REPO)
                 tree = read_canonical(snapshot)
                 return self._write_json(binding_children(tree_to_graph(tree), node_id=node_id))
             return super().do_GET()
