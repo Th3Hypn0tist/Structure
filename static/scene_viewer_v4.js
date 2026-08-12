@@ -1,0 +1,292 @@
+'use strict';
+
+const $ = q => document.querySelector(q);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+const S = {
+  catalog: null,
+  scene: null,
+  source: null,
+  instances: [],
+  objectState: {},
+  objectStyle: {},
+  channelState: {},
+  renderer: null,
+  nextId: 1,
+  rotX: -16 * Math.PI / 180,
+  rotY: 26 * Math.PI / 180,
+  fov: 60,
+  distance: 3600,
+  baseDistance: 3600,
+  drag: null,
+  reloadTimer: null,
+  limits: {nodes: 100000, connections: 100000, labels: 5000},
+};
+
+function setStatus(text, bad=false){
+  $('#status').textContent = text;
+  $('#status').className = 'status ' + (bad ? 'bad' : 'ok');
+}
+
+async function getJSON(url){
+  const r = await fetch(url);
+  const text = await r.text();
+  let data;
+  try { data = JSON.parse(text); } catch { throw new Error(`${url}: invalid JSON (${r.status})`); }
+  if (!r.ok) throw new Error(data?.error?.message || data?.message || `${url}: HTTP ${r.status}`);
+  return data;
+}
+
+async function postJSON(url, body){
+  const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  const text = await r.text();
+  let data;
+  try { data = JSON.parse(text); } catch { throw new Error(`${url}: invalid JSON (${r.status})`); }
+  if (!r.ok) throw new Error(data?.error?.message || data?.message || `${url}: HTTP ${r.status}`);
+  return data;
+}
+
+function newInstance(){
+  const id = `p${S.nextId++}`;
+  const styles = S.catalog?.styles || [];
+  const topics = S.catalog?.topics || [];
+  const preferredStyle = styles.find(x => x.id === 'atlas_2d')?.id || styles[0]?.id || 'atlas_2d';
+  const preferredRoot = topics.find(x => x.id === 'core')?.id || topics.find(x => x.id !== 'all')?.id || 'all';
+  return {id, name:`Projection ${id.slice(1)}`, projection_style:preferredStyle, root_topic:preferredRoot, dependency_depth:0};
+}
+
+function objectTransformDefaults(){
+  return {position:{x:0,y:0,z:0}, rotation:{x:0,y:0,z:0}, scale:{x:1,y:1,z:1}};
+}
+function projectionDefaults(){ return {spread_x:1, spread_y:1, spread_z:1, node_scale:1, edge_opacity:.28}; }
+function styleDefaults(){ return {even:'#087CFF', odd:'#AAB2C2', title:'#0B356B'}; }
+
+function ensureLocalState(instance, obj){
+  const key = instance.id;
+  if (!S.objectState[key]) {
+    const t = obj?.transform || objectTransformDefaults();
+    S.objectState[key] = {
+      transform: {
+        position:{x:Number(t.position?.x)||0,y:Number(t.position?.y)||0,z:Number(t.position?.z)||0},
+        rotation:{x:Number(t.rotation?.x)||0,y:Number(t.rotation?.y)||0,z:Number(t.rotation?.z)||0},
+        scale:{x:Number(t.scale?.x)||1,y:Number(t.scale?.y)||1,z:Number(t.scale?.z)||1},
+      },
+      projection: projectionDefaults(),
+    };
+  }
+  if (!S.objectStyle[key]) S.objectStyle[key] = styleDefaults();
+  return S.objectState[key];
+}
+
+function styleOptions(selected){
+  return (S.catalog?.styles || []).map(x => `<option value="${esc(x.id)}" ${x.id===selected?'selected':''}>${esc(x.label)}</option>`).join('');
+}
+function topicOptions(selected){
+  return (S.catalog?.topics || []).map(x => `<option value="${esc(x.id)}" ${x.id===selected?'selected':''}>${esc(x.label)} (${x.entry_count})</option>`).join('');
+}
+
+function axisFields(id, section, values, step, min=null, max=null){
+  return ['x','y','z'].map(axis => `<div class="field axis ${axis}"><label>${axis.toUpperCase()}</label><input type="number" data-transform="${id}" data-section="${section}" data-axis="${axis}" step="${step}" ${min!==null?`min="${min}"`:''} ${max!==null?`max="${max}"`:''} value="${Number(values[axis]).toFixed(section==='rotation'?1:2)}"></div>`).join('');
+}
+
+function instanceHTML(inst){
+  const obj = (S.scene?.objects || []).find(o => o.instance_id === inst.id);
+  const st = ensureLocalState(inst, obj);
+  const col = S.objectStyle[inst.id];
+  const p = st.projection;
+  return `<details class="instance" open data-card="${inst.id}">
+    <summary>${esc(inst.name)} · ${esc((S.catalog?.styles||[]).find(x=>x.id===inst.projection_style)?.label || inst.projection_style)}</summary>
+    <div class="instance-body">
+      <div class="field"><label>Instance name</label><input data-instance="${inst.id}" data-key="name" value="${esc(inst.name)}"></div>
+      <div class="grid2">
+        <div class="field"><label>Projection style</label><select data-instance="${inst.id}" data-key="projection_style">${styleOptions(inst.projection_style)}</select></div>
+        <div class="field"><label>Root topic</label><select data-instance="${inst.id}" data-key="root_topic">${topicOptions(inst.root_topic)}</select></div>
+      </div>
+      <div class="field"><label>Dependency depth downward (0–32)</label><input type="number" min="0" max="32" step="1" data-instance="${inst.id}" data-key="dependency_depth" value="${inst.dependency_depth}"></div>
+      <div class="subhead"><span>Instance colors</span><span>depth parity</span></div>
+      <div class="color-row"><label>Even depth</label><input type="color" data-color="${inst.id}" data-color-key="even" value="${col.even}"></div>
+      <div class="color-row"><label>Odd depth</label><input type="color" data-color="${inst.id}" data-color-key="odd" value="${col.odd}"></div>
+      <div class="color-row"><label>Title surface</label><input type="color" data-color="${inst.id}" data-color-key="title" value="${col.title}"></div>
+      <div class="subhead"><span>Position</span><span>XYZ</span></div><div class="grid3">${axisFields(inst.id,'position',st.transform.position,25)}</div>
+      <div class="subhead"><span>Rotation</span><span>degrees</span></div><div class="grid3">${axisFields(inst.id,'rotation',st.transform.rotation,5,-360,360)}</div>
+      <div class="subhead"><span>Scale</span><span>XYZ</span></div><div class="grid3">${axisFields(inst.id,'scale',st.transform.scale,.05,.05,20)}</div>
+      <div class="subhead"><span>Projection layout</span><span>local</span></div>
+      <div class="grid3">
+        <div class="field axis x"><label>X spread</label><input type="number" step=".05" min=".05" max="20" data-proj="${inst.id}" data-proj-key="spread_x" value="${p.spread_x}"></div>
+        <div class="field axis y"><label>Y spread</label><input type="number" step=".05" min=".05" max="20" data-proj="${inst.id}" data-proj-key="spread_y" value="${p.spread_y}"></div>
+        <div class="field axis z"><label>Z spread</label><input type="number" step=".05" min=".05" max="20" data-proj="${inst.id}" data-proj-key="spread_z" value="${p.spread_z}"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>Node size</label><input type="number" step=".05" min=".05" max="20" data-proj="${inst.id}" data-proj-key="node_scale" value="${p.node_scale}"></div>
+        <div class="field"><label>Internal edge opacity</label><input type="number" step=".05" min="0" max="1" data-proj="${inst.id}" data-proj-key="edge_opacity" value="${p.edge_opacity}"></div>
+      </div>
+      <div class="grid2"><button data-reset="${inst.id}">Reset transform</button><button class="remove" data-remove="${inst.id}">Remove instance</button></div>
+    </div>
+  </details>`;
+}
+
+function renderInstances(){
+  $('#instances').innerHTML = S.instances.map(instanceHTML).join('');
+  $('#instances').querySelectorAll('[data-instance]').forEach(el => {
+    el.onchange = () => {
+      const inst = S.instances.find(x => x.id === el.dataset.instance);
+      if (!inst) return;
+      const key = el.dataset.key;
+      inst[key] = key === 'dependency_depth' ? Math.max(0, Math.min(32, Number(el.value)||0)) : el.value;
+      renderInstances();
+      scheduleSceneReload();
+    };
+  });
+  $('#instances').querySelectorAll('[data-transform]').forEach(el => {
+    el.oninput = () => {
+      const state = S.objectState[el.dataset.transform]; if (!state) return;
+      let v = Number(el.value); if (!Number.isFinite(v)) return;
+      if (el.dataset.section === 'scale') v = Math.max(.05, v);
+      state.transform[el.dataset.section][el.dataset.axis] = v;
+      rebuildRenderer();
+    };
+  });
+  $('#instances').querySelectorAll('[data-proj]').forEach(el => {
+    el.oninput = () => {
+      const state = S.objectState[el.dataset.proj]; if (!state) return;
+      let v = Number(el.value); if (!Number.isFinite(v)) return;
+      state.projection[el.dataset.projKey] = v;
+      rebuildRenderer();
+    };
+  });
+  $('#instances').querySelectorAll('[data-color]').forEach(el => {
+    el.oninput = () => { S.objectStyle[el.dataset.color][el.dataset.colorKey] = el.value; rebuildRenderer(); };
+  });
+  $('#instances').querySelectorAll('[data-reset]').forEach(btn => btn.onclick = () => {
+    const inst = S.instances.find(x=>x.id===btn.dataset.reset);
+    const obj = (S.scene?.objects||[]).find(o=>o.instance_id===btn.dataset.reset);
+    if (!inst) return;
+    delete S.objectState[inst.id]; ensureLocalState(inst,obj); renderInstances(); rebuildRenderer();
+  });
+  $('#instances').querySelectorAll('[data-remove]').forEach(btn => btn.onclick = () => {
+    if (S.instances.length <= 1) return;
+    const id = btn.dataset.remove;
+    S.instances = S.instances.filter(x=>x.id!==id); delete S.objectState[id]; delete S.objectStyle[id];
+    renderInstances(); scheduleSceneReload(0);
+  });
+}
+
+function scheduleSceneReload(delay=180){
+  clearTimeout(S.reloadTimer);
+  S.reloadTimer = setTimeout(loadScene, delay);
+}
+
+function instancePayload(){
+  return S.instances.map(i => ({id:i.id,name:i.name,projection_style:i.projection_style,root_topic:i.root_topic,dependency_depth:i.dependency_depth}));
+}
+
+async function loadScene(){
+  if (!S.instances.length) return;
+  setStatus('loading'); $('#error').textContent='None.';
+  try {
+    const data = await postJSON('/api/scene', {branch:$('#branch').value || 'main', instances:instancePayload()});
+    S.scene = data.scene; S.source = data.source || {};
+    $('#revision').textContent = (S.source.revision || '').slice(0,12);
+    for (const inst of S.instances) ensureLocalState(inst, (S.scene.objects||[]).find(o=>o.instance_id===inst.id));
+    syncChannels(); renderInstances(); renderChannels(); rebuildRenderer(false); fit(false); renderSceneInfo(); draw();
+    setStatus(`${S.scene?.composition?.node_instance_count || 0} nodes`);
+  } catch (e) { showError(e); }
+}
+
+function syncChannels(){
+  for (const [id,cfg] of Object.entries(S.scene?.connection_channels || {})) if (!S.channelState[id]) S.channelState[id] = {enabled:cfg.enabled!==false,color:cfg.color||'#AAB2C2'};
+}
+function renderChannels(){
+  const used = new Set((S.scene?.connections||[]).map(c=>String(c.channel||'semantic')));
+  $('#channels').innerHTML = [...used].sort().map(id=>{const st=S.channelState[id]||{enabled:true,color:'#AAB2C2'};return `<div class="color-row"><label><input type="checkbox" data-channel-enable="${esc(id)}" ${st.enabled?'checked':''}> ${esc(id)}</label><input type="color" data-channel-color="${esc(id)}" value="${st.color}"></div>`}).join('') || '<span class="muted">No connections.</span>';
+  $('#channels').querySelectorAll('[data-channel-enable]').forEach(el=>el.onchange=()=>{S.channelState[el.dataset.channelEnable].enabled=el.checked;rebuildRenderer()});
+  $('#channels').querySelectorAll('[data-channel-color]').forEach(el=>el.oninput=()=>{S.channelState[el.dataset.channelColor].color=el.value;rebuildRenderer()});
+}
+
+function m4identity(){return new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1])}
+function m4mul(a,b){const o=new Float32Array(16);for(let c=0;c<4;c++)for(let r=0;r<4;r++)o[c*4+r]=a[r]*b[c*4]+a[4+r]*b[c*4+1]+a[8+r]*b[c*4+2]+a[12+r]*b[c*4+3];return o}
+function m4translate(x,y,z){const o=m4identity();o[12]=x;o[13]=y;o[14]=z;return o}
+function m4scale(x,y,z){const o=m4identity();o[0]=x;o[5]=y;o[10]=z;return o}
+function m4rx(a){const c=Math.cos(a),s=Math.sin(a),o=m4identity();o[5]=c;o[6]=s;o[9]=-s;o[10]=c;return o}
+function m4ry(a){const c=Math.cos(a),s=Math.sin(a),o=m4identity();o[0]=c;o[2]=-s;o[8]=s;o[10]=c;return o}
+function m4rz(a){const c=Math.cos(a),s=Math.sin(a),o=m4identity();o[0]=c;o[1]=s;o[4]=-s;o[5]=c;return o}
+function m4trs(t){let o=m4translate(t.position?.x||0,t.position?.y||0,t.position?.z||0);o=m4mul(o,m4rz((t.rotation?.z||0)*Math.PI/180));o=m4mul(o,m4ry((t.rotation?.y||0)*Math.PI/180));o=m4mul(o,m4rx((t.rotation?.x||0)*Math.PI/180));return m4mul(o,m4scale(t.scale?.x??1,t.scale?.y??1,t.scale?.z??1))}
+function m4perspective(fovy,aspect,near,far){const f=1/Math.tan(fovy/2),nf=1/(near-far),o=new Float32Array(16);o[0]=f/aspect;o[5]=f;o[10]=(far+near)*nf;o[11]=-1;o[14]=2*far*near*nf;return o}
+function m4point(m,p){const x=p.x||0,y=p.y||0,z=p.z||0;return{x:m[0]*x+m[4]*y+m[8]*z+m[12],y:m[1]*x+m[5]*y+m[9]*z+m[13],z:m[2]*x+m[6]*y+m[10]*z+m[14]}}
+function viewProjection(){const c=$('#gl'),aspect=Math.max(.01,c.clientWidth/c.clientHeight);let v=m4translate(0,0,-S.distance);v=m4mul(v,m4rx(S.rotX));v=m4mul(v,m4ry(S.rotY));return m4mul(m4perspective(S.fov*Math.PI/180,aspect,1,100000),v)}
+function hexColor(hex,a=1){const h=String(hex||'#aab2c2').replace('#',''),s=h.length===3?h.split('').map(x=>x+x).join(''):h;return[parseInt(s.slice(0,2),16)/255,parseInt(s.slice(2,4),16)/255,parseInt(s.slice(4,6),16)/255,a]}
+function hierarchyDepth(node){const v=node?.properties?.hierarchy_depth;return Number.isInteger(v)&&v>=0?v:null}
+function fitLabel(ctx,text,max){let s=String(text);if(ctx.measureText(s).width<=max)return s;while(s.length>1&&ctx.measureText(s+'…').width>max)s=s.slice(0,-1);return s+'…'}
+
+class Renderer {
+  constructor(canvas){
+    this.canvas=canvas; this.gl=canvas.getContext('webgl2',{antialias:true,alpha:false}); if(!this.gl)throw new Error('WebGL2 is required');
+    this.boxes=[];this.lines=[];this.strips=[];this.labels=[];this.objectAnchors=new Map();this.labelUV=new Map();this.labelTexture=this.gl.createTexture();
+    this.boxProgram=this.program(`#version 300 es\nprecision highp float;layout(location=0)in vec3 p;layout(location=1)in vec3 n;layout(location=2)in vec4 m0;layout(location=3)in vec4 m1;layout(location=4)in vec4 m2;layout(location=5)in vec4 m3;layout(location=6)in vec4 c;uniform mat4 vp;out vec3 N;out vec4 C;void main(){mat4 M=mat4(m0,m1,m2,m3);N=mat3(M)*n;C=c;gl_Position=vp*M*vec4(p,1);}`,`#version 300 es\nprecision highp float;in vec3 N;in vec4 C;out vec4 o;void main(){float l=.3+.7*max(0.,dot(normalize(N),normalize(vec3(.35,-.55,.75))));o=vec4(C.rgb*l,C.a);}`);
+    this.lineProgram=this.program(`#version 300 es\nprecision highp float;layout(location=0)in vec3 a;layout(location=1)in vec3 b;layout(location=2)in vec4 c;uniform mat4 vp;out vec4 C;void main(){C=c;gl_Position=vp*vec4(gl_VertexID==0?a:b,1);}`,`#version 300 es\nprecision highp float;in vec4 C;out vec4 o;void main(){o=C;}`);
+    this.quadProgram=this.program(`#version 300 es\nprecision highp float;layout(location=0)in vec3 p;layout(location=1)in vec4 m0;layout(location=2)in vec4 m1;layout(location=3)in vec4 m2;layout(location=4)in vec4 m3;layout(location=5)in vec4 c;uniform mat4 vp;out vec4 C;void main(){C=c;gl_Position=vp*mat4(m0,m1,m2,m3)*vec4(p,1);}`,`#version 300 es\nprecision highp float;in vec4 C;out vec4 o;void main(){o=C;}`);
+    this.textProgram=this.program(`#version 300 es\nprecision highp float;layout(location=0)in vec3 p;layout(location=1)in vec2 uv;layout(location=2)in vec4 m0;layout(location=3)in vec4 m1;layout(location=4)in vec4 m2;layout(location=5)in vec4 m3;layout(location=6)in vec4 r;uniform mat4 vp;out vec2 U;void main(){U=mix(r.xy,r.zw,uv);gl_Position=vp*mat4(m0,m1,m2,m3)*vec4(p,1);}`,`#version 300 es\nprecision highp float;uniform sampler2D tex;in vec2 U;out vec4 o;void main(){float a=texture(tex,U).a;if(a<.06)discard;o=vec4(1,1,1,a);}`);
+    this.setup();
+  }
+  shader(type,src){const g=this.gl,s=g.createShader(type);g.shaderSource(s,src);g.compileShader(s);if(!g.getShaderParameter(s,g.COMPILE_STATUS))throw new Error(g.getShaderInfoLog(s));return s}
+  program(vs,fs){const g=this.gl,p=g.createProgram();g.attachShader(p,this.shader(g.VERTEX_SHADER,vs));g.attachShader(p,this.shader(g.FRAGMENT_SHADER,fs));g.linkProgram(p);if(!g.getProgramParameter(p,g.LINK_STATUS))throw new Error(g.getProgramInfoLog(p));return p}
+  setup(){this.setupCube();this.setupLines();this.setupQuad();this.setupText()}
+  setupCube(){const g=this.gl,P=[-.5,-.5,.5,.5,-.5,.5,.5,.5,.5,-.5,.5,.5,.5,-.5,-.5,-.5,-.5,-.5,-.5,.5,-.5,.5,.5,-.5,-.5,-.5,-.5,-.5,-.5,.5,-.5,.5,.5,-.5,.5,-.5,.5,-.5,.5,.5,-.5,-.5,.5,.5,-.5,.5,.5,.5,-.5,-.5,-.5,.5,-.5,-.5,.5,-.5,.5,-.5,-.5,.5,-.5,.5,.5,.5,.5,.5,.5,.5,-.5,-.5,.5,-.5],N=[0,0,1,0,0,1,0,0,1,0,0,1,0,0,-1,0,0,-1,0,0,-1,0,0,-1,-1,0,0,-1,0,0,-1,0,0,-1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,0,-1,0,0,-1,0,0,-1,0,0,-1,0,0,1,0,0,1,0,0,1,0,0,1,0],I=[];for(let f=0;f<6;f++){let b=f*4;I.push(b,b+1,b+2,b,b+2,b+3)}this.boxVAO=g.createVertexArray();g.bindVertexArray(this.boxVAO);let b=g.createBuffer();g.bindBuffer(g.ARRAY_BUFFER,b);g.bufferData(g.ARRAY_BUFFER,new Float32Array(P),g.STATIC_DRAW);g.enableVertexAttribArray(0);g.vertexAttribPointer(0,3,g.FLOAT,false,0,0);b=g.createBuffer();g.bindBuffer(g.ARRAY_BUFFER,b);g.bufferData(g.ARRAY_BUFFER,new Float32Array(N),g.STATIC_DRAW);g.enableVertexAttribArray(1);g.vertexAttribPointer(1,3,g.FLOAT,false,0,0);this.boxBuf=g.createBuffer();g.bindBuffer(g.ARRAY_BUFFER,this.boxBuf);for(let i=0;i<4;i++){g.enableVertexAttribArray(2+i);g.vertexAttribPointer(2+i,4,g.FLOAT,false,80,i*16);g.vertexAttribDivisor(2+i,1)}g.enableVertexAttribArray(6);g.vertexAttribPointer(6,4,g.FLOAT,false,80,64);g.vertexAttribDivisor(6,1);this.boxIdx=g.createBuffer();g.bindBuffer(g.ELEMENT_ARRAY_BUFFER,this.boxIdx);g.bufferData(g.ELEMENT_ARRAY_BUFFER,new Uint16Array(I),g.STATIC_DRAW);this.boxCount=I.length;g.bindVertexArray(null)}
+  setupLines(){const g=this.gl;this.lineVAO=g.createVertexArray();g.bindVertexArray(this.lineVAO);this.lineBuf=g.createBuffer();g.bindBuffer(g.ARRAY_BUFFER,this.lineBuf);g.enableVertexAttribArray(0);g.vertexAttribPointer(0,3,g.FLOAT,false,40,0);g.vertexAttribDivisor(0,1);g.enableVertexAttribArray(1);g.vertexAttribPointer(1,3,g.FLOAT,false,40,12);g.vertexAttribDivisor(1,1);g.enableVertexAttribArray(2);g.vertexAttribPointer(2,4,g.FLOAT,false,40,24);g.vertexAttribDivisor(2,1);g.bindVertexArray(null)}
+  setupQuad(){const g=this.gl,V=[-.5,-.5,0,.5,-.5,0,.5,.5,0,-.5,-.5,0,.5,.5,0,-.5,.5,0];this.quadVAO=g.createVertexArray();g.bindVertexArray(this.quadVAO);let b=g.createBuffer();g.bindBuffer(g.ARRAY_BUFFER,b);g.bufferData(g.ARRAY_BUFFER,new Float32Array(V),g.STATIC_DRAW);g.enableVertexAttribArray(0);g.vertexAttribPointer(0,3,g.FLOAT,false,0,0);this.quadBuf=g.createBuffer();g.bindBuffer(g.ARRAY_BUFFER,this.quadBuf);for(let i=0;i<4;i++){g.enableVertexAttribArray(1+i);g.vertexAttribPointer(1+i,4,g.FLOAT,false,80,i*16);g.vertexAttribDivisor(1+i,1)}g.enableVertexAttribArray(5);g.vertexAttribPointer(5,4,g.FLOAT,false,80,64);g.vertexAttribDivisor(5,1);g.bindVertexArray(null)}
+  setupText(){const g=this.gl,V=[-.5,-.5,0,0,0,.5,-.5,0,1,0,.5,.5,0,1,1,-.5,-.5,0,0,0,.5,.5,0,1,1,-.5,.5,0,0,1];this.textVAO=g.createVertexArray();g.bindVertexArray(this.textVAO);let b=g.createBuffer();g.bindBuffer(g.ARRAY_BUFFER,b);g.bufferData(g.ARRAY_BUFFER,new Float32Array(V),g.STATIC_DRAW);g.enableVertexAttribArray(0);g.vertexAttribPointer(0,3,g.FLOAT,false,20,0);g.enableVertexAttribArray(1);g.vertexAttribPointer(1,2,g.FLOAT,false,20,12);this.textBuf=g.createBuffer();g.bindBuffer(g.ARRAY_BUFFER,this.textBuf);for(let i=0;i<4;i++){g.enableVertexAttribArray(2+i);g.vertexAttribPointer(2+i,4,g.FLOAT,false,80,i*16);g.vertexAttribDivisor(2+i,1)}g.enableVertexAttribArray(6);g.vertexAttribPointer(6,4,g.FLOAT,false,80,64);g.vertexAttribDivisor(6,1);g.bindVertexArray(null)}
+  buildAtlas(records){const g=this.gl,max=g.getParameter(g.MAX_TEXTURE_SIZE)||4096,cellW=256,cellH=64,cols=Math.max(1,Math.min(4,Math.floor(max/cellW))),rowsMax=Math.max(1,Math.floor(max/cellH)),used=records.slice(0,Math.min(S.limits.labels,cols*rowsMax)),rows=Math.max(1,Math.ceil(Math.max(1,used.length)/cols)),c=document.createElement('canvas');c.width=cols*cellW;c.height=rows*cellH;const ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);ctx.fillStyle='#fff';ctx.font='700 28px Arial';ctx.textAlign='center';ctx.textBaseline='middle';this.labelUV.clear();used.forEach((r,i)=>{const col=i%cols,row=Math.floor(i/cols),x=col*cellW,y=row*cellH;ctx.fillText(fitLabel(ctx,r.text,cellW-18),x+cellW/2,y+cellH/2);this.labelUV.set(r.key,{u0:x/c.width,v0:1-(y+cellH)/c.height,u1:(x+cellW)/c.width,v1:1-y/c.height})});g.bindTexture(g.TEXTURE_2D,this.labelTexture);g.texImage2D(g.TEXTURE_2D,0,g.RGBA,g.RGBA,g.UNSIGNED_BYTE,c);g.texParameteri(g.TEXTURE_2D,g.TEXTURE_MIN_FILTER,g.LINEAR);g.texParameteri(g.TEXTURE_2D,g.TEXTURE_MAG_FILTER,g.LINEAR);g.texParameteri(g.TEXTURE_2D,g.TEXTURE_WRAP_S,g.CLAMP_TO_EDGE);g.texParameteri(g.TEXTURE_2D,g.TEXTURE_WRAP_T,g.CLAMP_TO_EDGE)}
+  build(scene){this.boxes=[];this.lines=[];this.strips=[];this.labels=[];this.objectAnchors.clear();const records=[];for(const o of scene?.objects||[])for(const n of o.nodes||[]){const text=String(n.properties?.name||n.id||'').trim();if(text)records.push({key:`${o.id}::${n.id}`,text})}this.buildAtlas(records);const world=new Map();for(const obj of scene?.objects||[]){const inst=S.instances.find(i=>i.id===obj.instance_id);if(!inst)continue;const local=ensureLocalState(inst,obj),style=S.objectStyle[inst.id],pt=local.projection,OM=m4trs(local.transform);let minX=Infinity,minY=Infinity,minZ=Infinity,maxX=-Infinity,maxY=-Infinity,maxZ=-Infinity;for(const node of obj.nodes||[]){if(this.boxes.length>=S.limits.nodes)break;const nt=node.transform||{},np=nt.position||{},NM=m4trs({position:{x:(np.x||0)*pt.spread_x,y:(np.y||0)*pt.spread_y,z:(np.z||0)*pt.spread_z},rotation:nt.rotation||{},scale:nt.scale||{x:1,y:1,z:1}}),base=m4mul(OM,NM),gp=node.geometry_parameters||{},d=hierarchyDepth(node),hs=d===null?1:Math.pow(.8,d),ns=pt.node_scale*hs,dims=[(Number(gp.width)||140)*ns,(Number(gp.height)||54)*ns,(Number(gp.depth)||56)*ns],center=m4point(base,{x:0,y:0,z:0});minX=Math.min(minX,center.x);minY=Math.min(minY,center.y);minZ=Math.min(minZ,center.z);maxX=Math.max(maxX,center.x);maxY=Math.max(maxY,center.y);maxZ=Math.max(maxZ,center.z);world.set(`${obj.id}::${node.id}`,center);this.boxes.push({matrix:m4mul(base,m4scale(...dims)),color:d===null?[.10,.12,.16,1]:hexColor(d%2===0?style.even:style.odd)});const stripH=dims[1]*.36,stripY=dims[1]*.20,frontZ=dims[2]/2+.8;let sm=m4mul(base,m4translate(0,stripY,frontZ));sm=m4mul(sm,m4scale(dims[0]*.94,stripH,1));this.strips.push({matrix:sm,color:hexColor(style.title)});const uv=this.labelUV.get(`${obj.id}::${node.id}`);if(uv){let lm=m4mul(base,m4translate(0,stripY,frontZ+1));lm=m4mul(lm,m4rx(Math.PI));lm=m4mul(lm,m4scale(dims[0]*.86,stripH*.82,1));this.labels.push({matrix:lm,uv})}}
+      if(!Number.isFinite(minX)){const p=local.transform.position;minX=maxX=p.x;minY=maxY=p.y;minZ=maxZ=p.z}this.objectAnchors.set(obj.id,{x:(minX+maxX)/2,y:maxY+130,z:(minZ+maxZ)/2,root:obj.root_topic||'all',name:obj.name||obj.instance_id});}
+    for(const c of scene?.connections||[]){if(this.lines.length>=S.limits.connections)break;const st=S.channelState[c.channel]||{enabled:true,color:'#AAB2C2'};if(!st.enabled)continue;const a=world.get(`${c.from?.object}::${c.from?.node}`),b=world.get(`${c.to?.object}::${c.to?.node}`);if(!a||!b)continue;let alpha=1;if(c.scope==='projection'){const obj=(scene.objects||[]).find(o=>o.id===c.from?.object),inst=obj&&S.instances.find(i=>i.id===obj.instance_id);if(inst)alpha=ensureLocalState(inst,obj).projection.edge_opacity}this.lines.push({a,b,color:hexColor(st.color,alpha)})}this.upload()}
+  upload(){uploadMC(this.gl,this.boxBuf,this.boxes);uploadMC(this.gl,this.quadBuf,this.strips);const l=new Float32Array(this.lines.length*10);this.lines.forEach((x,i)=>l.set([x.a.x,x.a.y,x.a.z,x.b.x,x.b.y,x.b.z,...x.color],i*10));this.gl.bindBuffer(this.gl.ARRAY_BUFFER,this.lineBuf);this.gl.bufferData(this.gl.ARRAY_BUFFER,l,this.gl.DYNAMIC_DRAW);const t=new Float32Array(this.labels.length*20);this.labels.forEach((x,i)=>{t.set(x.matrix,i*20);t.set([x.uv.u0,x.uv.v0,x.uv.u1,x.uv.v1],i*20+16)});this.gl.bindBuffer(this.gl.ARRAY_BUFFER,this.textBuf);this.gl.bufferData(this.gl.ARRAY_BUFFER,t,this.gl.DYNAMIC_DRAW)}
+  resize(){const g=this.gl,d=Math.min(2,devicePixelRatio||1),w=Math.max(1,Math.floor(this.canvas.clientWidth*d)),h=Math.max(1,Math.floor(this.canvas.clientHeight*d));if(this.canvas.width!==w||this.canvas.height!==h){this.canvas.width=w;this.canvas.height=h}g.viewport(0,0,w,h)}
+  draw(){const g=this.gl;this.resize();g.clearColor(.008,.012,.018,1);g.clear(g.COLOR_BUFFER_BIT|g.DEPTH_BUFFER_BIT);g.enable(g.DEPTH_TEST);g.enable(g.BLEND);g.blendFunc(g.SRC_ALPHA,g.ONE_MINUS_SRC_ALPHA);const vp=viewProjection();if(this.lines.length){g.useProgram(this.lineProgram);g.uniformMatrix4fv(g.getUniformLocation(this.lineProgram,'vp'),false,vp);g.bindVertexArray(this.lineVAO);g.drawArraysInstanced(g.LINES,0,2,this.lines.length)}if(this.boxes.length){g.useProgram(this.boxProgram);g.uniformMatrix4fv(g.getUniformLocation(this.boxProgram,'vp'),false,vp);g.bindVertexArray(this.boxVAO);g.drawElementsInstanced(g.TRIANGLES,this.boxCount,g.UNSIGNED_SHORT,0,this.boxes.length)}if(this.strips.length){g.useProgram(this.quadProgram);g.uniformMatrix4fv(g.getUniformLocation(this.quadProgram,'vp'),false,vp);g.bindVertexArray(this.quadVAO);g.drawArraysInstanced(g.TRIANGLES,0,6,this.strips.length)}if(this.labels.length){g.useProgram(this.textProgram);g.uniformMatrix4fv(g.getUniformLocation(this.textProgram,'vp'),false,vp);g.activeTexture(g.TEXTURE0);g.bindTexture(g.TEXTURE_2D,this.labelTexture);g.uniform1i(g.getUniformLocation(this.textProgram,'tex'),0);g.bindVertexArray(this.textVAO);g.drawArraysInstanced(g.TRIANGLES,0,6,this.labels.length)}g.bindVertexArray(null);renderRootBillboards(vp,this.objectAnchors)}
+}
+
+function uploadMC(g,buf,items){const d=new Float32Array(items.length*20);items.forEach((x,i)=>{d.set(x.matrix,i*20);d.set(x.color,i*20+16)});g.bindBuffer(g.ARRAY_BUFFER,buf);g.bufferData(g.ARRAY_BUFFER,d,g.DYNAMIC_DRAW)}
+function renderRootBillboards(vp,anchors){const canvas=$('#gl'),host=$('#rootLabels'),w=canvas.clientWidth,h=canvas.clientHeight;let html='';for(const [oid,a] of anchors){const x=a.x,y=a.y,z=a.z,cx=vp[0]*x+vp[4]*y+vp[8]*z+vp[12],cy=vp[1]*x+vp[5]*y+vp[9]*z+vp[13],cw=vp[3]*x+vp[7]*y+vp[11]*z+vp[15];if(cw<=0)continue;const sx=(cx/cw*.5+.5)*w,sy=(-cy/cw*.5+.5)*h;if(sx<-100||sx>w+100||sy<-50||sy>h+50)continue;html+=`<div class="root-label" style="left:${sx}px;top:${sy}px">${esc(String(a.root).toUpperCase())}<small>${esc(a.name)}</small></div>`}host.innerHTML=html}
+
+function rebuildRenderer(redraw=true){if(!S.scene||!S.renderer)return;S.renderer.build(S.scene);renderSceneInfo();if(redraw)draw()}
+function renderSceneInfo(){const c=S.scene?.composition||{};$('#sceneInfo').innerHTML=`<div class="metric"><span>Instances</span><span>${c.projection_count||0}</span></div><div class="metric"><span>Nodes</span><span>${c.node_instance_count||0}</span></div><div class="metric"><span>Rendered nodes</span><span>${S.renderer?.boxes.length||0}</span></div><div class="metric"><span>Connections</span><span>${S.renderer?.lines.length||0}</span></div><div class="metric"><span>Cross projection</span><span>${c.cross_projection_connections||0}</span></div>`}
+function fit(redraw=true){let max=900;for(const [id,state] of Object.entries(S.objectState)){const p=state.transform.position,s=state.transform.scale;max=Math.max(max,Math.abs(p.x)+1000*Math.max(s.x,s.y,s.z),Math.abs(p.y)+1000*Math.max(s.x,s.y,s.z),Math.abs(p.z)+1000*Math.max(s.x,s.y,s.z))}S.baseDistance=Math.max(1200,max*1.5);S.distance=S.baseDistance;syncView();if(redraw)draw()}
+function resetCamera(){S.rotX=-16*Math.PI/180;S.rotY=26*Math.PI/180;S.fov=60;S.distance=S.baseDistance||3600;syncView();draw()}
+function syncView(){$('#yaw').value=Math.round(S.rotY*180/Math.PI);$('#pitch').value=Math.round(S.rotX*180/Math.PI);$('#fov').value=S.fov;$('#distance').value=Math.min(Number($('#distance').max),S.distance);$('#zoom').textContent=Math.round(S.baseDistance/Math.max(1,S.distance)*100)+'%';drawAxisGizmo()}
+function draw(){S.renderer?.draw();drawAxisGizmo()}
+function drawAxisGizmo(){const c=$('#axisGizmo'),ctx=c.getContext('2d'),cx=64,cy=69,L=40;ctx.clearRect(0,0,128,128);const crx=Math.cos(S.rotX),srx=Math.sin(S.rotX),cry=Math.cos(S.rotY),sry=Math.sin(S.rotY);function rot(v){let x=v[0]*cry+v[2]*sry,z=-v[0]*sry+v[2]*cry,y=v[1];return[x,y*crx-z*srx]}function ar(v,col,l){const r=rot(v),ex=cx+r[0]*L,ey=cy-r[1]*L,a=Math.atan2(ey-cy,ex-cx);ctx.strokeStyle=col;ctx.fillStyle=col;ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(ex,ey);ctx.stroke();ctx.beginPath();ctx.moveTo(ex,ey);ctx.lineTo(ex-8*Math.cos(a-.4),ey-8*Math.sin(a-.4));ctx.lineTo(ex-8*Math.cos(a+.4),ey-8*Math.sin(a+.4));ctx.fill();ctx.font='bold 13px monospace';ctx.fillText(l,ex+4,ey)}ar([1,0,0],'#ff3b30','X');ar([0,1,0],'#32d74b','Y');ar([0,0,1],'#087cff','Z')}
+function showError(e){console.error(e);setStatus('error',true);$('#error').innerHTML=`<pre>${esc(e?.stack||e?.message||String(e))}</pre>`}
+
+async function init(){
+  try {
+    setStatus('loading');
+    const branches=await getJSON('/api/branches');
+    $('#branch').innerHTML=(branches.branches||[]).map(b=>`<option value="${esc(b.name)}">${esc(b.name)}</option>`).join('');
+    if((branches.branches||[]).some(b=>b.name==='main'))$('#branch').value='main';
+    S.catalog=await getJSON(`/api/projection-catalog?branch=${encodeURIComponent($('#branch').value||'main')}`);
+    S.instances=[newInstance()];
+    S.renderer=new Renderer($('#gl'));
+    bindStatic(); renderInstances(); await loadScene();
+  } catch(e){showError(e)}
+}
+
+function bindStatic(){
+  $('#addInstance').onclick=()=>{S.instances.push(newInstance());renderInstances();scheduleSceneReload(0)};
+  $('#reload').onclick=loadScene;
+  $('#branch').onchange=async()=>{try{S.catalog=await getJSON(`/api/projection-catalog?branch=${encodeURIComponent($('#branch').value)}`);for(const i of S.instances){if(!(S.catalog.styles||[]).some(x=>x.id===i.projection_style))i.projection_style=S.catalog.styles?.[0]?.id||'atlas_2d';if(!(S.catalog.topics||[]).some(x=>x.id===i.root_topic))i.root_topic='all'}renderInstances();await loadScene()}catch(e){showError(e)}};
+  $('#fit').onclick=fit; $('#resetCamera').onclick=resetCamera;
+  $('#yaw').oninput=e=>{S.rotY=Number(e.target.value)*Math.PI/180;draw()};
+  $('#pitch').oninput=e=>{S.rotX=Number(e.target.value)*Math.PI/180;draw()};
+  $('#fov').oninput=e=>{S.fov=Number(e.target.value);draw()};
+  $('#distance').oninput=e=>{S.distance=Number(e.target.value);$('#zoom').textContent=Math.round(S.baseDistance/Math.max(1,S.distance)*100)+'%';draw()};
+  $('#nodeLimit').onchange=e=>{S.limits.nodes=Math.max(1,Math.min(500000,Number(e.target.value)||1));rebuildRenderer()};
+  $('#connectionLimit').onchange=e=>{S.limits.connections=Math.max(0,Math.min(500000,Number(e.target.value)||0));rebuildRenderer()};
+  $('#labelLimit').onchange=e=>{S.limits.labels=Math.max(0,Math.min(100000,Number(e.target.value)||0));rebuildRenderer()};
+  window.onresize=draw;
+  const c=$('#gl');
+  c.onwheel=e=>{e.preventDefault();S.distance=Math.max(120,Math.min(50000,S.distance*Math.exp(e.deltaY*.001)));syncView();draw()};
+  c.onpointerdown=e=>{if(e.button!==0)return;S.drag={x:e.clientX,y:e.clientY,rx:S.rotX,ry:S.rotY};c.setPointerCapture(e.pointerId)};
+  c.onpointermove=e=>{if(!S.drag)return;S.rotY=S.drag.ry+(e.clientX-S.drag.x)*.006;S.rotX=Math.max(-1.5,Math.min(1.5,S.drag.rx-(e.clientY-S.drag.y)*.006));syncView();draw()};
+  c.onpointerup=e=>{S.drag=null;try{c.releasePointerCapture(e.pointerId)}catch{}};
+}
+
+init();
