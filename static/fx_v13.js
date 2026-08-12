@@ -64,11 +64,24 @@
     for(const g of p.groups||[]){
       if(g.y!==undefined&&p.kind==='layers')h+=`<div class="plane3d fx-plane" style="width:1200px;height:800px;transform:translate3d(-600px,${g.y-400}px,-400px) rotateX(90deg)"></div>`;
     }
+
+    /*
+      Nodes are true cuboids. Their visible front face sits at local
+      +extrusion/2 on Z, and parent node_scale scales that depth as well.
+      Edges therefore must use the same front-plane anchor instead of the
+      semantic node centre. Otherwise camera pitch projects the Z difference
+      into a visible screen-Y offset between an edge and the node it belongs to.
+    */
+    const edgeAnchorZ=(Math.max(0,Number(extrusion)||0)*Math.max(0,Number(nodeScale)||0))/2;
+
     for(const e of p.edges||[]){
       const a=pos.get(String(e.source)),b=pos.get(String(e.target));if(!a||!b)continue;
-      const dx=b.x-a.x,dy=b.y-a.y,dz=b.z-a.z,len=Math.sqrt(dx*dx+dy*dy+dz*dz),yaw=Math.atan2(dz,dx)*180/Math.PI,pitch=-Math.atan2(dy,Math.sqrt(dx*dx+dz*dz))*180/Math.PI;
+      const ax=Number(a.x)||0,ay=Number(a.y)||0,az=(Number(a.z)||0)+edgeAnchorZ;
+      const bx=Number(b.x)||0,by=Number(b.y)||0,bz=(Number(b.z)||0)+edgeAnchorZ;
+      const dx=bx-ax,dy=by-ay,dz=bz-az;
+      const len=Math.sqrt(dx*dx+dy*dy+dz*dz),yaw=Math.atan2(dz,dx)*180/Math.PI,pitch=-Math.atan2(dy,Math.sqrt(dx*dx+dz*dz))*180/Math.PI;
       const dim=esc(e.dimension||'');
-      h+=`<div class="line3d fx-line ${dim}" style="--edge-color:${edgeColor(e.dimension)};--edge-glow:${edgeGlow};opacity:${op};width:${len}px;transform:translate3d(${a.x}px,${a.y}px,${a.z}px) rotateY(${-yaw}deg) rotateZ(${pitch}deg)"></div>`;
+      h+=`<div class="line3d fx-line ${dim}" style="--edge-color:${edgeColor(e.dimension)};--edge-glow:${edgeGlow};opacity:${op};width:${len}px;transform:translate3d(${ax}px,${ay}px,${az}px) rotateY(${-yaw}deg) rotateZ(${pitch}deg)"></div>`;
     }
     for(const n of nodes){
       const sel=S.selected===n.id?' selected':'';
