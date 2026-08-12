@@ -32,6 +32,9 @@ COMMON_3D = [
     _slider("label_scale", "Label size", 0.65, 1.60, 0.05, 1.0),
     _slider("edge_opacity", "Edge opacity", 0.00, 1.00, 0.05, 0.22),
     _slider("perspective", "Perspective", 500, 2200, 50, 1100),
+    _slider("glow", "Glow", 0.00, 1.50, 0.05, 0.65),
+    _slider("extrusion", "Extrusion", 0, 64, 2, 28),
+    _slider("edge_glow", "Edge glow", 0.00, 1.50, 0.05, 0.45),
 ]
 
 
@@ -122,6 +125,20 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         },
     },
 }
+
+# Additive FX presets apply to every 3D projection. Missing layout values fall
+# back to the projection's declared defaults, so these do not change semantics.
+for _projection_id, _schema in SCHEMAS.items():
+    if not _projection_id.endswith("_3d"):
+        continue
+    _schema["presets"].setdefault(
+        "Neon Showcase",
+        {"glow": 1.05, "extrusion": 38, "edge_glow": 0.80, "edge_opacity": 0.30, "perspective": 1050},
+    )
+    _schema["presets"].setdefault(
+        "Subtle Spatial",
+        {"glow": 0.30, "extrusion": 20, "edge_glow": 0.18, "edge_opacity": 0.18, "perspective": 1250},
+    )
 
 
 def schema_for(projection_id: str) -> dict[str, Any]:
@@ -235,6 +252,9 @@ def apply_controls(projection: dict[str, Any], supplied: dict[str, Any] | None =
         result["style"]["label_scale"] = values.get("label_scale", 1.0)
         result["style"]["edge_opacity"] = values.get("edge_opacity", 0.22)
         result["style"]["perspective"] = values.get("perspective", 1100)
+        result["style"]["glow"] = values.get("glow", 0.65)
+        result["style"]["extrusion"] = values.get("extrusion", 28)
+        result["style"]["edge_glow"] = values.get("edge_glow", 0.45)
         return result
 
     return result
