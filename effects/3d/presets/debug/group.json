@@ -1,0 +1,21 @@
+{
+  "id": "debug",
+  "title": "Debug",
+  "type": "structureprojector_3d_effect_group",
+  "effects": [
+    "3d.core.scale",
+    "3d.geometry.extrusion",
+    "3d.material.emissive",
+    "3d.edges.emissive",
+    "3d.camera.perspective"
+  ],
+  "values": {
+    "glow": 0.12,
+    "extrusion": 28,
+    "edge_glow": 0.05,
+    "edge_opacity": 0.75,
+    "perspective": 1600,
+    "show_axes": true,
+    "show_bounds": true
+  }
+}
