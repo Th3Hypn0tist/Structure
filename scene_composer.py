@@ -15,6 +15,32 @@ def _default_offset(index: int, spacing: float = 1800.0) -> dict[str, Any]:
     }
 
 
+def _recenter_projection(projection: dict[str, Any]) -> dict[str, Any]:
+    """Center projection coordinates around SceneObject local origin.
+
+    This changes only derived projection coordinates. Source identities,
+    topology and semantics remain untouched.
+    """
+    out = deepcopy(projection)
+    nodes = out.get("nodes", [])
+    if not nodes:
+        out["local_origin"] = {"x": 0.0, "y": 0.0, "z": 0.0}
+        return out
+
+    xs = [float(node.get("x", 0) or 0) for node in nodes]
+    ys = [float(node.get("y", 0) or 0) for node in nodes]
+    zs = [float(node.get("z", 0) or 0) for node in nodes]
+    cx = (min(xs) + max(xs)) / 2.0
+    cy = (min(ys) + max(ys)) / 2.0
+    cz = (min(zs) + max(zs)) / 2.0
+    for node in nodes:
+        node["x"] = float(node.get("x", 0) or 0) - cx
+        node["y"] = float(node.get("y", 0) or 0) - cy
+        node["z"] = float(node.get("z", 0) or 0) - cz
+    out["local_origin"] = {"x": cx, "y": cy, "z": cz}
+    return out
+
+
 def _append_cross_projection_connections(
     scene: dict[str, Any],
     source_tree: dict[str, Any],
@@ -122,24 +148,14 @@ def compose_projection_instances(
     include_internal_connections: bool = True,
     include_cross_projection_connections: bool = True,
 ) -> dict[str, Any]:
-    """Compose named projection instances.
-
-    Each item contains:
-      instance: normalized instance specification
-      projection: projection generated from the instance-filtered graph
-      hierarchy_depths: local hierarchy depths for that instance
-      filter_metadata: explicit root/dependency filter metadata
-
-    Multiple items may use the same projection style. SceneObject identity comes
-    from the instance id, not from the projection style id.
-    """
+    """Compose named projection instances with independent style/root identity."""
     scene = new_scene(source_tree=source_tree)
     nodes_by_object: dict[str, set[str]] = {}
     connection_primitive_ref, _definition = resolve_primitive(connection_primitive, connection=True)
 
     for index, item in enumerate(items):
         instance = item["instance"]
-        projection = item["projection"]
+        projection = _recenter_projection(item["projection"])
         hierarchy_depths = item.get("hierarchy_depths", {})
         filter_metadata = deepcopy(item.get("filter_metadata", {}))
         instance_id = str(instance["id"])
@@ -160,6 +176,7 @@ def compose_projection_instances(
         obj["root_topic"] = instance["root_topic"]
         obj["dependency_depth"] = instance["dependency_depth"]
         obj["filter"] = filter_metadata
+        obj["local_origin"] = deepcopy(projection.get("local_origin", {}))
         obj["style_defaults"] = {
             "even": "#087CFF",
             "odd": "#AAB2C2",
