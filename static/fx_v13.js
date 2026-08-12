@@ -1,4 +1,4 @@
-/* StructureProjector 3D FX renderer override — presentation only. */
+/* StructureProjector universal 3D effect renderer — presentation only. */
 (function(){
   function fxStatusColor(status){
     const s=String(status||'').toLowerCase();
@@ -15,28 +15,29 @@
     return '#AAB2C2';
   }
 
-  const FX_MODES={
-    off:{glow:0,extrusion:0,edge_glow:0},
-    subtle:{glow:.35,extrusion:40,edge_glow:.22},
-    neon:{glow:1.05,extrusion:82,edge_glow:.85}
-  };
+  function effectGroups(){
+    return S.data?.projection?.effect_library?.groups||[];
+  }
 
-  function currentFxMode(){
-    const p=S.data?.projection;
-    if(!p||p.dimension!=='3d')return null;
-    const v=S.params.get(S.view)||p.control_values||{};
-    const close=(a,b)=>Math.abs(Number(a||0)-Number(b||0))<.051;
-    for(const [name,m] of Object.entries(FX_MODES)){
-      if(close(v.glow,m.glow)&&close(v.extrusion,m.extrusion)&&close(v.edge_glow,m.edge_glow))return name;
+  function currentEffectGroup(){
+    const p=S.data?.projection;if(!p)return null;
+    const values=S.params.get(S.view)||p.control_values||{};
+    const close=(a,b)=>{
+      if(typeof b==='number')return Math.abs(Number(a??0)-Number(b))<.051;
+      return String(a??'')===String(b??'');
+    };
+    for(const group of effectGroups()){
+      const entries=Object.entries(group.values||{});
+      if(entries.length&&entries.every(([k,v])=>close(values[k],v)))return group.id;
     }
     return 'custom';
   }
 
-  function applyFxMode(name){
-    const p=S.data?.projection;
-    if(!p||p.dimension!=='3d'||!FX_MODES[name])return;
+  function applyEffectGroup(groupId){
+    const p=S.data?.projection;if(!p)return;
+    const group=effectGroups().find(g=>g.id===groupId);if(!group)return;
     const current={...(S.params.get(S.view)||p.control_values||{})};
-    Object.assign(current,FX_MODES[name]);
+    Object.assign(current,group.values||{});
     S.params.set(S.view,current);
     load({keepCamera:true});
   }
@@ -90,19 +91,16 @@
       originalRenderControls();
       const p=S.data?.projection;if(!p)return;
       const panel=$('#controls');if(!panel)return;
-      const extrusionInput=panel.querySelector('input[data-param="extrusion"]');
-      if(extrusionInput){
-        extrusionInput.max='120';
-        const local=S.params.get(S.view)||{};
-        if(local.extrusion!==undefined) extrusionInput.value=String(local.extrusion);
-      }
       const heading=panel.querySelector('h2');
       const row=document.createElement('div');
       row.className='preset-row sp-fx-mode';
-      const mode=currentFxMode();
-      row.innerHTML=`<label style="min-width:52px;color:var(--silver);font-size:12px">3D FX</label><select id="spFxMode" style="flex:1"><option value="off" ${mode==='off'?'selected':''}>Off</option><option value="subtle" ${mode==='subtle'?'selected':''}>Subtle</option><option value="neon" ${mode==='neon'?'selected':''}>Neon</option><option value="custom" ${mode==='custom'?'selected':''} disabled>Custom</option></select>`;
+      const current=currentEffectGroup();
+      const groups=effectGroups();
+      const options=groups.map(g=>`<option value="${esc(g.id)}" ${current===g.id?'selected':''}>${esc(g.title||g.id)}</option>`).join('');
+      row.innerHTML=`<label style="min-width:78px;color:var(--silver);font-size:12px">Effect Group</label><select id="spEffectGroup" style="flex:1">${options}<option value="custom" ${current==='custom'?'selected':''} disabled>Custom</option></select>`;
       if(heading&&heading.nextSibling)panel.insertBefore(row,heading.nextSibling);else panel.prepend(row);
-      row.querySelector('#spFxMode').onchange=e=>applyFxMode(e.target.value);
+      const selector=row.querySelector('#spEffectGroup');
+      if(selector)selector.onchange=e=>applyEffectGroup(e.target.value);
     };
   }
 })();
