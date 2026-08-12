@@ -28,15 +28,16 @@ from structureprojector import (
 from view_rules import ViewRuleError, binding_children, binding_tree
 
 BASE_DIR = os.path.dirname(__file__)
-SCENE_VIEWER_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v31.html')
-LEGACY_INDEX_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v2.html')
+SCENE_VIEWER_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v4.html')
+SCENE_VIEWER_JS = os.path.join(BASE_DIR, 'static', 'scene_viewer_v4.js')
+LEGACY_INDEX_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v31.html')
 
 ALL_CANONICAL_PROJECTIONS = {**CORE_PROJECTIONS, **EXTRA_PROJECTIONS}
 
 
-def _html_payload(path: str) -> bytes:
-    with open(path, 'r', encoding='utf-8') as handle:
-        return handle.read().encode('utf-8')
+def _file_payload(path: str) -> bytes:
+    with open(path, 'rb') as handle:
+        return handle.read()
 
 
 def _build_canonical_projection(graph: dict, projection_id: str) -> dict:
@@ -148,7 +149,7 @@ def _compose_projection_instance_result(snapshot, specs: list[dict]) -> dict:
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.22.0'
+    server_version = 'StructureProjector/0.22.1'
 
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode('utf-8')
@@ -158,10 +159,10 @@ class Handler(BaseHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _write_html(self, path: str) -> None:
-        body = _html_payload(path)
+    def _write_file(self, path: str, content_type: str) -> None:
+        body = _file_payload(path)
         self.send_response(200)
-        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Type', content_type)
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -189,9 +190,11 @@ class Handler(BaseHandler):
         query = urllib.parse.parse_qs(parsed.query)
         try:
             if path == '/':
-                return self._write_html(SCENE_VIEWER_HTML)
+                return self._write_file(SCENE_VIEWER_HTML, 'text/html; charset=utf-8')
+            if path == '/static/scene_viewer_v4.js':
+                return self._write_file(SCENE_VIEWER_JS, 'application/javascript; charset=utf-8')
             if path == '/legacy':
-                return self._write_html(LEGACY_INDEX_HTML)
+                return self._write_file(LEGACY_INDEX_HTML, 'text/html; charset=utf-8')
             if path == '/api/health':
                 return self._write_json({
                     'ok': True,
@@ -199,7 +202,7 @@ class Handler(BaseHandler):
                     'input_model': 'StructureTree/1.0',
                     'scene_model': 'Scene/1.1',
                     'projection_instances': True,
-                    'renderer': 'webgl2_instanced_scene_v3.1',
+                    'renderer': 'webgl2_projection_instances_v4',
                     'effects': 'none',
                 })
             if path == '/api/primitives':
