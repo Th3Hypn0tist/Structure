@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections import defaultdict, deque
 from typing import Any
 
@@ -48,27 +49,20 @@ def _public(node: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_dependency_flow_3d(graph: dict[str, Any]) -> dict[str, Any]:
-    """Dependency flow with exact horizontal semantic depth planes.
+    """Dependency flow with semantic depth on the vertical Y axis.
 
     Coordinate contract:
       Y = dependency depth, shallow -> deep from top to bottom
-      X = all nodes belonging to one dependency depth
-      Z = 0 for the semantic layout
+      X = horizontal distribution inside one depth level
+      Z = secondary row depth only inside one level
 
-    Node extrusion still gives every rendered object physical Z depth, but the
-    layout itself never uses Z to wrap a dependency level. This guarantees that
-    all identities at one dependency depth remain visually aligned on one Y
-    plane regardless of camera pitch.
+    The layout uses only explicit dependency edges. No semantic ordering is
+    inferred from names, paths or labels.
     """
     nodes = sorted(graph.get("nodes", []), key=lambda n: str(n.get("id", "")))
     edges = sorted(
         graph.get("edges", []),
-        key=lambda e: (
-            str(e.get("dimension", "")),
-            str(e.get("source", "")),
-            str(e.get("target", "")),
-            str(e.get("id", "")),
-        ),
+        key=lambda e: (str(e.get("dimension", "")), str(e.get("source", "")), str(e.get("target", "")), str(e.get("id", ""))),
     )
     depths = _dependency_depths(nodes, edges)
     by_depth: dict[int, list[dict[str, Any]]] = defaultdict(list)
@@ -77,18 +71,19 @@ def build_dependency_flow_3d(graph: dict[str, Any]) -> dict[str, Any]:
 
     max_depth = max(by_depth, default=0)
     layer_gap = 260.0
-    x_spacing = 185.0
+    x_spacing = 190.0
+    z_spacing = 145.0
     projected: list[dict[str, Any]] = []
     groups: list[dict[str, Any]] = []
 
-    min_x = min_y = float("inf")
-    max_x = max_y = float("-inf")
+    min_x = min_y = min_z = float("inf")
+    max_x = max_y = max_z = float("-inf")
 
     for depth in sorted(by_depth):
         members = sorted(by_depth[depth], key=lambda n: str(n.get("id", "")))
+        cols = max(1, min(9, math.ceil(math.sqrt(len(members) * 1.8))))
+        rows = max(1, math.ceil(len(members) / cols))
         y = (depth - max_depth / 2.0) * layer_gap
-        width = max(0.0, (len(members) - 1) * x_spacing)
-        start_x = -width / 2.0
         groups.append({
             "id": str(depth),
             "title": f"dependency depth {depth}",
@@ -98,36 +93,33 @@ def build_dependency_flow_3d(graph: dict[str, Any]) -> dict[str, Any]:
             "count": len(members),
         })
         for i, node in enumerate(members):
-            x = start_x + i * x_spacing
+            row, col = divmod(i, cols)
+            x = (col - (cols - 1) / 2.0) * x_spacing
+            z = (row - (rows - 1) / 2.0) * z_spacing
             p = _public(node)
-            p.update({"x": x, "y": y, "z": 0.0, "depth": depth})
+            p.update({"x": x, "y": y, "z": z, "depth": depth})
             projected.append(p)
             min_x, max_x = min(min_x, x), max(max_x, x)
             min_y, max_y = min(min_y, y), max(max_y, y)
+            min_z, max_z = min(min_z, z), max(max_z, z)
 
     dependency_edges = [e for e in edges if e.get("dimension") == "dependencies"]
 
     if not projected:
         extent = 700.0
-        bounds = {
-            "min_x": 0.0,
-            "max_x": 0.0,
-            "min_y": 0.0,
-            "max_y": 0.0,
-            "min_z": 0.0,
-            "max_z": 0.0,
-        }
+        bounds = {"min_x": 0.0, "max_x": 0.0, "min_y": 0.0, "max_y": 0.0, "min_z": 0.0, "max_z": 0.0}
     else:
         span_x = max_x - min_x
         span_y = max_y - min_y
-        extent = max(700.0, span_x * 0.56, span_y * 0.82)
+        span_z = max_z - min_z
+        extent = max(700.0, span_x * 0.62, span_y * 0.78, span_z * 0.82)
         bounds = {
             "min_x": min_x,
             "max_x": max_x,
             "min_y": min_y,
             "max_y": max_y,
-            "min_z": 0.0,
-            "max_z": 0.0,
+            "min_z": min_z,
+            "max_z": max_z,
         }
 
     return {
@@ -142,10 +134,10 @@ def build_dependency_flow_3d(graph: dict[str, Any]) -> dict[str, Any]:
         "groups": groups,
         "extent": extent,
         "bounds3d": bounds,
-        "camera_hint": {"rot_x": -8, "rot_y": 16},
+        "camera_hint": {"rot_x": -12, "rot_y": 18},
         "coordinate_contract": {
-            "x": "all nodes within one dependency depth, centered horizontally",
+            "x": "within-layer horizontal distribution",
             "y": "dependency depth",
-            "z": "zero for layout; physical depth comes only from node extrusion",
+            "z": "within-layer secondary row depth",
         },
     }
