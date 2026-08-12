@@ -26,7 +26,8 @@ from structureprojector import (
 from view_rules import MAX_BINDING_DEPTH, ViewRuleError, binding_children, binding_tree
 
 BASE_DIR = os.path.dirname(__file__)
-INDEX_HTML = os.path.join(BASE_DIR, 'static', 'index_v12.html')
+SCENE_VIEWER_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v1.html')
+LEGACY_INDEX_HTML = os.path.join(BASE_DIR, 'static', 'index_v12.html')
 
 ALL_CANONICAL_PROJECTIONS = {
     **{k: v for k, v in CORE_PROJECTIONS.items() if v.get('dimension') == '3d'},
@@ -34,8 +35,8 @@ ALL_CANONICAL_PROJECTIONS = {
 }
 
 
-def _index_payload() -> bytes:
-    with open(INDEX_HTML, 'r', encoding='utf-8') as handle:
+def _html_payload(path: str) -> bytes:
+    with open(path, 'r', encoding='utf-8') as handle:
         return handle.read().encode('utf-8')
 
 
@@ -89,13 +90,22 @@ def _decode_transforms(raw: str) -> dict:
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.18.0'
+    server_version = 'StructureProjector/0.19.0'
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         try:
             if parsed.path == '/':
-                payload = _index_payload()
+                payload = _html_payload(SCENE_VIEWER_HTML)
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.send_header('Content-Length', str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+
+            if parsed.path == '/legacy':
+                payload = _html_payload(LEGACY_INDEX_HTML)
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/html; charset=utf-8')
                 self.send_header('Content-Length', str(len(payload)))
@@ -292,8 +302,9 @@ class Handler(BaseHandler):
                 self._json(200, {
                     'ok': True,
                     'service': 'StructureProjector',
-                    'version': '0.18.0',
-                    'view_shell': 'nanoCMS',
+                    'version': '0.19.0',
+                    'view_shell': 'Scene Viewer v1',
+                    'legacy_view': '/legacy',
                     'input_contract': 'StructureTree/1.0',
                     'scene_contract': 'Scene/1.0',
                     'input_modules': ['canonical', 'raw_json'],
@@ -304,12 +315,12 @@ class Handler(BaseHandler):
                     'scene_api': '/api/scene',
                     'canonical_projections': ALL_CANONICAL_PROJECTIONS,
                     'raw_json_projection': 'raw_json_space_3d',
-                    'effects': 'disabled',
+                    'effects': 'connection glow only in viewer baseline; no semantic effect layer',
                     'primitive_registry': 'primitives/registry.json',
                     'connection_channels': 'independent enabled/color style registry per Scene',
                     'cross_projection_rule': 'only explicit StructureTree links create cross-projection connections',
                     'canonical_projection_policy': 'project proven explicit structure even when validation is degraded',
-                    'renderers': ['baseline_web_renderer'],
+                    'renderers': ['scene_viewer_v1'],
                     'default_recursion_depth': 1,
                     'max_recursion_depth': MAX_BINDING_DEPTH,
                     'source_adapter': 'cached immutable commit snapshots',
@@ -327,12 +338,12 @@ class Handler(BaseHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer((APP_HOST, APP_PORT), Handler)
-    print(f'StructureProjector 0.18.0: http://{APP_HOST}:{APP_PORT}')
+    print(f'StructureProjector 0.19.0: http://{APP_HOST}:{APP_PORT}')
     print(f'Source: {SOURCE_REPO}')
     print('Input: Canonical/RawJSON -> StructureTree')
     print('Projection: StructureTree -> one or more SceneObjects -> Scene')
-    print('Viewer: reads Scene; does not own source structure')
-    print('Effects: disabled until Scene/primitive baseline is locked')
+    print('Viewer: Scene Viewer v1 reads Scene only')
+    print('Legacy viewer: /legacy')
     try:
         server.serve_forever()
     except KeyboardInterrupt:
