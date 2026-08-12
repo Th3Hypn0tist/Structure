@@ -30,7 +30,6 @@ def _zero_transform() -> dict[str, Any]:
 
 
 def _hierarchy_depths(source_tree: dict[str, Any]) -> dict[str, int | None]:
-    """Resolve explicit parent_id depth only; never infer hierarchy from names/paths."""
     parents = {
         str(entry.get("id")): (str(entry.get("parent_id")) if entry.get("parent_id") is not None else None)
         for entry in source_tree.get("entries", [])
@@ -97,12 +96,6 @@ def projection_to_object(
     transform: dict[str, Any] | None = None,
     primitive: str = "box",
 ) -> dict[str, Any]:
-    """Convert one projection into one composable SceneObject.
-
-    SceneObject is the projection instance. Nodes are lightweight primitive
-    instances: they reference shared primitive geometry and carry only local
-    transform, geometry parameters, style and source properties.
-    """
     projection_id = str(projection.get("id") or "projection")
     entry_index = {str(e.get("id")): e for e in source_tree.get("entries", [])}
     hierarchy_depths = _hierarchy_depths(source_tree)
@@ -114,6 +107,8 @@ def projection_to_object(
         if not entry_id:
             continue
         entry = entry_index.get(entry_id, {})
+        metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+        provenance = entry.get("provenance") if isinstance(entry.get("provenance"), dict) else {}
         nodes.append({
             "id": entry_id,
             "source_ref": entry_id,
@@ -134,6 +129,8 @@ def projection_to_object(
                 "type": entry.get("type", projected.get("type")),
                 "status": entry.get("status", projected.get("status")),
                 "kind": entry.get("kind", projected.get("kind")),
+                "source_role": metadata.get("source_role"),
+                "source_path": provenance.get("path"),
                 "hierarchy_depth": hierarchy_depths.get(entry_id),
             },
             "bindings": [],
