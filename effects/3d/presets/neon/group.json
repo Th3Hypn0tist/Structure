@@ -1,0 +1,19 @@
+{
+  "id": "neon",
+  "title": "Neon",
+  "type": "structureprojector_3d_effect_group",
+  "effects": [
+    "3d.core.scale",
+    "3d.geometry.extrusion",
+    "3d.material.emissive",
+    "3d.edges.emissive",
+    "3d.camera.perspective"
+  ],
+  "values": {
+    "glow": 1.05,
+    "extrusion": 82,
+    "edge_glow": 0.8,
+    "edge_opacity": 0.3,
+    "perspective": 1050
+  }
+}
