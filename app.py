@@ -4,6 +4,7 @@ import os
 import urllib.parse
 from http.server import ThreadingHTTPServer
 
+from canonical_graph import build_graph
 from canonical_projections import PROJECTIONS, build_canonical_projection
 from master_map_renderer import build_master_map_projection
 from nanocms import projection, resolve_page, resolve_view
@@ -15,7 +16,6 @@ from structureprojector import (
     SOURCE_REPO,
     Handler as BaseHandler,
     ProjectorError,
-    build_graph,
 )
 from view_rules import MAX_BINDING_DEPTH, ViewRuleError, binding_children, binding_tree
 
