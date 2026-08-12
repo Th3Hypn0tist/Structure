@@ -1,17 +1,73 @@
 {
   "format": "STRUCTUREPROJECTOR_PRIMITIVE_REGISTRY",
-  "version": "1.0",
+  "version": "1.1",
   "fallback_node": "box",
   "fallback_connection": "line",
   "primitives": {
-    "box": {"kind": "solid"},
-    "sphere": {"kind": "solid"},
-    "cylinder": {"kind": "solid"},
-    "cone": {"kind": "solid"},
-    "plane": {"kind": "surface"},
-    "torus": {"kind": "solid"},
-    "tube": {"kind": "connection"},
-    "line": {"kind": "connection"},
-    "point": {"kind": "point"}
+    "box": {
+      "kind": "solid",
+      "render_mode": "instanced_mesh",
+      "geometry": {
+        "shape": "unit_box",
+        "dimensions": [1.0, 1.0, 1.0]
+      },
+      "anchors": {
+        "center": [0.0, 0.0, 0.0],
+        "front": [0.0, 0.0, 0.5],
+        "back": [0.0, 0.0, -0.5],
+        "left": [-0.5, 0.0, 0.0],
+        "right": [0.5, 0.0, 0.0],
+        "top": [0.0, -0.5, 0.0],
+        "bottom": [0.0, 0.5, 0.0]
+      }
+    },
+    "sphere": {
+      "kind": "solid",
+      "render_mode": "instanced_mesh",
+      "geometry": {"shape": "unit_sphere", "radius": 0.5},
+      "anchors": {"center": [0.0, 0.0, 0.0]}
+    },
+    "cylinder": {
+      "kind": "solid",
+      "render_mode": "instanced_mesh",
+      "geometry": {"shape": "unit_cylinder", "radius": 0.5, "height": 1.0},
+      "anchors": {"center": [0.0, 0.0, 0.0]}
+    },
+    "cone": {
+      "kind": "solid",
+      "render_mode": "instanced_mesh",
+      "geometry": {"shape": "unit_cone", "radius": 0.5, "height": 1.0},
+      "anchors": {"center": [0.0, 0.0, 0.0]}
+    },
+    "plane": {
+      "kind": "surface",
+      "render_mode": "instanced_mesh",
+      "geometry": {"shape": "unit_plane", "dimensions": [1.0, 1.0]},
+      "anchors": {"center": [0.0, 0.0, 0.0]}
+    },
+    "torus": {
+      "kind": "solid",
+      "render_mode": "instanced_mesh",
+      "geometry": {"shape": "unit_torus", "major_radius": 0.375, "minor_radius": 0.125},
+      "anchors": {"center": [0.0, 0.0, 0.0]}
+    },
+    "tube": {
+      "kind": "connection",
+      "render_mode": "instanced_connection",
+      "geometry": {"shape": "unit_tube", "radius": 0.5, "length": 1.0},
+      "anchors": {"start": [0.0, 0.0, 0.0], "end": [1.0, 0.0, 0.0]}
+    },
+    "line": {
+      "kind": "connection",
+      "render_mode": "instanced_connection",
+      "geometry": {"shape": "unit_line", "length": 1.0},
+      "anchors": {"start": [0.0, 0.0, 0.0], "end": [1.0, 0.0, 0.0]}
+    },
+    "point": {
+      "kind": "point",
+      "render_mode": "instanced_point",
+      "geometry": {"shape": "unit_point"},
+      "anchors": {"center": [0.0, 0.0, 0.0]}
+    }
   }
 }
