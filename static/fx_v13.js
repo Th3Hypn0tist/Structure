@@ -17,7 +17,6 @@
 
   function effectGroups(){return S.data?.projection?.effect_library?.groups||[];}
   function activeValues(){return S.params.get(S.view)||S.data?.projection?.control_values||{};}
-  function edgeRenderY(y){return -(Number(y)||0);}
 
   function currentEffectGroup(){
     const values=activeValues();
@@ -67,21 +66,18 @@
     }
 
     /*
-      Node/group projection coordinates are rendered exactly as supplied.
-      Only edge Y is mirrored because the line orientation path uses the
-      opposite Y convention from the node transforms in the current CSS-3D
-      renderer. This correction belongs here and nowhere in projection layout.
-
-      Cuboid edges are also anchored to the visible front face on Z.
+      Edge endpoints use exactly the same X/Y projection coordinates as nodes.
+      The line is then tilted by +atan2(dY, horizontalDistance), which matches
+      CSS screen-space Y. Only Z is offset to the cuboid's visible front face.
     */
     const edgeAnchorZ=(Math.max(0,Number(extrusion)||0)*Math.max(0,Number(nodeScale)||0))/2;
 
     for(const e of p.edges||[]){
       const a=pos.get(String(e.source)),b=pos.get(String(e.target));if(!a||!b)continue;
-      const ax=Number(a.x)||0,ay=edgeRenderY(a.y),az=(Number(a.z)||0)+edgeAnchorZ;
-      const bx=Number(b.x)||0,by=edgeRenderY(b.y),bz=(Number(b.z)||0)+edgeAnchorZ;
+      const ax=Number(a.x)||0,ay=Number(a.y)||0,az=(Number(a.z)||0)+edgeAnchorZ;
+      const bx=Number(b.x)||0,by=Number(b.y)||0,bz=(Number(b.z)||0)+edgeAnchorZ;
       const dx=bx-ax,dy=by-ay,dz=bz-az;
-      const len=Math.sqrt(dx*dx+dy*dy+dz*dz),yaw=Math.atan2(dz,dx)*180/Math.PI,pitch=-Math.atan2(dy,Math.sqrt(dx*dx+dz*dz))*180/Math.PI;
+      const len=Math.sqrt(dx*dx+dy*dy+dz*dz),yaw=Math.atan2(dz,dx)*180/Math.PI,pitch=Math.atan2(dy,Math.sqrt(dx*dx+dz*dz))*180/Math.PI;
       const dim=esc(e.dimension||'');
       h+=`<div class="line3d fx-line ${dim}" style="--edge-color:${edgeColor(e.dimension)};--edge-glow:${edgeGlow};opacity:${op};width:${len}px;transform:translate3d(${ax}px,${ay}px,${az}px) rotateY(${-yaw}deg) rotateZ(${pitch}deg)"></div>`;
     }
