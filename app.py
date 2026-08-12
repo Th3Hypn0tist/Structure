@@ -8,14 +8,9 @@ from http.server import ThreadingHTTPServer
 from canonical_graph import build_graph
 from canonical_projections import PROJECTIONS as CORE_PROJECTIONS, build_canonical_projection
 from canonical_projections_extra3d import PROJECTIONS as EXTRA_PROJECTIONS, build_projection as build_extra_projection
+from dependency_flow_projection import build_dependency_flow_3d
+from effects3d import apply_effects, controls as effect_controls, defaults as effect_defaults, manifest as effect_manifest, presets as effect_presets
 from nanocms import projection, resolve_page, resolve_view
-from projection_controls import apply_controls, defaults_for, schema_for
-from projection_controls_extra3d import (
-    apply_controls as apply_extra_controls,
-    defaults_for as extra_defaults_for,
-    schema_for as extra_schema_for,
-    supports as supports_extra_controls,
-)
 from raw_json_mapper import build_raw_json_graph
 from raw_json_projection import build_raw_json_space_3d
 from source_adapter import list_branches, load_snapshot
@@ -52,37 +47,33 @@ def _index_payload() -> bytes:
 
 
 def _build_canonical_3d(graph: dict, projection_id: str) -> dict:
+    if projection_id == 'dependency_flow_3d':
+        return build_dependency_flow_3d(graph)
     if projection_id in EXTRA_PROJECTIONS:
         return build_extra_projection(graph, projection_id)
     return build_canonical_projection(graph, projection_id)
 
 
-def _apply_projection_controls(base_projection: dict, projection_id: str, supplied_params: dict[str, object], result: dict) -> None:
+def _apply_universal_effects(base_projection: dict, supplied_params: dict[str, object], result: dict) -> None:
     try:
-        if supports_extra_controls(projection_id):
-            result['projection'] = apply_extra_controls(base_projection, supplied_params)
-        else:
-            result['projection'] = apply_controls(base_projection, supplied_params)
+        result['projection'] = apply_effects(base_projection, supplied_params)
     except Exception as exc:
+        # Effects are presentation-only. A library/control failure must never
+        # invalidate a proven graph or base 3D projection.
         result['projection'] = base_projection
-        if supports_extra_controls(projection_id):
-            schema = extra_schema_for(projection_id)
-            defaults = extra_defaults_for(projection_id)
-        else:
-            schema = schema_for(projection_id)
-            defaults = defaults_for(projection_id)
-        result['projection']['control_schema'] = schema.get('controls', [])
-        result['projection']['control_schema_version'] = schema.get('version', 1)
-        result['projection']['control_values'] = defaults
-        result['projection']['builtin_presets'] = schema.get('presets', {})
+        result['projection']['control_schema'] = effect_controls()
+        result['projection']['control_schema_version'] = 1
+        result['projection']['control_values'] = effect_defaults()
+        result['projection']['builtin_presets'] = effect_presets()
+        result['projection']['effect_library'] = effect_manifest()
         result.setdefault('warnings', []).append({
-            'id': 'SP_PROJECTION_CONTROLS_FALLBACK',
-            'message': f'Projection controls failed; projection rendered with base geometry: {exc}',
+            'id': 'SP_3D_EFFECT_LIBRARY_FALLBACK',
+            'message': f'Universal 3D effect library failed; base projection rendered without effect transforms: {exc}',
         })
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.15.0'
+    server_version = 'StructureProjector/0.16.0'
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
@@ -94,6 +85,10 @@ class Handler(BaseHandler):
                 self.send_header('Content-Length', str(len(payload)))
                 self.end_headers()
                 self.wfile.write(payload)
+                return
+
+            if parsed.path == '/api/effects/3d':
+                self._json(200, effect_manifest())
                 return
 
             if parsed.path == '/api/nanocms':
@@ -198,7 +193,7 @@ class Handler(BaseHandler):
                     if result.get('projectable') and placement.get('projection_id'):
                         projection_id = placement['projection_id']
                         base_projection = _build_canonical_3d(result['graph'], projection_id)
-                        _apply_projection_controls(base_projection, projection_id, supplied_params, result)
+                        _apply_universal_effects(base_projection, supplied_params, result)
                     if result.get('projectable') and not result.get('valid'):
                         result.setdefault('warnings', []).append({
                             'id': 'SP_CANONICAL_DEGRADED',
@@ -208,9 +203,8 @@ class Handler(BaseHandler):
                     result = build_raw_json_graph(snapshot, selected_path)
                     result['ruleset'] = 'RawJSON'
                     if result.get('valid'):
-                        projection_id = placement['projection_id']
                         base_projection = build_raw_json_space_3d(result['graph'])
-                        _apply_projection_controls(base_projection, projection_id, supplied_params, result)
+                        _apply_universal_effects(base_projection, supplied_params, result)
                 else:
                     self._json(500, {
                         'valid': False,
@@ -226,20 +220,26 @@ class Handler(BaseHandler):
                 return
 
             if parsed.path == '/api/health':
+                manifest = effect_manifest()
                 self._json(200, {
                     'ok': True,
                     'service': 'StructureProjector',
-                    'version': '0.15.0',
+                    'version': '0.16.0',
                     'view_shell': 'nanoCMS',
                     'projection_policy': '3d_only',
                     'rulesets': ['CanonicalContract', 'RawJSON'],
                     'canonical_contract_format': 'bootstrap-driven',
                     'canonical_projections': ALL_CANONICAL_PROJECTIONS,
                     'raw_json_projection': 'raw_json_space_3d',
-                    'projection_controls': 'presentation-only fail-soft controls + local browser presets',
+                    'effect_library': {
+                        'root': manifest.get('root'),
+                        'version': manifest.get('version'),
+                        'effect_count': len(manifest.get('effects', [])),
+                        'groups': [g.get('id') for g in manifest.get('groups', [])],
+                        'applies_to': 'all 3D projections from every mapper',
+                    },
                     'canonical_projection_policy': 'project proven explicit structure even when validation is degraded',
-                    'renderers': ['canonical_projection_3d+fx'],
-                    'fx_layer': 'isolated CSS 3D extrusion + emissive status edges + adjustable glow',
+                    'renderers': ['canonical_projection_3d+universal_effect_library'],
                     'default_recursion_depth': 1,
                     'max_recursion_depth': MAX_BINDING_DEPTH,
                     'source_adapter': 'cached immutable commit snapshots',
@@ -257,12 +257,11 @@ class Handler(BaseHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer((APP_HOST, APP_PORT), Handler)
-    print(f'StructureProjector 0.15.0: http://{APP_HOST}:{APP_PORT}')
+    print(f'StructureProjector 0.16.0: http://{APP_HOST}:{APP_PORT}')
     print(f'Source: {SOURCE_REPO}')
     print('Projection policy: 3D only')
-    print('Canonical projections: Atlas, Relation Web, Matrix, Lifecycle, Dependency Flow, Galaxy, Role Layers, Dependency Tower, Authority Space, Relation Orbits')
-    print('Raw JSON: JSON Space')
-    print('3D FX: extrusion + emissive glow + edge glow, presentation-only')
+    print('3D effects: universal effects/3d library shared by Canonical, Raw JSON and future mappers')
+    print('Effect groups: ' + ', '.join(sorted(effect_presets())))
     try:
         server.serve_forever()
     except KeyboardInterrupt:
