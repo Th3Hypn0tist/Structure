@@ -14,6 +14,33 @@
     if(dimension==='containment') return '#087CFF';
     return '#AAB2C2';
   }
+
+  const FX_MODES={
+    off:{glow:0,extrusion:0,edge_glow:0},
+    subtle:{glow:.30,extrusion:20,edge_glow:.18},
+    neon:{glow:1.05,extrusion:38,edge_glow:.80}
+  };
+
+  function currentFxMode(){
+    const p=S.data?.projection;
+    if(!p||p.dimension!=='3d')return null;
+    const v=S.params.get(S.view)||p.control_values||{};
+    const close=(a,b)=>Math.abs(Number(a||0)-Number(b||0))<.051;
+    for(const [name,m] of Object.entries(FX_MODES)){
+      if(close(v.glow,m.glow)&&close(v.extrusion,m.extrusion)&&close(v.edge_glow,m.edge_glow))return name;
+    }
+    return 'custom';
+  }
+
+  function applyFxMode(name){
+    const p=S.data?.projection;
+    if(!p||p.dimension!=='3d'||!FX_MODES[name])return;
+    const current={...(S.params.get(S.view)||p.control_values||{})};
+    Object.assign(current,FX_MODES[name]);
+    S.params.set(S.view,current);
+    load({keepCamera:true});
+  }
+
   window.__spOriginalRender3d = typeof render3d==='function' ? render3d : null;
   render3d=function(){
     const p=S.data?.projection;if(!p)return;
@@ -42,4 +69,22 @@
     scene.querySelectorAll('.node3d').forEach(el=>el.onclick=e=>{e.stopPropagation();const n=pos.get(el.dataset.id);if(n){S.selected=n.id;inspect(n);render3d()}});
     apply3d();
   };
+
+  const originalRenderControls=typeof renderControls==='function'?renderControls:null;
+  if(originalRenderControls){
+    renderControls=function(){
+      originalRenderControls();
+      const p=S.data?.projection;
+      if(!p||p.dimension!=='3d')return;
+      const panel=$('#controls');
+      if(!panel)return;
+      const mode=currentFxMode();
+      const row=document.createElement('div');
+      row.className='preset-row sp-fx-mode';
+      row.innerHTML=`<label style="min-width:52px;color:var(--silver);font-size:12px">3D FX</label><select id="spFxMode" style="flex:1"><option value="off" ${mode==='off'?'selected':''}>Off</option><option value="subtle" ${mode==='subtle'?'selected':''}>Subtle</option><option value="neon" ${mode==='neon'?'selected':''}>Neon</option><option value="custom" ${mode==='custom'?'selected':''} disabled>Custom</option></select>`;
+      const heading=panel.querySelector('h2');
+      if(heading&&heading.nextSibling)panel.insertBefore(row,heading.nextSibling);else panel.prepend(row);
+      row.querySelector('#spFxMode').onchange=e=>applyFxMode(e.target.value);
+    };
+  }
 })();
