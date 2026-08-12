@@ -9,7 +9,7 @@ from canonical_graph import build_graph
 from canonical_projections import PROJECTIONS, build_canonical_projection
 from master_map_renderer import build_master_map_projection
 from nanocms import projection, resolve_page, resolve_view
-from projection_controls import apply_controls
+from projection_controls import apply_controls, defaults_for, schema_for
 from raw_json_mapper import build_raw_json_graph
 from source_adapter import list_branches, load_snapshot
 from structureprojector import (
@@ -25,7 +25,7 @@ INDEX_HTML = os.path.join(os.path.dirname(__file__), 'static', 'index_v12.html')
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.12.0'
+    server_version = 'StructureProjector/0.12.1'
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
@@ -133,10 +133,24 @@ class Handler(BaseHandler):
                     result = build_graph(snapshot)
                     result['ruleset'] = 'CanonicalContract'
                     if result['valid'] and placement.get('projection_id'):
-                        base_projection = build_canonical_projection(
-                            result['graph'], placement['projection_id']
-                        )
-                        result['projection'] = apply_controls(base_projection, supplied_params)
+                        projection_id = placement['projection_id']
+                        base_projection = build_canonical_projection(result['graph'], projection_id)
+                        try:
+                            result['projection'] = apply_controls(base_projection, supplied_params)
+                        except Exception as exc:
+                            # Projection parameters are presentation state only.
+                            # A control/layout failure MUST NOT invalidate a proven
+                            # canonical source graph.
+                            result['projection'] = base_projection
+                            schema = schema_for(projection_id)
+                            result['projection']['control_schema'] = schema.get('controls', [])
+                            result['projection']['control_schema_version'] = schema.get('version', 1)
+                            result['projection']['control_values'] = defaults_for(projection_id)
+                            result['projection']['builtin_presets'] = schema.get('presets', {})
+                            result.setdefault('warnings', []).append({
+                                'id': 'SP_PROJECTION_CONTROLS_FALLBACK',
+                                'message': f'Projection controls failed; canonical projection rendered with base geometry: {exc}',
+                            })
                 elif ruleset == 'RawJSON':
                     result = build_raw_json_graph(snapshot, selected_path)
                     if result['valid'] and placement.get('renderer') == 'svg_master_map':
@@ -160,12 +174,12 @@ class Handler(BaseHandler):
                 self._json(200, {
                     'ok': True,
                     'service': 'StructureProjector',
-                    'version': '0.12.0',
+                    'version': '0.12.1',
                     'view_shell': 'nanoCMS',
                     'rulesets': ['CanonicalContract', 'RawJSON'],
                     'canonical_contract_format': 'bootstrap-driven',
                     'canonical_projections': PROJECTIONS,
-                    'projection_controls': 'declarative backend schema + bounded values + local browser presets',
+                    'projection_controls': 'presentation-only fail-soft controls + local browser presets',
                     'renderers': ['canonical_projection_2d', 'canonical_projection_3d', 'svg', 'svg_master_map'],
                     'viewport': 'cursor_anchored_wheel_zoom + drag_pan',
                     'default_recursion_depth': 1,
@@ -185,10 +199,10 @@ class Handler(BaseHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer((APP_HOST, APP_PORT), Handler)
-    print(f'StructureProjector 0.12.0: http://{APP_HOST}:{APP_PORT}')
+    print(f'StructureProjector 0.12.1: http://{APP_HOST}:{APP_PORT}')
     print(f'Source: {SOURCE_REPO}')
     print('Canonical projections: 5 x 2D + 5 x 3D')
-    print('Projection controls: declarative schemas + browser-local presets')
+    print('Projection controls: presentation-only; failures cannot invalidate canonical source')
     print('Viewport: cursor-anchored wheel zoom + drag pan')
     try:
         server.serve_forever()
