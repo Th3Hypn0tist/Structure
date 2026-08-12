@@ -1,0 +1,12 @@
+{
+  "id": "3d.edges.emissive",
+  "type": "structureprojector_3d_effect",
+  "group": "edges",
+  "version": 1,
+  "controls": [
+    {"id": "edge_opacity", "label": "Edge opacity", "type": "range", "min": 0, "max": 1, "step": 0.05, "default": 0.22},
+    {"id": "edge_glow", "label": "Edge glow", "type": "range", "min": 0, "max": 1.5, "step": 0.05, "default": 0.45}
+  ],
+  "style_targets": {"edge_opacity": "edge_opacity", "edge_glow": "edge_glow"},
+  "dimension_palette": {"containment": "#087CFF", "dependencies": "#FFD83D", "authority": "#FF176B", "ownership": "#FF176B", "relations": "#AAB2C2"}
+}
