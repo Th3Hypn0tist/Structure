@@ -12,8 +12,9 @@ from input_modules.canonical import read as read_canonical
 from input_modules.raw_json import read as read_raw_json
 from nanocms import projection, resolve_page, resolve_view
 from primitive_registry import load_registry
+from projection_instances import filter_for_instance, normalize_instance_spec, style_catalog, topic_catalog
 from raw_json_projection import build_raw_json_space_3d
-from scene_composer import compose_scene
+from scene_composer import compose_projection_instances, compose_scene
 from scene_contract import projection_to_scene, validate_scene
 from source_adapter import list_branches, load_snapshot
 from structure_tree import tree_to_graph
@@ -24,16 +25,13 @@ from structureprojector import (
     Handler as BaseHandler,
     ProjectorError,
 )
-from view_rules import MAX_BINDING_DEPTH, ViewRuleError, binding_children, binding_tree
+from view_rules import ViewRuleError, binding_children, binding_tree
 
 BASE_DIR = os.path.dirname(__file__)
 SCENE_VIEWER_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v31.html')
 LEGACY_INDEX_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v2.html')
 
-ALL_CANONICAL_PROJECTIONS = {
-    **{k: v for k, v in CORE_PROJECTIONS.items() if v.get('dimension') == '3d'},
-    **EXTRA_PROJECTIONS,
-}
+ALL_CANONICAL_PROJECTIONS = {**CORE_PROJECTIONS, **EXTRA_PROJECTIONS}
 
 
 def _html_payload(path: str) -> bytes:
@@ -110,8 +108,47 @@ def _compose_scene_result(snapshot, page: str, views: list[str]) -> dict:
     return result
 
 
+def _compose_projection_instance_result(snapshot, specs: list[dict]) -> dict:
+    tree = read_canonical(snapshot)
+    result = _result_from_tree(tree, 'canonical_contract')
+    full_graph = result['graph']
+    normalized = [normalize_instance_spec(spec, index) for index, spec in enumerate(specs)]
+    ids = [item['id'] for item in normalized]
+    if len(ids) != len(set(ids)):
+        raise ValueError('Projection instance ids must be unique')
+
+    items = []
+    for instance in normalized:
+        filtered_graph, hierarchy_depths, filter_metadata = filter_for_instance(
+            tree,
+            full_graph,
+            root_topic=instance['root_topic'],
+            dependency_depth=instance['dependency_depth'],
+        )
+        projection_body = _build_canonical_projection(filtered_graph, instance['projection_style'])
+        items.append({
+            'instance': instance,
+            'projection': projection_body,
+            'hierarchy_depths': hierarchy_depths,
+            'filter_metadata': filter_metadata,
+        })
+
+    scene = compose_projection_instances(items, tree)
+    result['scene'] = scene
+    result['instances'] = normalized
+    result['catalog'] = {
+        'styles': style_catalog(),
+        'topics': [{'id': 'all', 'label': 'all', 'entry_count': len(tree.get('entries', []))}] + topic_catalog(tree),
+    }
+    scene_errors = list(scene.get('validation_errors', []))
+    if scene_errors:
+        result.setdefault('errors', []).extend(scene_errors)
+        result['valid'] = False
+    return result
+
+
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.21.3'
+    server_version = 'StructureProjector/0.22.0'
 
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode('utf-8')
@@ -129,6 +166,23 @@ class Handler(BaseHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _read_json_body(self) -> dict:
+        length = int(self.headers.get('Content-Length', '0') or 0)
+        if length <= 0:
+            return {}
+        payload = self.rfile.read(length)
+        data = json.loads(payload.decode('utf-8'))
+        if not isinstance(data, dict):
+            raise ValueError('JSON request body must be an object')
+        return data
+
+    def _error(self, exc: Exception) -> None:
+        if isinstance(exc, ProjectorError):
+            payload = {'ok': False, 'error': exc.to_dict()}
+        else:
+            payload = {'ok': False, 'error': {'id': 'SP_REQUEST_FAILED', 'message': str(exc)}}
+        self._write_json(payload, 400)
+
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
@@ -144,6 +198,7 @@ class Handler(BaseHandler):
                     'server': self.server_version,
                     'input_model': 'StructureTree/1.0',
                     'scene_model': 'Scene/1.1',
+                    'projection_instances': True,
                     'renderer': 'webgl2_instanced_scene_v3.1',
                     'effects': 'none',
                 })
@@ -154,6 +209,16 @@ class Handler(BaseHandler):
             if path == '/api/nanocms':
                 page = query.get('page', ['canonical'])[0]
                 return self._write_json(projection(page))
+            if path == '/api/projection-catalog':
+                branch = query.get('branch', ['main'])[0]
+                snapshot = load_snapshot(branch=branch, repo=SOURCE_REPO)
+                tree = read_canonical(snapshot)
+                return self._write_json({
+                    'styles': style_catalog(),
+                    'topics': [{'id': 'all', 'label': 'all', 'entry_count': len(tree.get('entries', []))}] + topic_catalog(tree),
+                    'dependency_depth': {'min': 0, 'max': 32, 'default': 0},
+                    'defaults': {'even': '#087CFF', 'odd': '#AAB2C2', 'label_text': '#FFFFFF'},
+                })
             if path == '/api/scene':
                 branch = query.get('branch', ['main'])[0]
                 page = query.get('page', ['canonical'])[0]
@@ -188,12 +253,27 @@ class Handler(BaseHandler):
                 tree = read_canonical(snapshot)
                 return self._write_json(binding_children(tree_to_graph(tree), node_id=node_id))
             return super().do_GET()
-        except (ProjectorError, ViewRuleError, ValueError, KeyError, TypeError) as exc:
-            if isinstance(exc, ProjectorError):
-                payload = {'ok': False, 'error': exc.to_dict()}
-            else:
-                payload = {'ok': False, 'error': {'id': 'SP_REQUEST_FAILED', 'message': str(exc)}}
-            return self._write_json(payload, 400)
+        except (ProjectorError, ViewRuleError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            return self._error(exc)
+
+    def do_POST(self) -> None:
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        try:
+            if path != '/api/scene':
+                return self._write_json({'ok': False, 'error': {'id': 'SP_NOT_FOUND', 'message': path}}, 404)
+            body = self._read_json_body()
+            branch = str(body.get('branch') or 'main')
+            specs = body.get('instances')
+            if not isinstance(specs, list) or not specs:
+                raise ValueError('POST /api/scene requires a non-empty instances array')
+            if not all(isinstance(item, dict) for item in specs):
+                raise ValueError('Every projection instance must be an object')
+            snapshot = load_snapshot(branch=branch, repo=SOURCE_REPO)
+            result = _compose_projection_instance_result(snapshot, specs)
+            return self._write_json(result, 200 if result.get('projectable') else 422)
+        except (ProjectorError, ViewRuleError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            return self._error(exc)
 
 
 def main() -> None:
