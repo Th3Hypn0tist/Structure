@@ -11,6 +11,7 @@ from dependency_flow_projection import build_dependency_flow_3d
 from input_modules.canonical import read as read_canonical
 from input_modules.raw_json import read as read_raw_json
 from nanocms import projection, resolve_page, resolve_view
+from primitive_registry import load_registry
 from raw_json_projection import build_raw_json_space_3d
 from scene_composer import compose_scene
 from scene_contract import projection_to_scene, validate_scene
@@ -26,8 +27,8 @@ from structureprojector import (
 from view_rules import MAX_BINDING_DEPTH, ViewRuleError, binding_children, binding_tree
 
 BASE_DIR = os.path.dirname(__file__)
-SCENE_VIEWER_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v1.html')
-LEGACY_INDEX_HTML = os.path.join(BASE_DIR, 'static', 'index_v12.html')
+SCENE_VIEWER_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v2.html')
+LEGACY_INDEX_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v1.html')
 
 ALL_CANONICAL_PROJECTIONS = {
     **{k: v for k, v in CORE_PROJECTIONS.items() if v.get('dimension') == '3d'},
@@ -73,7 +74,7 @@ def _attach_scene(result: dict, base_projection: dict) -> None:
         result['valid'] = False
         result.setdefault('warnings', []).append({
             'id': 'SP_SCENE_INVALID',
-            'message': 'Projection produced a Scene that does not satisfy Scene Contract v1.',
+            'message': 'Projection produced a Scene that does not satisfy Scene Contract 1.1.',
         })
 
 
@@ -90,7 +91,7 @@ def _decode_transforms(raw: str) -> dict:
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.19.0'
+    server_version = 'StructureProjector/0.20.0'
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
@@ -111,6 +112,10 @@ class Handler(BaseHandler):
                 self.send_header('Content-Length', str(len(payload)))
                 self.end_headers()
                 self.wfile.write(payload)
+                return
+
+            if parsed.path == '/api/primitives':
+                self._json(200, load_registry())
                 return
 
             if parsed.path == '/api/nanocms':
@@ -302,25 +307,28 @@ class Handler(BaseHandler):
                 self._json(200, {
                     'ok': True,
                     'service': 'StructureProjector',
-                    'version': '0.19.0',
-                    'view_shell': 'Scene Viewer v1',
+                    'version': '0.20.0',
+                    'view_shell': 'Scene Viewer v2 / WebGL2 instancing',
                     'legacy_view': '/legacy',
                     'input_contract': 'StructureTree/1.0',
-                    'scene_contract': 'Scene/1.0',
+                    'scene_contract': 'Scene/1.1',
+                    'primitive_contract': 'PrimitiveRegistry/1.1',
+                    'primitive_api': '/api/primitives',
                     'input_modules': ['canonical', 'raw_json'],
                     'rulesets': ['CanonicalContract', 'RawJSON'],
                     'canonical_contract_format': 'bootstrap-driven',
                     'active_projection_family': '3d',
-                    'projection_architecture': 'dimension-neutral StructureTree -> multiple projections -> composited Scene -> viewer',
+                    'projection_architecture': 'dimension-neutral StructureTree -> multiple projections -> composited Scene -> instanced viewer',
                     'scene_api': '/api/scene',
                     'canonical_projections': ALL_CANONICAL_PROJECTIONS,
                     'raw_json_projection': 'raw_json_space_3d',
-                    'effects': 'connection glow only in viewer baseline; no semantic effect layer',
-                    'primitive_registry': 'primitives/registry.json',
-                    'connection_channels': 'independent enabled/color style registry per Scene',
+                    'effects': 'none',
+                    'node_rendering': 'shared primitive geometry + per-node instance data',
+                    'connection_rendering': 'shared connection primitive + per-connection instance data',
+                    'connection_channels': 'independent enabled/color registry per Scene',
                     'cross_projection_rule': 'only explicit StructureTree links create cross-projection connections',
                     'canonical_projection_policy': 'project proven explicit structure even when validation is degraded',
-                    'renderers': ['scene_viewer_v1'],
+                    'renderers': ['scene_viewer_v2_webgl2'],
                     'default_recursion_depth': 1,
                     'max_recursion_depth': MAX_BINDING_DEPTH,
                     'source_adapter': 'cached immutable commit snapshots',
@@ -338,12 +346,12 @@ class Handler(BaseHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer((APP_HOST, APP_PORT), Handler)
-    print(f'StructureProjector 0.19.0: http://{APP_HOST}:{APP_PORT}')
+    print(f'StructureProjector 0.20.0: http://{APP_HOST}:{APP_PORT}')
     print(f'Source: {SOURCE_REPO}')
     print('Input: Canonical/RawJSON -> StructureTree')
     print('Projection: StructureTree -> one or more SceneObjects -> Scene')
-    print('Viewer: Scene Viewer v1 reads Scene only')
-    print('Legacy viewer: /legacy')
+    print('Viewer: WebGL2 primitive instancing')
+    print('Legacy Scene Viewer v1: /legacy')
     try:
         server.serve_forever()
     except KeyboardInterrupt:
