@@ -224,6 +224,11 @@ function spApplyPrimaryDefaults() {
   if (!roots.length) return;
   const style = (S.catalog.styles || []).find(item => item.id === 'atlas') || S.catalog.styles?.[0];
   const dimension = style?.dimensions?.includes('3d') ? '3d' : style?.dimensions?.[0] || '2d';
+  const defaultPositions = {
+    IAM: {x:0, y:420, z:-120},
+    AccessCore: {x:0, y:0, z:0},
+    DWH: {x:0, y:-420, z:120},
+  };
   S.instances = roots.map((root, index) => ({
     id: `p${index + 1}`,
     name: root,
@@ -232,6 +237,17 @@ function spApplyPrimaryDefaults() {
     root_topic: root,
     dependency_depth: 1,
   }));
+  for (const inst of S.instances) {
+    const position = defaultPositions[inst.root_topic] || {x:0, y:0, z:0};
+    S.objectState[inst.id] = {
+      transform: {
+        position: {...position},
+        rotation: {x:0, y:0, z:0},
+        scale: {x:1, y:1, z:1},
+      },
+      projection: projectionDefaults(),
+    };
+  }
   S.nextId = roots.length + 1;
   SP_defaultRootsApplied = true;
 }
