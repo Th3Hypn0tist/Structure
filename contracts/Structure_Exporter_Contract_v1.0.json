@@ -1,0 +1,70 @@
+{
+  "format": "STRUCTURE_EXPORTER_CONTRACT",
+  "version": "1.0",
+  "status": "locked",
+  "product": "Structure",
+  "tool": "Exporter",
+  "purpose": "Export Structure work primarily as CanonicalWireframe (CW) and optionally as presentation-only vector images without allowing visual output to become semantic authority.",
+  "priority": [
+    "cw",
+    "svg"
+  ],
+  "invariants": [
+    "CW is the primary and preferred Structure export format.",
+    "CW export preserves explicit semantic identities, relations, hierarchy, properties, provenance and other fields defined by the CW format contract.",
+    "SVG is a derived visual export of an explicit projection or Scene and is never semantic authority.",
+    "SVG export MUST NOT invent nodes, relations, hierarchy, labels or meaning that are absent from the selected projection/Scene.",
+    "Projection style, layout, camera, colors, node size, visibility and other presentation state MAY affect SVG output but MUST NOT alter CW semantics.",
+    "Hidden or filtered content is omitted from an SVG only as a presentation choice; omission MUST NOT mutate the underlying CW or input structure.",
+    "A 3D Scene exported to SVG is flattened through the explicitly selected camera/view state into a 2D vector representation.",
+    "Every export write MUST satisfy Structure_Input_Output_Isolation_Contract_v1.2 before the first target mutation.",
+    "Exporter never writes to any input scope.",
+    "There is no conversion from SVG back into accepted CW semantics without a separate explicit detector/mapping process."
+  ],
+  "formats": {
+    "cw": {
+      "media_role": "semantic_structure",
+      "priority": "primary",
+      "source": [
+        "Planner-authored CW",
+        "Mapper-produced accepted CW",
+        "imported CW",
+        "other explicitly materialized CW workspaces"
+      ],
+      "requirements": [
+        "Conform to the active CW Format Contract.",
+        "Preserve semantic identity and explicit provenance.",
+        "Do not include viewer-only state unless the CW Format Contract explicitly defines a non-semantic presentation section."
+      ]
+    },
+    "svg": {
+      "media_role": "visual_projection",
+      "priority": "secondary",
+      "source": "selected Projection or Scene",
+      "mime": "image/svg+xml",
+      "requirements": [
+        "Use vector primitives for nodes, connections and text where representable.",
+        "Preserve the selected projection composition and visible labels.",
+        "Include a metadata block identifying Structure, source input ids, projection instance ids and projection settings when available.",
+        "Metadata is provenance/presentation metadata only and does not make SVG a CW document.",
+        "For 3D projection export, use the current explicit camera/view transform to produce the 2D SVG coordinates."
+      ]
+    }
+  },
+  "selection": {
+    "cw": "Export an explicitly selected CW workspace/model.",
+    "svg": "Export one selected projection instance, a selected group of projection instances, or the current Scene composition.",
+    "rule": "Exporter MUST make the exported scope explicit before writing."
+  },
+  "ui": {
+    "section": "Exporter",
+    "default_format": "cw",
+    "format_order": ["CW", "SVG"],
+    "svg_scope_choices": ["projection_instance", "selected_instances", "scene"],
+    "rule": "CW appears first and is the default export action."
+  },
+  "future_formats": {
+    "rule": "Additional formats may be added only as explicit exporter adapters. They do not change CW primacy or semantic authority.",
+    "examples": ["png", "pdf"]
+  }
+}
