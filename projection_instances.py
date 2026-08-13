@@ -181,11 +181,6 @@ def _projection_hierarchy_depths(tree: dict[str, Any], included: set[str]) -> di
 
 
 def projection_base_ids(tree: dict[str, Any], root_topic: str) -> set[str]:
-    """Return the explicit base identities owned by one projection root.
-
-    This helper performs no relation expansion and is used to reserve all
-    projection roots before any one projection begins relation recursion.
-    """
     entries = _entries(tree)
     if root_topic == "all":
         return set(entries)
@@ -222,13 +217,6 @@ def filter_for_instance(
     dependency_depth: int,
     external_visible_ids: set[str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, int | None], dict[str, Any]]:
-    """Build one projection subgraph without duplicating scene identities.
-
-    Base/root identities always remain local to their explicit projection. During
-    relation expansion, an identity already reserved/materialized by another
-    projection becomes an external reference boundary: it is not copied locally
-    and recursion stops at that identity.
-    """
     relation_depth = max(0, min(MAX_RELATION_DEPTH, int(dependency_depth)))
     entries = _entries(tree)
     base_ids = projection_base_ids(tree, root_topic)
@@ -239,10 +227,6 @@ def filter_for_instance(
     absolute_depths = _absolute_hierarchy_depths(tree)
     hierarchy_depths = {entry_id: absolute_depths.get(entry_id) for entry_id in base_ids}
 
-    # Generation is one-based for recursive parity: generation 1 is ODD. Base
-    # nodes inherit their real canonical parent chain even when that parent is not
-    # visible in this projection. Relation-expanded nodes continue recursively
-    # from the generation of the node that reached them.
     projection_generations: dict[str, int | None] = {
         entry_id: (depth + 1 if isinstance(depth, int) else None)
         for entry_id, depth in hierarchy_depths.items()
@@ -285,8 +269,6 @@ def filter_for_instance(
                         "projection_generation": next_generation,
                         "recursion": "stopped_at_existing_scene_identity",
                     })
-                # Critical boundary rule: the other projection owns the visual
-                # node and any deeper recursion from that node.
                 continue
 
             previous_hops = best_hops.get(neighbor)
@@ -367,6 +349,7 @@ def normalize_instance_spec(spec: dict[str, Any], index: int = 0) -> dict[str, A
     return {
         "id": instance_id,
         "name": name,
+        "master": bool(spec.get("master", False)),
         "projection_style": projection_style,
         "projection_dimension": projection_dimension,
         "projection_generator": projection_generator,
