@@ -12,7 +12,7 @@ from input_modules.canonical import read as read_canonical
 from input_modules.raw_json import read as read_raw_json
 from nanocms import projection, resolve_page, resolve_view
 from primitive_registry import load_registry
-from projection_instances import filter_for_instance, normalize_instance_spec, style_catalog, topic_catalog
+from projection_instances import filter_for_instance, normalize_instance_spec, projection_base_ids, style_catalog, topic_catalog
 from raw_json_projection import build_raw_json_space_3d
 from scene_composer import compose_projection_instances, compose_scene
 from scene_contract import projection_to_scene, validate_scene
@@ -113,24 +113,52 @@ def _compose_scene_result(snapshot, page: str, views: list[str]) -> dict:
     return result
 
 
+def _normalize_master_instances(specs: list[dict]) -> list[dict]:
+    normalized = [normalize_instance_spec(spec, index) for index, spec in enumerate(specs)]
+    explicit_masters = [item for item in normalized if item.get('master')]
+    if len(explicit_masters) > 1:
+        raise ValueError('Exactly one projection instance may be master')
+    if not explicit_masters and normalized:
+        normalized[0]['master'] = True
+    for item in normalized:
+        item['master'] = bool(item.get('master'))
+    normalized.sort(key=lambda item: (0 if item['master'] else 1, specs.index(next(spec for spec in specs if str(spec.get('id') or '') == item['id'])) if any(str(spec.get('id') or '') == item['id'] for spec in specs) else 0))
+    return normalized
+
+
 def _compose_projection_instance_result(snapshot, specs: list[dict]) -> dict:
     tree = read_canonical(snapshot)
     result = _result_from_tree(tree, 'canonical_contract')
     full_graph = result['graph']
-    normalized = [normalize_instance_spec(spec, index) for index, spec in enumerate(specs)]
+    normalized = _normalize_master_instances(specs)
     ids = [item['id'] for item in normalized]
     if len(ids) != len(set(ids)):
         raise ValueError('Projection instance ids must be unique')
 
+    # Reserve every explicit projection base before any relation expansion. This
+    # makes duplicate prevention independent of list order while the single master
+    # still composes first and provides the deterministic scene ownership anchor.
+    reserved_by_instance = {
+        instance['id']: projection_base_ids(tree, instance['root_topic'])
+        for instance in normalized
+    }
+    all_reserved = set().union(*reserved_by_instance.values()) if reserved_by_instance else set()
+
     items = []
+    materialized_ids: set[str] = set()
     for instance in normalized:
+        own_base = reserved_by_instance[instance['id']]
+        external_visible_ids = (all_reserved - own_base) | materialized_ids
         filtered_graph, hierarchy_depths, filter_metadata = filter_for_instance(
             tree,
             full_graph,
             root_topic=instance['root_topic'],
             dependency_depth=instance['dependency_depth'],
+            external_visible_ids=external_visible_ids,
         )
         projection_body = _build_canonical_projection(filtered_graph, instance['projection_generator'])
+        projection_node_ids = {str(node.get('id')) for node in filtered_graph.get('nodes', []) if node.get('id') is not None}
+        materialized_ids.update(projection_node_ids)
         items.append({
             'instance': instance,
             'projection': projection_body,
@@ -139,6 +167,9 @@ def _compose_projection_instance_result(snapshot, specs: list[dict]) -> dict:
         })
 
     scene = compose_projection_instances(items, tree)
+    scene.setdefault('composition', {})['master_instance_id'] = next((item['id'] for item in normalized if item['master']), None)
+    scene['composition']['single_master'] = True
+    scene['composition']['existing_identity_policy'] = 'reference_existing_and_stop_recursion'
     result['scene'] = scene
     result['instances'] = normalized
     result['catalog'] = {
@@ -230,7 +261,7 @@ class Handler(BaseHandler):
                     'topics': [{'id': 'all', 'label': 'all', 'entry_count': len(tree.get('entries', []))}] + topic_catalog(tree),
                     'relation_depth': {'min': 0, 'max': 32, 'default': 1},
                     'wire_compatibility': {'dependency_depth': 'relation_depth'},
-                    'defaults': {'projection_style': 'atlas', 'projection_dimension': '2d', 'even': '#087CFF', 'odd': '#AAB2C2', 'label_text': '#FFFFFF'},
+                    'defaults': {'projection_style': 'atlas', 'projection_dimension': '3d', 'even': '#AAB2C2', 'odd': '#087CFF', 'label_text': '#FFFFFF'},
                 })
             if path == '/api/scene':
                 branch = query.get('branch', ['main'])[0]
