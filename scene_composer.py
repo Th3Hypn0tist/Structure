@@ -7,12 +7,36 @@ from primitive_registry import resolve_primitive
 from scene_contract import new_scene, projection_connections, projection_to_object, validate_scene
 
 
+CORE_STACK_Y = {
+    "IAM": 360.0,
+    "AccessCore": 0.0,
+    "DWH": -360.0,
+}
+
+
 def _default_offset(index: int, spacing: float = 1800.0) -> dict[str, Any]:
     return {
         "position": {"x": index * spacing, "y": 0.0, "z": 0.0},
         "rotation": {"x": 0.0, "y": 0.0, "z": 0.0},
         "scale": {"x": 1.0, "y": 1.0, "z": 1.0},
     }
+
+
+def _default_instance_offset(instance: dict[str, Any], index: int) -> dict[str, Any]:
+    """Keep the default IAM -> AccessCore -> DWH view as one compact stack.
+
+    This is presentation-only default placement based on the projection's
+    explicit root_topic. An explicit instance transform always takes precedence.
+    Other roots retain the generic left-to-right fallback layout.
+    """
+    root_topic = str(instance.get("root_topic") or "")
+    if root_topic in CORE_STACK_Y:
+        return {
+            "position": {"x": 0.0, "y": CORE_STACK_Y[root_topic], "z": 0.0},
+            "rotation": {"x": 0.0, "y": 0.0, "z": 0.0},
+            "scale": {"x": 1.0, "y": 1.0, "z": 1.0},
+        }
+    return _default_offset(index)
 
 
 def _recenter_projection(projection: dict[str, Any]) -> dict[str, Any]:
@@ -155,7 +179,7 @@ def compose_projection_instances(
         filter_metadata = deepcopy(item.get("filter_metadata", {}))
         instance_id = str(instance["id"])
         object_id = f"projection-instance:{instance_id}"
-        transform = deepcopy(instance.get("transform") or _default_offset(index))
+        transform = deepcopy(instance.get("transform") or _default_instance_offset(instance, index))
 
         obj = projection_to_object(
             projection,
