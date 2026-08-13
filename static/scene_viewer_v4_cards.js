@@ -149,7 +149,7 @@ newInstance = function() {
   const id = `p${S.nextId++}`;
   const style = (S.catalog?.styles || []).find(item => item.id === 'atlas') || S.catalog?.styles?.[0];
   const root = (S.catalog?.topics || []).find(item => item.id === 'IAM') || (S.catalog?.topics || []).find(item => item.id !== 'all');
-  const dimension = style?.dimensions?.includes('2d') ? '2d' : style?.dimensions?.[0] || '2d';
+  const dimension = style?.dimensions?.includes('3d') ? '3d' : style?.dimensions?.[0] || '2d';
   return {
     id,
     name:`Projection ${id.slice(1)}`,
@@ -223,7 +223,7 @@ function spApplyPrimaryDefaults() {
   const roots = ['IAM', 'AccessCore', 'DWH'].filter(root => available.has(root));
   if (!roots.length) return;
   const style = (S.catalog.styles || []).find(item => item.id === 'atlas') || S.catalog.styles?.[0];
-  const dimension = style?.dimensions?.includes('2d') ? '2d' : style?.dimensions?.[0] || '2d';
+  const dimension = style?.dimensions?.includes('3d') ? '3d' : style?.dimensions?.[0] || '2d';
   S.instances = roots.map((root, index) => ({
     id: `p${index + 1}`,
     name: root,
