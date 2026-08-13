@@ -26,6 +26,15 @@ header{height:56px;display:flex;align-items:center;gap:10px;padding:8px 12px;bor
 </div>
 <script src="/static/scene_viewer_v4.js"></script>
 <script src="/static/scene_viewer_v4_cards.js"></script>
-<script src="/static/scene_viewer_v4_memory.js"></script>
+<script>
+'use strict';
+const SP_memoryEnsureLocalState=ensureLocalState,SP_memoryRenderInstances=renderInstances;
+function spProjectionMemoryKey(i){return `${String(i?.projection_style||'atlas')}:${String(i?.projection_dimension||'2d').toLowerCase()}`}
+function spCloneProjectionState(v){const s=v||projectionDefaults();return{spread_x:Number.isFinite(Number(s.spread_x))?Number(s.spread_x):1,spread_y:Number.isFinite(Number(s.spread_y))?Number(s.spread_y):1,spread_z:Number.isFinite(Number(s.spread_z))?Number(s.spread_z):1,node_scale:Number.isFinite(Number(s.node_scale))?Number(s.node_scale):1,edge_opacity:Number.isFinite(Number(s.edge_opacity))?Number(s.edge_opacity):.28}}
+function spProjectionMemory(i,s){s.projection_memory||={};const k=spProjectionMemoryKey(i);if(!s.projection_memory[k])s.projection_memory[k]=spCloneProjectionState(projectionDefaults());s.projection=s.projection_memory[k];s.projection_memory_active=k;return s.projection}
+ensureLocalState=function(i,o){const s=SP_memoryEnsureLocalState(i,o);spProjectionMemory(i,s);return s};
+function spResetInstanceTransform(id){const s=S.objectState[id];if(s)s.transform=objectTransformDefaults()}
+renderInstances=function(){SP_memoryRenderInstances();$('#instances').querySelectorAll('[data-proj]').forEach(el=>{el.oninput=()=>{const i=S.instances.find(x=>x.id===el.dataset.proj);if(!i)return;const o=(S.scene?.objects||[]).find(x=>x.instance_id===i.id),s=ensureLocalState(i,o);let v=Number(el.value);if(!Number.isFinite(v))return;const k=el.dataset.projKey;if(k==='node_scale'||k.startsWith('spread_'))v=Math.max(.05,v);if(k==='edge_opacity')v=Math.max(0,Math.min(1,v));s.projection[k]=v;s.projection_memory[spProjectionMemoryKey(i)]=s.projection;rebuildRenderer()}});$('#instances').querySelectorAll('[data-reset]').forEach(b=>{b.onclick=()=>{const i=S.instances.find(x=>x.id===b.dataset.reset);if(!i)return;spResetInstanceTransform(i.id);renderInstances();rebuildRenderer()}})};
+</script>
 </body>
 </html>
