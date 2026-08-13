@@ -28,6 +28,14 @@ header{height:56px;display:flex;align-items:center;gap:10px;padding:8px 12px;bor
 <script src="/static/scene_viewer_v4_cards.js"></script>
 <script>
 'use strict';
+const SP_axisSpreadBasePositions=spRecursive3DPositions;
+function spAxisSpreadValue(value){const n=Number(value);return Number.isFinite(n)?Math.max(.05,Math.min(20,n)):1}
+spRecursive3DPositions=function(obj,state){const positions=SP_axisSpreadBasePositions(obj,state);const p=state?.projection||{};const sx=spAxisSpreadValue(p.spread_x),sy=spAxisSpreadValue(p.spread_y),sz=spAxisSpreadValue(p.spread_z);for(const pos of positions.values()){pos.x*=sx;pos.y*=sy;pos.z*=sz}return positions};
+const SP_axisSpreadRenderInstances=renderInstances;
+renderInstances=function(){SP_axisSpreadRenderInstances();for(const card of $('#instances').querySelectorAll('.instance')){if(card.querySelector('[data-axis-spread-grid]'))continue;const inst=S.instances.find(x=>x.id===card.dataset.card);if(!inst)continue;const obj=(S.scene?.objects||[]).find(x=>x.instance_id===inst.id),state=ensureLocalState(inst,obj),p=state.projection||projectionDefaults();const baseSpread=card.querySelector('[data-base-spread]')?.closest('.field');if(!baseSpread)continue;const wrap=document.createElement('div');wrap.dataset.axisSpreadGrid='1';wrap.innerHTML=`<div class="subhead"><span>Axis spread</span><span>XYZ</span></div><div class="grid3"><div class="field axis x"><label>X spread</label><input type="number" min=".05" max="20" step=".05" data-proj="${inst.id}" data-proj-key="spread_x" value="${spAxisSpreadValue(p.spread_x)}"></div><div class="field axis y"><label>Y spread</label><input type="number" min=".05" max="20" step=".05" data-proj="${inst.id}" data-proj-key="spread_y" value="${spAxisSpreadValue(p.spread_y)}"></div><div class="field axis z"><label>Z spread</label><input type="number" min=".05" max="20" step=".05" data-proj="${inst.id}" data-proj-key="spread_z" value="${spAxisSpreadValue(p.spread_z)}"></div></div>`;baseSpread.insertAdjacentElement('afterend',wrap)}};
+</script>
+<script>
+'use strict';
 const SP_memoryEnsureLocalState=ensureLocalState,SP_memoryRenderInstances=renderInstances;
 function spProjectionMemoryKey(i){return `${String(i?.projection_style||'atlas')}:${String(i?.projection_dimension||'2d').toLowerCase()}`}
 function spCloneProjectionState(v){const s=v||projectionDefaults();return{spread_x:Number.isFinite(Number(s.spread_x))?Number(s.spread_x):1,spread_y:Number.isFinite(Number(s.spread_y))?Number(s.spread_y):1,spread_z:Number.isFinite(Number(s.spread_z))?Number(s.spread_z):1,node_scale:Number.isFinite(Number(s.node_scale))?Number(s.node_scale):1,edge_opacity:Number.isFinite(Number(s.edge_opacity))?Number(s.edge_opacity):.28}}
