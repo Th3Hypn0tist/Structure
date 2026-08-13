@@ -224,32 +224,65 @@ def filter_for_instance(
         root_name = str(entries[root_topic].get("name") or root_topic)
 
     included = set(base_ids)
+    base_hierarchy_depths = _projection_hierarchy_depths(tree, base_ids)
+    projection_depths: dict[str, int | None] = dict(base_hierarchy_depths)
+
     adjacency, available_dimensions = _relation_adjacency(graph)
-    frontier = deque((entry_id, 0) for entry_id in sorted(base_ids))
-    seen_depth: dict[str, int] = {entry_id: 0 for entry_id in base_ids}
+    # Relation depth controls how many explicit graph hops are exposed. Projection
+    # depth is separate presentation state: each outward hop is one visible
+    # generation below the node from which that shortest path was reached.
+    frontier = deque(
+        (entry_id, 0, int(base_hierarchy_depths.get(entry_id) or 0))
+        for entry_id in sorted(base_ids)
+    )
+    best_path: dict[str, tuple[int, int]] = {
+        entry_id: (0, int(base_hierarchy_depths.get(entry_id) or 0))
+        for entry_id in base_ids
+    }
     reached_by_dimension: dict[str, int] = {}
 
     while frontier:
-        current, depth = frontier.popleft()
-        if depth >= relation_depth:
+        current, hops, display_depth = frontier.popleft()
+        if hops >= relation_depth:
             continue
         for neighbor, relation_dimension in adjacency.get(current, []):
-            next_depth = depth + 1
-            previous = seen_depth.get(neighbor)
-            if previous is not None and previous <= next_depth:
-                continue
-            seen_depth[neighbor] = next_depth
-            if neighbor not in included:
-                reached_by_dimension[relation_dimension] = reached_by_dimension.get(relation_dimension, 0) + 1
-            included.add(neighbor)
-            frontier.append((neighbor, next_depth))
+            next_hops = hops + 1
+            next_display_depth = display_depth + 1
 
-    nodes = [deepcopy(node) for node in graph.get("nodes", []) if str(node.get("id")) in included]
+            # Base hierarchy is authoritative for base nodes; an outward relation
+            # path must never move an existing base node to another generation.
+            if neighbor in base_ids:
+                continue
+
+            previous = best_path.get(neighbor)
+            candidate = (next_hops, next_display_depth)
+            if previous is not None and previous <= candidate:
+                continue
+
+            first_reach = neighbor not in included
+            best_path[neighbor] = candidate
+            projection_depths[neighbor] = next_display_depth
+            included.add(neighbor)
+            if first_reach:
+                reached_by_dimension[relation_dimension] = reached_by_dimension.get(relation_dimension, 0) + 1
+            frontier.append((neighbor, next_hops, next_display_depth))
+
+    hierarchy_depths = _projection_hierarchy_depths(tree, included)
+    nodes = []
+    for node in graph.get("nodes", []):
+        node_id = str(node.get("id"))
+        if node_id not in included:
+            continue
+        projected_node = deepcopy(node)
+        projected_node["hierarchy_depth"] = hierarchy_depths.get(node_id)
+        projected_node["projection_depth"] = projection_depths.get(node_id, hierarchy_depths.get(node_id))
+        projected_node["relation_depth"] = best_path.get(node_id, (0, 0))[0]
+        nodes.append(projected_node)
+
     edges = [
         deepcopy(edge) for edge in graph.get("edges", [])
         if str(edge.get("source")) in included and str(edge.get("target")) in included
     ]
-    hierarchy_depths = _projection_hierarchy_depths(tree, included)
     metadata = {
         "root_topic": root_topic,
         "root_name": root_name,
@@ -262,6 +295,8 @@ def filter_for_instance(
         "available_dimensions": sorted(available_dimensions),
         "topic_rule": "explicit canonical identity plus explicit containment subtree",
         "expansion_rule": "all explicit documented graph relations; bidirectional discovery only",
+        "projection_depth_rule": "base hierarchy depth plus one visible generation per outward explicit relation hop",
+        "projection_depth_semantic_authority": False,
         "inference": False,
     }
     return {
