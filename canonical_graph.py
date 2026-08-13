@@ -176,7 +176,13 @@ def _node_from_contract(path: str, data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _node_from_member(path: str, member: dict[str, Any], *, registry: bool) -> dict[str, Any]:
+def _node_from_member(
+    path: str,
+    member: dict[str, Any],
+    *,
+    registry: bool,
+    owner_ref: str | None,
+) -> dict[str, Any]:
     return {
         "id": member["id"],
         "name": member.get("name") or member["id"],
@@ -185,6 +191,7 @@ def _node_from_member(path: str, member: dict[str, Any], *, registry: bool) -> d
         "source_role": "membership_registry" if registry else "member",
         "source": path,
         "kind": "registry_member" if registry else "member",
+        "member_of": owner_ref,
         "semantics": member.get("semantics", {}),
         "raw": member,
     }
@@ -199,7 +206,7 @@ def build_graph(snapshot: SourceSnapshot) -> dict[str, Any]:
     nodes: dict[str, dict[str, Any]] = {}
     edges: list[dict[str, Any]] = []
     refs_to_check: list[tuple[str, str, str]] = []
-    registry_members: list[tuple[str, dict[str, Any]]] = []
+    registry_members: list[tuple[str, str | None, dict[str, Any]]] = []
 
     for item in architecture_contracts:
         path, data = item["path"], item["data"]
@@ -215,18 +222,18 @@ def build_graph(snapshot: SourceSnapshot) -> dict[str, Any]:
             if not isinstance(member, dict) or not member.get("id"):
                 continue
             if role == "membership_registry":
-                registry_members.append((path, member))
+                registry_members.append((path, root_id, member))
                 continue
             member_id = member["id"]
             if member_id in nodes:
                 errors.append({"id": "CF_AMBIGUOUS_IDENTITY", "message": f"Duplicate active identity: {member_id}", "contract": path})
             else:
-                nodes[member_id] = _node_from_member(path, member, registry=False)
+                nodes[member_id] = _node_from_member(path, member, registry=False, owner_ref=root_id)
 
-    for path, member in registry_members:
+    for path, owner_ref, member in registry_members:
         member_id = member["id"]
         if member_id not in nodes:
-            nodes[member_id] = _node_from_member(path, member, registry=True)
+            nodes[member_id] = _node_from_member(path, member, registry=True, owner_ref=owner_ref)
 
     def add_edge(dimension: str, edge: dict[str, Any], source_key: str, target_key: str) -> None:
         source = edge.get(source_key)
