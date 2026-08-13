@@ -235,6 +235,11 @@ def filter_for_instance(
         entry_id: (generation - 1 if isinstance(generation, int) else None)
         for entry_id, generation in projection_generations.items()
     }
+    projection_parent_ids: dict[str, str | None] = {}
+    for entry_id in base_ids:
+        raw_parent = entries[entry_id].get("parent_id")
+        parent_id = str(raw_parent) if raw_parent is not None else None
+        projection_parent_ids[entry_id] = parent_id if parent_id in base_ids else None
 
     adjacency, available_dimensions = _relation_adjacency(graph)
     frontier = deque(
@@ -267,6 +272,7 @@ def filter_for_instance(
                         "dimension": relation_dimension,
                         "relation_hops": next_hops,
                         "projection_generation": next_generation,
+                        "projection_parent_id": current,
                         "recursion": "stopped_at_existing_scene_identity",
                     })
                 continue
@@ -279,6 +285,7 @@ def filter_for_instance(
             best_hops[neighbor] = next_hops
             projection_generations[neighbor] = next_generation
             projection_depths[neighbor] = next_generation - 1 if isinstance(next_generation, int) else None
+            projection_parent_ids[neighbor] = current
             included.add(neighbor)
             if first_reach:
                 reached_by_dimension[relation_dimension] = reached_by_dimension.get(relation_dimension, 0) + 1
@@ -294,6 +301,7 @@ def filter_for_instance(
         projected_node["hierarchy_depth"] = hierarchy_depths.get(node_id)
         projected_node["projection_depth"] = projection_depths.get(node_id)
         projected_node["projection_generation"] = projection_generations.get(node_id)
+        projected_node["projection_parent_id"] = projection_parent_ids.get(node_id)
         projected_node["relation_depth"] = best_hops.get(node_id, 0)
         nodes.append(projected_node)
 
@@ -317,8 +325,10 @@ def filter_for_instance(
         "topic_rule": "explicit canonical identity plus explicit containment subtree",
         "expansion_rule": "all explicit documented graph relations; bidirectional discovery only",
         "projection_depth_rule": "recursive parent generation; generation 1 is odd; each explicit relation hop advances one generation",
+        "projection_parent_rule": "base nodes use explicit StructureTree parent_id; relation-expanded nodes use the explicit recursion predecessor as presentation parent",
         "existing_identity_rule": "relation-expanded identity already visible/reserved in another projection is referenced, not duplicated, and recursion stops there",
         "projection_depth_semantic_authority": False,
+        "projection_parent_semantic_authority": False,
         "inference": False,
     }
     return {
