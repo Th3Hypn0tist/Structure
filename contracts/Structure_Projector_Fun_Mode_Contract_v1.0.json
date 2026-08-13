@@ -1,0 +1,28 @@
+{
+  "format": "STRUCTURE_PROJECTOR_FUN_MODE_CONTRACT",
+  "version": "1.0",
+  "status": "locked",
+  "product": "Structure",
+  "owner": "Projector.3DViewer",
+  "purpose": "Define Fun Mode as an optional 3D Viewer presentation layer scoped to Projector cameras only.",
+  "invariants": [
+    "Fun Mode exists only in the Projector 3D Viewer.",
+    "Fun Mode MUST NOT appear in Inputs, Mapper, Planner, Compare, Conformance, Exporter or non-3D views.",
+    "Fun Mode is presentation-only and MUST NOT mutate CW, StructureTree, mappings, conformance results, input definitions, Scene semantics or source evidence.",
+    "Each camera MAY have its own Fun Mode enabled state and preset/settings.",
+    "Switching cameras restores that camera's own Fun Mode state together with its other camera-specific Viewer settings.",
+    "Fun Mode may animate, stylize or overlay only information already available to the 3D Viewer; it MUST NOT invent semantic facts.",
+    "Disabling Fun Mode returns the camera to the normal 3D presentation without changing any semantic or structural state."
+  ],
+  "camera_state": {
+    "fields": {
+      "fun_mode_enabled": "Boolean; camera-local.",
+      "fun_mode_preset": "Optional registered presentation preset id.",
+      "fun_mode_settings": "Preset-specific presentation parameters; camera-local."
+    }
+  },
+  "scope": {
+    "allowed": ["Projector.3DViewer.Camera"],
+    "forbidden": ["Inputs", "Mapper", "Planner", "Compare", "Conformance", "Exporter", "Projector.2DViewer", "CW", "StructureTree"]
+  }
+}
