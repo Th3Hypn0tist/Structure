@@ -54,6 +54,60 @@ def _degree(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[st
     return out
 
 
+def _hierarchy_depths(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[str, int | None]:
+    """Resolve hierarchy only from explicit tree/containment edges.
+
+    `tree` is the StructureTree parent projection and takes precedence over raw
+    canonical `containment`. Ambiguous same-priority parents remain unresolved;
+    layout never chooses a parent merely to obtain coordinates.
+    """
+    ids = {str(node.get("id")) for node in nodes if node.get("id") is not None}
+    candidates: dict[str, list[tuple[int, str]]] = defaultdict(list)
+    for edge in edges:
+        dimension = str(edge.get("dimension") or "")
+        if dimension not in {"tree", "containment"}:
+            continue
+        source = str(edge.get("source") or "")
+        target = str(edge.get("target") or "")
+        if source not in ids or target not in ids:
+            continue
+        candidates[target].append((0 if dimension == "tree" else 1, source))
+
+    parents: dict[str, str | None] = {}
+    ambiguous: set[str] = set()
+    for target, values in candidates.items():
+        best_priority = min(priority for priority, _source in values)
+        best_sources = sorted({source for priority, source in values if priority == best_priority})
+        if len(best_sources) == 1:
+            parents[target] = best_sources[0]
+        else:
+            parents[target] = None
+            ambiguous.add(target)
+
+    memo: dict[str, int | None] = {}
+
+    def resolve(node_id: str, stack: set[str]) -> int | None:
+        if node_id in memo:
+            return memo[node_id]
+        if node_id in stack or node_id in ambiguous:
+            memo[node_id] = None
+            return None
+        parent = parents.get(node_id)
+        if parent is None:
+            memo[node_id] = 0
+            return 0
+        if parent not in ids:
+            memo[node_id] = None
+            return None
+        parent_depth = resolve(parent, stack | {node_id})
+        memo[node_id] = None if parent_depth is None else parent_depth + 1
+        return memo[node_id]
+
+    for node_id in sorted(ids):
+        resolve(node_id, set())
+    return memo
+
+
 def _dependency_depths(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[str, int]:
     ids = [str(n["id"]) for n in nodes]
     incoming = {nid: 0 for nid in ids}
@@ -86,35 +140,86 @@ def _dependency_depths(nodes: list[dict[str, Any]], edges: list[dict[str, Any]])
 
 
 def _atlas_3d(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[str, Any]:
-    """Source-role districts arranged as separate spatial islands."""
-    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    """Explicit hierarchy descends on Y; siblings spread across the X/Z plane."""
+    hierarchy = _hierarchy_depths(nodes, edges)
+    by_depth: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    unresolved: list[dict[str, Any]] = []
     for node in nodes:
-        groups[str(node.get("source_role") or "member")].append(node)
-    roles = sorted(groups)
+        depth = hierarchy.get(str(node.get("id")))
+        if depth is None:
+            unresolved.append(node)
+        else:
+            by_depth[depth].append(node)
+
     projected: list[dict[str, Any]] = []
-    group_meta: list[dict[str, Any]] = []
-    district_radius = max(420.0, 150.0 * math.sqrt(max(1, len(roles))))
-    for gi, role in enumerate(roles):
-        angle = 2 * math.pi * gi / max(1, len(roles))
-        cx = math.cos(angle) * district_radius
-        cz = math.sin(angle) * district_radius
-        cy = ((gi % 3) - 1) * 150.0
-        members = sorted(groups[role], key=lambda n: str(n["id"]))
+    groups: list[dict[str, Any]] = []
+    depth_gap = 300.0
+    spacing = 185.0
+    max_plane_radius = 0.0
+    max_depth = max(by_depth, default=0)
+
+    for depth in sorted(by_depth):
+        members = sorted(by_depth[depth], key=lambda n: str(n["id"]))
         cols = max(1, math.ceil(math.sqrt(len(members))))
-        spacing = 135.0
         rows = max(1, math.ceil(len(members) / cols))
-        group_meta.append({"id": role, "title": role, "x": cx, "y": cy, "z": cz, "count": len(members)})
-        for i, node in enumerate(members):
-            row, col = divmod(i, cols)
+        y = -depth * depth_gap
+        width = max(0.0, (cols - 1) * spacing)
+        depth_span = max(0.0, (rows - 1) * spacing)
+        max_plane_radius = max(max_plane_radius, width / 2.0, depth_span / 2.0)
+        groups.append({
+            "id": f"hierarchy-{depth}",
+            "title": f"hierarchy depth {depth}",
+            "x": 0.0,
+            "y": y,
+            "z": 0.0,
+            "count": len(members),
+        })
+        for index, node in enumerate(members):
+            row, col = divmod(index, cols)
             p = _public(node)
             p.update({
-                "x": cx + (col - (cols - 1) / 2) * spacing,
-                "y": cy + ((row % 2) * 38.0),
-                "z": cz + (row - (rows - 1) / 2) * spacing,
-                "group": role,
+                "x": (col - (cols - 1) / 2.0) * spacing,
+                "y": y,
+                "z": (row - (rows - 1) / 2.0) * spacing,
+                "hierarchy_depth": depth,
             })
             projected.append(p)
-    return {"nodes": projected, "edges": edges, "groups": group_meta, "extent": district_radius + 700.0}
+
+    if unresolved:
+        # Keep unresolved hierarchy visually separate instead of pretending it is
+        # another generation. X separation is presentation-only and deterministic.
+        cols = max(1, math.ceil(math.sqrt(len(unresolved))))
+        rows = max(1, math.ceil(len(unresolved) / cols))
+        unresolved_x = max(650.0, max_plane_radius + 650.0)
+        groups.append({
+            "id": "hierarchy-unresolved",
+            "title": "hierarchy unresolved",
+            "x": unresolved_x,
+            "y": 0.0,
+            "z": 0.0,
+            "count": len(unresolved),
+        })
+        for index, node in enumerate(sorted(unresolved, key=lambda n: str(n["id"]))):
+            row, col = divmod(index, cols)
+            p = _public(node)
+            p.update({
+                "x": unresolved_x + (col - (cols - 1) / 2.0) * spacing,
+                "y": 0.0,
+                "z": (row - (rows - 1) / 2.0) * spacing,
+                "hierarchy_depth": None,
+            })
+            projected.append(p)
+        max_plane_radius = max(max_plane_radius, unresolved_x + (cols - 1) * spacing / 2.0)
+
+    extent = max(850.0, max_plane_radius + 500.0, max_depth * depth_gap + 500.0)
+    return {
+        "nodes": projected,
+        "edges": edges,
+        "groups": groups,
+        "extent": extent,
+        "layout_rule": "explicit hierarchy depth decreases Y; same-generation nodes spread only on X/Z",
+        "inference": False,
+    }
 
 
 def _relation_web_3d(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[str, Any]:
