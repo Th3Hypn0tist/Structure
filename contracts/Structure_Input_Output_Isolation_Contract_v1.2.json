@@ -1,0 +1,66 @@
+{
+  "format": "STRUCTURE_INPUT_OUTPUT_ISOLATION_CONTRACT",
+  "version": "1.2",
+  "status": "locked",
+  "product": "Structure",
+  "supersedes": "Structure_Input_Output_Isolation_Contract_v1.1.json",
+  "purpose": "Guarantee that Structure input roles read disjoint source scopes and that every writable output is isolated from all inputs.",
+  "model": {
+    "inputs": "One or more strictly read-only input scopes. Each input has an explicit repository and, when sharing a repository with another input, an explicit directory scope.",
+    "output": "A writable repository and/or directory used for generated CW, mappings, plans, reports, exports or other Structure artifacts."
+  },
+  "invariants": [
+    "Structure MUST NOT write, modify, delete, commit, generate or persist anything inside an input scope.",
+    "Different logical input roles MUST NOT read the same repository scope or overlapping directory scopes.",
+    "Specification input and implementation/code input MUST be disjoint.",
+    "Two inputs MAY use the same repository only when both declare explicit directory scopes and those resolved directory trees do not overlap.",
+    "If two inputs reference the same repository and either input omits its directory scope, the configuration MUST fail.",
+    "If two input directory scopes are identical, the configuration MUST fail.",
+    "If one input directory is inside another input directory, the configuration MUST fail.",
+    "Sibling or otherwise disjoint directory scopes inside the same repository are allowed.",
+    "The output MUST be validated against every input before the first write.",
+    "If output.repository resolves to the same repository identity as any input.repository, output MUST declare a directory scope and that scope MUST be disjoint from every input directory scope in that repository.",
+    "If output and an input share a repository and either side lacks an explicit directory scope, the configuration MUST fail.",
+    "If output.directory is identical to, inside, or contains any input.directory, the configuration MUST fail.",
+    "Repository aliases, URL forms, trailing .git suffixes and case differences MUST be normalized before comparison where the repository scheme permits it.",
+    "Filesystem paths MUST be expanded and resolved to canonical real paths before comparison.",
+    "Symbolic-link and relative-path aliases resolving to overlapping directory trees count as overlap.",
+    "There is no override, force flag, confirmation mode or privileged bypass for these invariants.",
+    "Failure MUST occur before parsing writes, mapping persistence, generated CW, reports, exports or any other target mutation."
+  ],
+  "input_rules": {
+    "access": "read_only",
+    "same_repository_allowed": "only_with_explicit_disjoint_directory_scopes",
+    "same_directory_allowed": false,
+    "directory_tree_overlap_allowed": false,
+    "examples": {
+      "allowed": [
+        "repo/spec/ as specification input and repo/src/ as code input",
+        "separate repositories for specification and code"
+      ],
+      "forbidden": [
+        "repo/ as specification input and repo/src/ as code input",
+        "repo/spec/ as both specification and code input",
+        "same repository for specification and code without explicit directory scopes"
+      ]
+    }
+  },
+  "output_rules": {
+    "access": "write",
+    "must_be_disjoint_from_every_input": true,
+    "same_repository_allowed": "only_with_explicit_disjoint_directory_scopes",
+    "directory_tree_overlap_allowed": false
+  },
+  "failure": {
+    "input_overlap": {
+      "id": "STRUCTURE_INPUT_SCOPE_COLLISION",
+      "severity": "fatal",
+      "message": "Structure input scopes must not overlap. Inputs sharing a repository require explicit disjoint directory scopes."
+    },
+    "output_overlap": {
+      "id": "STRUCTURE_INPUT_OUTPUT_COLLISION",
+      "severity": "fatal",
+      "message": "Structure output must be isolated from every read-only input scope."
+    }
+  }
+}
