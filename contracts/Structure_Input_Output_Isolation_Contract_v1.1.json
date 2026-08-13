@@ -1,0 +1,53 @@
+{
+  "format": "STRUCTURE_INPUT_OUTPUT_ISOLATION_CONTRACT",
+  "version": "1.1",
+  "status": "locked",
+  "product": "Structure",
+  "supersedes": "Structure_Source_Target_Isolation_Contract_v1.0.json",
+  "purpose": "Make every Structure input strictly read-only and require every writable output location to be isolated from every input location.",
+  "model": {
+    "inputs": "One or more read-only repositories and/or directories. Inputs may be identical to or overlap other inputs.",
+    "output": "A writable repository and/or directory used for generated CW, mappings, plans, reports, exports or other Structure artifacts."
+  },
+  "invariants": [
+    "Structure MUST NOT write, modify, delete, commit, generate or persist anything inside an input repository or input directory.",
+    "Any number of inputs MAY refer to the same repository, the same directory, overlapping directories or different parts of the same repository because inputs are read-only.",
+    "The output MUST be validated against every input before the first write.",
+    "If output.repository resolves to the same repository identity as any input.repository, the operation MUST fail regardless of branch or subdirectory.",
+    "If output.directory resolves to the same filesystem directory as any input.directory, the operation MUST fail.",
+    "If output.directory is inside any input.directory, the operation MUST fail.",
+    "If any input.directory is inside output.directory, the operation MUST fail.",
+    "Repository aliases, URL forms, trailing .git suffixes and case differences MUST be normalized before comparison where the repository scheme permits it.",
+    "Filesystem paths MUST be expanded and resolved to canonical real paths before comparison.",
+    "Symbolic-link and relative-path aliases resolving to overlapping directory trees count as overlap.",
+    "There is no override, force flag, confirmation mode or privileged bypass for this invariant.",
+    "Failure MUST occur before any target mutation.",
+    "The rule applies to Structure Mapper, Planner, Projector export/generation paths, Compare/Conformance outputs and every future Structure writer."
+  ],
+  "input_rules": {
+    "access": "read_only",
+    "may_share_repository": true,
+    "may_share_directory": true,
+    "may_overlap_each_other": true,
+    "examples": [
+      "Specification and implementation may be read from the same repository.",
+      "Multiple detectors may read the same source tree.",
+      "A CW specification and native code may be separate read-only views of one repository snapshot."
+    ]
+  },
+  "output_rules": {
+    "access": "write",
+    "must_be_isolated_from_every_input": true,
+    "repository_overlap_allowed": false,
+    "directory_tree_overlap_allowed": false
+  },
+  "failure": {
+    "id": "STRUCTURE_INPUT_OUTPUT_COLLISION",
+    "severity": "fatal",
+    "message": "Structure output must be isolated from every read-only input repository and directory."
+  },
+  "non_rules": [
+    "This contract does not require inputs to be isolated from one another.",
+    "This contract does not infer equivalence between unrelated repository and filesystem locators when equivalence cannot be proven."
+  ]
+}
