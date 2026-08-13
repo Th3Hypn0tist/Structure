@@ -55,12 +55,6 @@ def _degree(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[st
 
 
 def _hierarchy_depths(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[str, int | None]:
-    """Resolve hierarchy only from explicit tree/containment edges.
-
-    `tree` is the StructureTree parent projection and takes precedence over raw
-    canonical `containment`. Ambiguous same-priority parents remain unresolved;
-    layout never chooses a parent merely to obtain coordinates.
-    """
     ids = {str(node.get("id")) for node in nodes if node.get("id") is not None}
     candidates: dict[str, list[tuple[int, str]]] = defaultdict(list)
     for edge in edges:
@@ -140,12 +134,18 @@ def _dependency_depths(nodes: list[dict[str, Any]], edges: list[dict[str, Any]])
 
 
 def _atlas_3d(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[str, Any]:
-    """Explicit hierarchy descends on Y; siblings spread across the X/Z plane."""
+    """Visible projection generations descend on Y; peers spread on X/Z."""
     hierarchy = _hierarchy_depths(nodes, edges)
     by_depth: dict[int, list[dict[str, Any]]] = defaultdict(list)
     unresolved: list[dict[str, Any]] = []
+
     for node in nodes:
-        depth = hierarchy.get(str(node.get("id")))
+        node_id = str(node.get("id"))
+        explicit_projection_depth = node.get("projection_depth")
+        if isinstance(explicit_projection_depth, int) and explicit_projection_depth >= 0:
+            depth = explicit_projection_depth
+        else:
+            depth = hierarchy.get(node_id)
         if depth is None:
             unresolved.append(node)
         else:
@@ -167,8 +167,8 @@ def _atlas_3d(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[
         depth_span = max(0.0, (rows - 1) * spacing)
         max_plane_radius = max(max_plane_radius, width / 2.0, depth_span / 2.0)
         groups.append({
-            "id": f"hierarchy-{depth}",
-            "title": f"hierarchy depth {depth}",
+            "id": f"projection-depth-{depth}",
+            "title": f"projection depth {depth}",
             "x": 0.0,
             "y": y,
             "z": 0.0,
@@ -181,19 +181,18 @@ def _atlas_3d(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[
                 "x": (col - (cols - 1) / 2.0) * spacing,
                 "y": y,
                 "z": (row - (rows - 1) / 2.0) * spacing,
-                "hierarchy_depth": depth,
+                "hierarchy_depth": hierarchy.get(str(node.get("id"))),
+                "projection_depth": depth,
             })
             projected.append(p)
 
     if unresolved:
-        # Keep unresolved hierarchy visually separate instead of pretending it is
-        # another generation. X separation is presentation-only and deterministic.
         cols = max(1, math.ceil(math.sqrt(len(unresolved))))
         rows = max(1, math.ceil(len(unresolved) / cols))
         unresolved_x = max(650.0, max_plane_radius + 650.0)
         groups.append({
-            "id": "hierarchy-unresolved",
-            "title": "hierarchy unresolved",
+            "id": "projection-depth-unresolved",
+            "title": "projection depth unresolved",
             "x": unresolved_x,
             "y": 0.0,
             "z": 0.0,
@@ -206,7 +205,8 @@ def _atlas_3d(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[
                 "x": unresolved_x + (col - (cols - 1) / 2.0) * spacing,
                 "y": 0.0,
                 "z": (row - (rows - 1) / 2.0) * spacing,
-                "hierarchy_depth": None,
+                "hierarchy_depth": hierarchy.get(str(node.get("id"))),
+                "projection_depth": None,
             })
             projected.append(p)
         max_plane_radius = max(max_plane_radius, unresolved_x + (cols - 1) * spacing / 2.0)
@@ -217,13 +217,12 @@ def _atlas_3d(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[
         "edges": edges,
         "groups": groups,
         "extent": extent,
-        "layout_rule": "explicit hierarchy depth decreases Y; same-generation nodes spread only on X/Z",
+        "layout_rule": "projection depth decreases Y; hierarchy depth remains separate semantic evidence",
         "inference": False,
     }
 
 
 def _relation_web_3d(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[str, Any]:
-    """High-degree identities move toward the spatial core; low-degree nodes move outward."""
     degree = _degree(nodes, edges)
     ordered = sorted(nodes, key=lambda n: (-degree[str(n["id"])], str(n["id"])))
     max_degree = max(degree.values(), default=0)
@@ -236,89 +235,39 @@ def _relation_web_3d(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -
         y = ((i * 97) % 260 - 130) * (0.45 + normalized)
         theta = i * golden
         p = _public(node)
-        p.update({
-            "x": math.cos(theta) * radius,
-            "y": y,
-            "z": math.sin(theta) * radius,
-            "degree": d,
-        })
+        p.update({"x": math.cos(theta) * radius, "y": y, "z": math.sin(theta) * radius, "degree": d})
         projected.append(p)
     return {"nodes": projected, "edges": edges, "groups": [], "extent": 1450.0}
 
 
 def _adjacency_matrix_3d(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[str, Any]:
-    """Graph adjacency becomes a spatial relation lattice, with dimensions separated on Y."""
     degree = _degree(nodes, edges)
     ordered = sorted(nodes, key=lambda n: (-degree[str(n["id"])], str(n["id"])))
     ids = [str(n["id"]) for n in ordered]
     index = {nid: i for i, nid in enumerate(ids)}
     spacing = 72.0
-    dimension_y = {
-        "containment": -220.0,
-        "relations": -110.0,
-        "ownership": 0.0,
-        "authority": 110.0,
-        "dependencies": 220.0,
-    }
+    dimension_y = {"containment": -220.0, "relations": -110.0, "ownership": 0.0, "authority": 110.0, "dependencies": 220.0}
     center = (len(ids) - 1) * spacing / 2.0
     projected: list[dict[str, Any]] = []
     matrix_edges: list[dict[str, Any]] = []
-
-    # Identity labels live on a diagonal spine. Explicit graph edges form cells in
-    # the X/Z lattice at a Y plane selected only by their declared dimension.
     for i, node in enumerate(ordered):
         p = _public(node)
-        p.update({
-            "x": i * spacing - center,
-            "y": -360.0,
-            "z": i * spacing - center,
-            "degree": degree[str(node["id"])],
-        })
+        p.update({"x": i * spacing - center, "y": -360.0, "z": i * spacing - center, "degree": degree[str(node["id"])]})
         projected.append(p)
-
     for edge in edges:
         source = str(edge.get("source", ""))
         target = str(edge.get("target", ""))
         if source not in index or target not in index:
             continue
         cell_id = f"matrix:{edge.get('id') or edge.get('dimension')}:{source}:{target}"
-        projected.append({
-            "id": cell_id,
-            "name": edge.get("type") or edge.get("dimension") or "relation",
-            "type": edge.get("dimension"),
-            "status": None,
-            "source_role": "relation_cell",
-            "source": None,
-            "kind": "relation_cell",
-            "x": index[source] * spacing - center,
-            "y": dimension_y.get(str(edge.get("dimension")), 0.0),
-            "z": index[target] * spacing - center,
-            "relation_source": source,
-            "relation_target": target,
-        })
-        matrix_edges.append({
-            "id": edge.get("id"),
-            "dimension": edge.get("dimension"),
-            "source": source,
-            "target": cell_id,
-            "type": edge.get("type"),
-        })
-        matrix_edges.append({
-            "id": f"{edge.get('id')}:target" if edge.get("id") else None,
-            "dimension": edge.get("dimension"),
-            "source": cell_id,
-            "target": target,
-            "type": edge.get("type"),
-        })
-    groups = [
-        {"id": dim, "title": dim, "y": y, "count": sum(1 for e in edges if e.get("dimension") == dim)}
-        for dim, y in dimension_y.items()
-    ]
+        projected.append({"id": cell_id, "name": edge.get("type") or edge.get("dimension") or "relation", "type": edge.get("dimension"), "status": None, "source_role": "relation_cell", "source": None, "kind": "relation_cell", "x": index[source] * spacing - center, "y": dimension_y.get(str(edge.get("dimension")), 0.0), "z": index[target] * spacing - center, "relation_source": source, "relation_target": target})
+        matrix_edges.append({"id": edge.get("id"), "dimension": edge.get("dimension"), "source": source, "target": cell_id, "type": edge.get("type")})
+        matrix_edges.append({"id": f"{edge.get('id')}:target" if edge.get("id") else None, "dimension": edge.get("dimension"), "source": cell_id, "target": target, "type": edge.get("type")})
+    groups = [{"id": dim, "title": dim, "y": y, "count": sum(1 for e in edges if e.get("dimension") == dim)} for dim, y in dimension_y.items()]
     return {"nodes": projected, "edges": matrix_edges, "groups": groups, "extent": max(900.0, center * 1.35)}
 
 
 def _lifecycle_lanes_3d(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[str, Any]:
-    """Lifecycle states become parallel spatial corridors."""
     preferred = ["unlocked", "locked", "validated", "superseded", "deprecated"]
     statuses = sorted({str(n.get("status") or "unspecified") for n in nodes})
     ordered_statuses = [s for s in preferred if s in statuses] + [s for s in statuses if s not in preferred]
@@ -333,18 +282,12 @@ def _lifecycle_lanes_3d(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]
         offset = (len(members) - 1) * node_gap / 2.0
         for i, node in enumerate(members):
             p = _public(node)
-            p.update({
-                "x": x,
-                "y": ((i % 3) - 1) * 48.0,
-                "z": i * node_gap - offset,
-                "group": status,
-            })
+            p.update({"x": x, "y": ((i % 3) - 1) * 48.0, "z": i * node_gap - offset, "group": status})
             projected.append(p)
     return {"nodes": projected, "edges": edges, "groups": groups, "extent": max(850.0, len(ordered_statuses) * lane_gap, max((len(g) for g in [nodes]), default=1) * 6.0)}
 
 
 def _dependency_flow_3d(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[str, Any]:
-    """Dependency depth is Z; nodes within a depth occupy an X/Y plane."""
     depths = _dependency_depths(nodes, edges)
     by_depth: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for node in nodes:
@@ -362,12 +305,7 @@ def _dependency_flow_3d(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]
         for i, node in enumerate(members):
             row, col = divmod(i, cols)
             p = _public(node)
-            p.update({
-                "x": (col - (cols - 1) / 2) * spacing,
-                "y": (row - (rows - 1) / 2) * spacing,
-                "z": z,
-                "depth": depth,
-            })
+            p.update({"x": (col - (cols - 1) / 2) * spacing, "y": (row - (rows - 1) / 2) * spacing, "z": z, "depth": depth})
             projected.append(p)
     dep_edges = [e for e in edges if e.get("dimension") == "dependencies"]
     return {"nodes": projected, "edges": dep_edges, "groups": groups, "extent": max(900.0, (max(by_depth, default=0) + 1) * depth_gap)}
@@ -388,15 +326,7 @@ def build_projection(graph: dict[str, Any], projection_id: str) -> dict[str, Any
         body = _lifecycle_lanes_3d(nodes, edges)
     elif projection_id == "dependency_flow_3d":
         body = _dependency_flow_3d(nodes, edges)
-    else:  # pragma: no cover
+    else:
         raise KeyError(projection_id)
     meta = PROJECTIONS[projection_id]
-    return {
-        "id": projection_id,
-        "title": meta["title"],
-        "dimension": "3d",
-        "kind": meta["kind"],
-        "node_count": len(nodes),
-        "edge_count": len(edges),
-        **body,
-    }
+    return {"id": projection_id, "title": meta["title"], "dimension": "3d", "kind": meta["kind"], "node_count": len(nodes), "edge_count": len(edges), **body}
