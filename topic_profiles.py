@@ -6,13 +6,14 @@ from collections import deque
 from copy import deepcopy
 from typing import Any
 
+BASE_DIR = os.path.dirname(__file__)
 DEFAULT_PROFILE_PATH = os.getenv(
     "STRUCTURE_TOPIC_PROFILE",
     os.path.join("profiles", "AIGMos_Structure_Projector_Topic_Profile_v1.0.json"),
 )
 
 
-def load_topic_profile(base_dir: str, path: str | None = None) -> dict[str, Any] | None:
+def load_topic_profile(base_dir: str = BASE_DIR, path: str | None = None) -> dict[str, Any] | None:
     relative = path or DEFAULT_PROFILE_PATH
     absolute = relative if os.path.isabs(relative) else os.path.join(base_dir, relative)
     if not os.path.exists(absolute):
@@ -32,6 +33,13 @@ def attach_topic_profile(tree: dict[str, Any], profile: dict[str, Any] | None) -
     else:
         tree["topic_profile"] = deepcopy(profile)
     return tree
+
+
+def _profile(tree: dict[str, Any]) -> dict[str, Any] | None:
+    profile = tree.get("topic_profile")
+    if isinstance(profile, dict):
+        return profile
+    return load_topic_profile()
 
 
 def _entries(tree: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -66,7 +74,7 @@ def _subtree(root_id: str, entries: dict[str, dict[str, Any]]) -> set[str]:
 
 def resolve_topic_profile(tree: dict[str, Any]) -> list[dict[str, Any]]:
     """Resolve profile selectors without inventing canonical semantics."""
-    profile = tree.get("topic_profile")
+    profile = _profile(tree)
     if not isinstance(profile, dict):
         return []
     entries = _entries(tree)
@@ -127,7 +135,7 @@ def topic_base_ids(tree: dict[str, Any], topic_id: str) -> set[str] | None:
 
 
 def profile_catalog(tree: dict[str, Any]) -> dict[str, Any] | None:
-    profile = tree.get("topic_profile")
+    profile = _profile(tree)
     if not isinstance(profile, dict):
         return None
     return {
