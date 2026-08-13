@@ -4,7 +4,7 @@ from copy import deepcopy
 from typing import Any
 
 FORMAT = "STRUCTUREPROJECTOR_STRUCTURE_TREE"
-VERSION = "1.0"
+VERSION = "1.1"
 
 
 def new_tree(*, input_module: str, source: dict[str, Any]) -> dict[str, Any]:
@@ -16,6 +16,7 @@ def new_tree(*, input_module: str, source: dict[str, Any]) -> dict[str, Any]:
         "roots": [],
         "entries": [],
         "links": [],
+        "flows": [],
         "errors": [],
         "warnings": [],
     }
@@ -73,6 +74,44 @@ def add_link(
     return link
 
 
+def add_flow(
+    tree: dict[str, Any],
+    *,
+    flow_id: str,
+    kind: str,
+    actor_ref: str,
+    action_ref: str,
+    target_ref: str,
+    cause_ref: str,
+    result_refs: list[str],
+    data_ref: str | None = None,
+    condition_ref: str | None = None,
+    payload_ref: str | None = None,
+    error_refs: list[str] | None = None,
+    owner_ref: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    provenance: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    flow = {
+        "id": flow_id,
+        "kind": kind,
+        "actor_ref": actor_ref,
+        "action_ref": action_ref,
+        "data_ref": data_ref,
+        "target_ref": target_ref,
+        "cause_ref": cause_ref,
+        "result_refs": list(result_refs),
+        "condition_ref": condition_ref,
+        "payload_ref": payload_ref,
+        "error_refs": list(error_refs or []),
+        "owner_ref": owner_ref,
+        "metadata": deepcopy(metadata or {}),
+        "provenance": deepcopy(provenance or {}),
+    }
+    tree["flows"].append(flow)
+    return flow
+
+
 def validate_tree(tree: dict[str, Any]) -> list[dict[str, Any]]:
     errors: list[dict[str, Any]] = []
     if tree.get("format") != FORMAT:
@@ -82,10 +121,13 @@ def validate_tree(tree: dict[str, Any]) -> list[dict[str, Any]]:
 
     entries = tree.get("entries")
     links = tree.get("links")
+    flows = tree.get("flows")
     if not isinstance(entries, list):
         return errors + [{"id": "SP_TREE_ENTRIES", "message": "entries must be an array"}]
     if not isinstance(links, list):
         return errors + [{"id": "SP_TREE_LINKS", "message": "links must be an array"}]
+    if not isinstance(flows, list):
+        return errors + [{"id": "SP_TREE_FLOWS", "message": "flows must be an array"}]
 
     ids: set[str] = set()
     for entry in entries:
@@ -109,15 +151,40 @@ def validate_tree(tree: dict[str, Any]) -> list[dict[str, Any]]:
             errors.append({"id": "SP_TREE_LINK_SOURCE", "message": f"Unresolved link source: {source_id}"})
         if target_id not in ids:
             errors.append({"id": "SP_TREE_LINK_TARGET", "message": f"Unresolved link target: {target_id}"})
+
+    flow_ids: set[str] = set()
+    for flow in flows:
+        flow_id = flow.get("id")
+        if not isinstance(flow_id, str) or not flow_id:
+            errors.append({"id": "CW_FLOW_MISSING_ID", "message": "Every flow requires a non-empty id"})
+            continue
+        if flow_id in flow_ids:
+            errors.append({"id": "CW_FLOW_DUPLICATE_ID", "message": f"Duplicate flow id: {flow_id}"})
+        flow_ids.add(flow_id)
+        for field, error_id in (
+            ("actor_ref", "CW_FLOW_UNRESOLVED_ACTOR"),
+            ("action_ref", "CW_FLOW_UNRESOLVED_ACTION"),
+            ("target_ref", "CW_FLOW_UNRESOLVED_TARGET"),
+            ("cause_ref", "CW_FLOW_UNRESOLVED_CAUSE"),
+        ):
+            ref = flow.get(field)
+            if not isinstance(ref, str) or ref not in ids:
+                errors.append({"id": error_id, "message": f"Flow {flow_id} has unresolved {field}: {ref}", "flow": flow_id, "field": field})
+        data_ref = flow.get("data_ref")
+        if data_ref is not None and data_ref not in ids:
+            errors.append({"id": "CW_FLOW_HIDDEN_REFERENCE", "message": f"Flow {flow_id} has unresolved data_ref: {data_ref}", "flow": flow_id})
+        result_refs = flow.get("result_refs")
+        if not isinstance(result_refs, list):
+            errors.append({"id": "CW_FLOW_RESULT_REFS_SHAPE", "message": f"Flow {flow_id} result_refs must be an array", "flow": flow_id})
+        else:
+            for ref in result_refs:
+                if ref not in ids:
+                    errors.append({"id": "CW_FLOW_UNRESOLVED_RESULT", "message": f"Flow {flow_id} has unresolved result_ref: {ref}", "flow": flow_id})
     return errors
 
 
 def tree_to_graph(tree: dict[str, Any]) -> dict[str, Any]:
-    """Compatibility adapter for current projection engines.
-
-    This performs no layout and introduces no semantics. It only translates the
-    neutral StructureTree field names to the existing normalized graph shape.
-    """
+    """Compatibility adapter for projection engines; preserves explicit flows separately."""
     nodes = []
     for entry in tree.get("entries", []):
         nodes.append({
@@ -142,8 +209,6 @@ def tree_to_graph(tree: dict[str, Any]) -> dict[str, Any]:
             "raw": deepcopy(link),
         })
 
-    # Directory parenthood is structural input information. Expose it as an
-    # explicit containment edge only when no identical link already exists.
     existing = {(e["source"], e["target"], e["dimension"]) for e in edges}
     for entry in tree.get("entries", []):
         parent_id = entry.get("parent_id")
@@ -160,4 +225,4 @@ def tree_to_graph(tree: dict[str, Any]) -> dict[str, Any]:
             "type": "contains",
             "raw": {"source": "StructureTree.parent_id"},
         })
-    return {"nodes": nodes, "edges": edges}
+    return {"nodes": nodes, "edges": edges, "flows": deepcopy(tree.get("flows", []))}
