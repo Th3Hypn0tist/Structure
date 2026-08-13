@@ -52,13 +52,13 @@ def _viewer_html_payload() -> bytes:
 
 
 def _viewer_cards_payload() -> bytes:
-    """Apply temporary primary-view defaults while the view is still being tuned."""
+    """Serve viewer cards safely; apply working primary-depth defaults when possible."""
     text = _file_payload(SCENE_VIEWER_CARDS_JS).decode('utf-8')
-    old = "const defaultPositions = {IAM:{x:0,y:420,z:-120},AccessCore:{x:0,y:0,z:0},DWH:{x:0,y:-420,z:120}};\n  S.instances = roots.map((root, index) => ({id:`p${index+1}`,name:root,master:index===0,projection_style:style?.id||'atlas',projection_dimension:dimension,root_topic:root,dependency_depth:1}));"
-    new = "const defaultPositions = {IAM:{x:0,y:420,z:-120},AccessCore:{x:0,y:0,z:0},DWH:{x:0,y:-420,z:120}};\n  const defaultDepths = {IAM:0,AccessCore:0,DWH:3};\n  S.instances = roots.map((root, index) => ({id:`p${index+1}`,name:root,master:index===0,projection_style:style?.id||'atlas',projection_dimension:dimension,root_topic:root,dependency_depth:defaultDepths[root] ?? 1}));"
-    if old not in text:
-        raise RuntimeError('Primary projection default marker not found in viewer cards')
-    return text.replace(old, new, 1).encode('utf-8')
+    marker = "root_topic:root,dependency_depth:1"
+    replacement = "root_topic:root,dependency_depth:(root==='DWH'?3:0)"
+    if marker in text:
+        text = text.replace(marker, replacement, 1)
+    return text.encode('utf-8')
 
 
 def _build_canonical_projection(graph: dict, projection_id: str) -> dict:
