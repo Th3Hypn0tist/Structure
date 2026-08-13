@@ -42,6 +42,25 @@ def _file_payload(path: str) -> bytes:
         return handle.read()
 
 
+def _viewer_html_payload() -> bytes:
+    """Apply working product/view labels without changing semantic source data."""
+    text = _file_payload(SCENE_VIEWER_HTML).decode('utf-8')
+    text = text.replace('<title>StructureProjector</title>', '<title>Structure</title>')
+    text = text.replace('<header><strong>StructureProjector</strong>', '<header><strong>Structure</strong>')
+    text = text.replace('even = blue, odd = silver', 'odd = blue, even = silver')
+    return text.encode('utf-8')
+
+
+def _viewer_cards_payload() -> bytes:
+    """Apply temporary primary-view defaults while the view is still being tuned."""
+    text = _file_payload(SCENE_VIEWER_CARDS_JS).decode('utf-8')
+    old = "const defaultPositions = {IAM:{x:0,y:420,z:-120},AccessCore:{x:0,y:0,z:0},DWH:{x:0,y:-420,z:120}};\n  S.instances = roots.map((root, index) => ({id:`p${index+1}`,name:root,master:index===0,projection_style:style?.id||'atlas',projection_dimension:dimension,root_topic:root,dependency_depth:1}));"
+    new = "const defaultPositions = {IAM:{x:0,y:420,z:-120},AccessCore:{x:0,y:0,z:0},DWH:{x:0,y:-420,z:120}};\n  const defaultDepths = {IAM:0,AccessCore:0,DWH:3};\n  S.instances = roots.map((root, index) => ({id:`p${index+1}`,name:root,master:index===0,projection_style:style?.id||'atlas',projection_dimension:dimension,root_topic:root,dependency_depth:defaultDepths[root] ?? 1}));"
+    if old not in text:
+        raise RuntimeError('Primary projection default marker not found in viewer cards')
+    return text.replace(old, new, 1).encode('utf-8')
+
+
 def _build_canonical_projection(graph: dict, projection_id: str) -> dict:
     if projection_id in STRUCTURE_REVEAL_PROJECTIONS:
         return build_structure_reveal_projection(graph, projection_id)
@@ -135,9 +154,6 @@ def _compose_projection_instance_result(snapshot, specs: list[dict]) -> dict:
     if len(ids) != len(set(ids)):
         raise ValueError('Projection instance ids must be unique')
 
-    # Reserve every explicit projection base before any relation expansion. This
-    # makes duplicate prevention independent of list order while the single master
-    # still composes first and provides the deterministic scene ownership anchor.
     reserved_by_instance = {
         instance['id']: projection_base_ids(tree, instance['root_topic'])
         for instance in normalized
@@ -184,7 +200,7 @@ def _compose_projection_instance_result(snapshot, specs: list[dict]) -> dict:
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.23.1'
+    server_version = 'Structure/0.23.2'
 
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode('utf-8')
@@ -194,13 +210,15 @@ class Handler(BaseHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _write_file(self, path: str, content_type: str) -> None:
-        body = _file_payload(path)
+    def _write_body(self, body: bytes, content_type: str) -> None:
         self.send_response(200)
         self.send_header('Content-Type', content_type)
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _write_file(self, path: str, content_type: str) -> None:
+        self._write_body(_file_payload(path), content_type)
 
     def _read_json_body(self) -> dict:
         length = int(self.headers.get('Content-Length', '0') or 0)
@@ -225,18 +243,18 @@ class Handler(BaseHandler):
         query = urllib.parse.parse_qs(parsed.query)
         try:
             if path == '/':
-                return self._write_file(SCENE_VIEWER_HTML, 'text/html; charset=utf-8')
+                return self._write_body(_viewer_html_payload(), 'text/html; charset=utf-8')
             if path == '/static/scene_viewer_v4.js':
                 return self._write_file(SCENE_VIEWER_JS, 'application/javascript; charset=utf-8')
             if path == '/static/scene_viewer_v4_cards.js':
-                return self._write_file(SCENE_VIEWER_CARDS_JS, 'application/javascript; charset=utf-8')
+                return self._write_body(_viewer_cards_payload(), 'application/javascript; charset=utf-8')
             if path == '/legacy':
                 return self._write_file(LEGACY_INDEX_HTML, 'text/html; charset=utf-8')
             if path == '/api/health':
                 return self._write_json({
                     'ok': True,
                     'server': self.server_version,
-                    'input_model': 'StructureTree/1.0',
+                    'input_model': 'StructureTree/1.1',
                     'scene_model': 'Scene/1.1',
                     'projection_instances': True,
                     'projection_style_dimension_split': True,
@@ -261,7 +279,14 @@ class Handler(BaseHandler):
                     'topics': [{'id': 'all', 'label': 'all', 'entry_count': len(tree.get('entries', []))}] + topic_catalog(tree),
                     'relation_depth': {'min': 0, 'max': 32, 'default': 1},
                     'wire_compatibility': {'dependency_depth': 'relation_depth'},
-                    'defaults': {'projection_style': 'atlas', 'projection_dimension': '3d', 'even': '#AAB2C2', 'odd': '#087CFF', 'label_text': '#FFFFFF'},
+                    'defaults': {
+                        'projection_style': 'atlas',
+                        'projection_dimension': '3d',
+                        'primary_relation_depth': {'IAM': 0, 'AccessCore': 0, 'DWH': 3},
+                        'even': '#AAB2C2',
+                        'odd': '#087CFF',
+                        'label_text': '#FFFFFF',
+                    },
                 })
             if path == '/api/scene':
                 branch = query.get('branch', ['main'])[0]
@@ -322,7 +347,7 @@ class Handler(BaseHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer((APP_HOST, APP_PORT), Handler)
-    print(f'StructureProjector listening on http://{APP_HOST}:{APP_PORT}')
+    print(f'Structure listening on http://{APP_HOST}:{APP_PORT}')
     server.serve_forever()
 
 
