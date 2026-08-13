@@ -16,11 +16,6 @@ def _default_offset(index: int, spacing: float = 1800.0) -> dict[str, Any]:
 
 
 def _recenter_projection(projection: dict[str, Any]) -> dict[str, Any]:
-    """Center projection coordinates around SceneObject local origin.
-
-    This changes only derived projection coordinates. Source identities,
-    topology and semantics remain untouched.
-    """
     out = deepcopy(projection)
     nodes = out.get("nodes", [])
     if not nodes:
@@ -173,8 +168,11 @@ def compose_projection_instances(
         obj["title"] = instance["name"]
         obj["instance_id"] = instance_id
         obj["projection_style"] = instance["projection_style"]
+        obj["projection_dimension"] = instance["projection_dimension"]
+        obj["projection_generator"] = instance["projection_generator"]
         obj["root_topic"] = instance["root_topic"]
         obj["dependency_depth"] = instance["dependency_depth"]
+        obj["relation_depth"] = instance["dependency_depth"]
         obj["filter"] = filter_metadata
         obj["local_origin"] = deepcopy(projection.get("local_origin", {}))
         obj["style_defaults"] = {
