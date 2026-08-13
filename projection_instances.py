@@ -6,6 +6,7 @@ from typing import Any
 
 from canonical_projections import PROJECTIONS as CORE_PROJECTIONS
 from canonical_projections_extra3d import PROJECTIONS as EXTRA_PROJECTIONS
+from structure_reveal_projections import PROJECTIONS as STRUCTURE_REVEAL_PROJECTIONS
 
 MAX_RELATION_DEPTH = 32
 PRIMARY_ROOT_IDS = ("IAM", "AccessCore", "DWH")
@@ -26,11 +27,16 @@ STYLE_LABELS = {
     "dependency_tower_3d": "Dependency Tower",
     "authority_space_3d": "Authority Space",
     "relation_orbits_3d": "Relation Orbits",
+    "hierarchy_tree_2d": "Hierarchy Tree 2D",
+    "relation_generations_2d": "Relation Generations 2D",
+    "component_islands_2d": "Component Islands 2D",
+    "relation_shells_3d": "Relation Shells 3D",
+    "structure_spine_3d": "Structure Spine 3D",
 }
 
 
 def style_catalog() -> list[dict[str, Any]]:
-    merged = {**CORE_PROJECTIONS, **EXTRA_PROJECTIONS}
+    merged = {**CORE_PROJECTIONS, **EXTRA_PROJECTIONS, **STRUCTURE_REVEAL_PROJECTIONS}
     return sorted([
         {
             "id": style_id,
@@ -39,7 +45,7 @@ def style_catalog() -> list[dict[str, Any]]:
             "kind": meta.get("kind"),
         }
         for style_id, meta in merged.items()
-    ], key=lambda item: (str(item.get("dimension")), str(item.get("label"))))
+    ], key=lambda item: (str(item.get("dimension")), str(item.get("kind")), str(item.get("label"))))
 
 
 def _entries(tree: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -125,12 +131,6 @@ def _projection_hierarchy_depths(tree: dict[str, Any], included: set[str]) -> di
 
 
 def _relation_adjacency(graph: dict[str, Any]) -> tuple[dict[str, list[tuple[str, str]]], set[str]]:
-    """Build adjacency from explicit graph edges only.
-
-    Traversal is undirected for discovery: if documentation explicitly states a
-    relation A -> B, either endpoint can reveal the other. The original edge
-    direction and dimension remain unchanged in the projected graph.
-    """
     adjacency: dict[str, list[tuple[str, str]]] = {}
     dimensions: set[str] = set()
     for edge in graph.get("edges", []):
@@ -154,14 +154,6 @@ def filter_for_instance(
     root_topic: str,
     dependency_depth: int,
 ) -> tuple[dict[str, Any], dict[str, int | None], dict[str, Any]]:
-    """Build a projection subset from documented evidence only.
-
-    `root_topic` is an explicit canonical identity. Its explicit containment
-    subtree forms generation 0. `dependency_depth` is retained as the wire/API
-    field for compatibility, but semantically it is relation depth: each next
-    generation follows every explicit graph edge, regardless of dimension.
-    Nothing is inferred from names, paths, prose, colors or layout.
-    """
     relation_depth = max(0, min(MAX_RELATION_DEPTH, int(dependency_depth)))
     entries = _entries(tree)
     selectable = {item["id"] for item in topic_catalog(tree)}
@@ -218,7 +210,14 @@ def filter_for_instance(
         "expansion_rule": "all explicit documented graph relations; bidirectional discovery only",
         "inference": False,
     }
-    return {"nodes": nodes, "edges": edges}, hierarchy_depths, metadata
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "projection_root": root_topic,
+        "projection_root_name": root_name,
+        "projection_base_ids": sorted(base_ids),
+        "projection_relation_depth": relation_depth,
+    }, hierarchy_depths, metadata
 
 
 def normalize_instance_spec(spec: dict[str, Any], index: int = 0) -> dict[str, Any]:
