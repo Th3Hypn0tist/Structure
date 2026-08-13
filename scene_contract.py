@@ -109,6 +109,7 @@ def projection_to_object(
         entry = entry_index.get(entry_id, {})
         metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
         provenance = entry.get("provenance") if isinstance(entry.get("provenance"), dict) else {}
+        projected_hierarchy_depth = projected.get("hierarchy_depth")
         nodes.append({
             "id": entry_id,
             "source_ref": entry_id,
@@ -131,7 +132,11 @@ def projection_to_object(
                 "kind": entry.get("kind", projected.get("kind")),
                 "source_role": metadata.get("source_role"),
                 "source_path": provenance.get("path"),
-                "hierarchy_depth": hierarchy_depths.get(entry_id),
+                "hierarchy_depth": projected_hierarchy_depth if isinstance(projected_hierarchy_depth, int) else hierarchy_depths.get(entry_id),
+                "projection_depth": projected.get("projection_depth"),
+                "projection_generation": projected.get("projection_generation"),
+                "projection_parent_id": projected.get("projection_parent_id"),
+                "relation_depth": projected.get("relation_depth"),
             },
             "bindings": [],
         })
