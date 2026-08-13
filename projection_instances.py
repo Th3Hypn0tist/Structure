@@ -7,9 +7,11 @@ from typing import Any
 from canonical_projections import PROJECTIONS as CORE_PROJECTIONS
 from canonical_projections_extra3d import PROJECTIONS as EXTRA_PROJECTIONS
 from structure_reveal_projections import PROJECTIONS as STRUCTURE_REVEAL_PROJECTIONS
+from topic_profiles import resolve_topic_profile, topic_base_ids
 
 MAX_RELATION_DEPTH = 32
 PRIMARY_ROOT_IDS = ("IAM", "AccessCore", "DWH")
+PRIMARY_PROFILE_COMPAT = {"iam": "IAM", "accesscore": "AccessCore", "dwh": "DWH"}
 
 STYLE_FAMILIES: dict[str, dict[str, Any]] = {
     "atlas": {"label": "Atlas", "variants": {"2d": "atlas_2d", "3d": "atlas_3d"}},
@@ -125,6 +127,18 @@ def _containment_subtree(root_id: str, entries: dict[str, dict[str, Any]]) -> se
 
 
 def topic_catalog(tree: dict[str, Any]) -> list[dict[str, Any]]:
+    profile_topics = resolve_topic_profile(tree)
+    if profile_topics:
+        out: list[dict[str, Any]] = []
+        for topic in profile_topics:
+            item = deepcopy(topic)
+            profile_id = str(item["id"])
+            item["profile_id"] = profile_id
+            item["id"] = PRIMARY_PROFILE_COMPAT.get(profile_id, profile_id)
+            item["primary"] = profile_id in PRIMARY_PROFILE_COMPAT
+            out.append(item)
+        return out
+
     entries = _entries(tree)
     ordered: list[str] = [root for root in PRIMARY_ROOT_IDS if root in entries]
     definitions = [
@@ -180,16 +194,37 @@ def _projection_hierarchy_depths(tree: dict[str, Any], included: set[str]) -> di
     return {entry_id: absolute.get(entry_id) for entry_id in included}
 
 
+def _profile_topic_id(root_topic: str) -> str:
+    reverse = {wire: profile for profile, wire in PRIMARY_PROFILE_COMPAT.items()}
+    return reverse.get(root_topic, root_topic)
+
+
 def projection_base_ids(tree: dict[str, Any], root_topic: str) -> set[str]:
     entries = _entries(tree)
     if root_topic == "all":
         return set(entries)
+
+    profile_id = _profile_topic_id(root_topic)
+    profile_base = topic_base_ids(tree, profile_id)
+    if profile_base is not None:
+        return profile_base
+
     selectable = {item["id"] for item in topic_catalog(tree)}
     if root_topic not in entries:
         raise KeyError(f"Unknown projection root topic: {root_topic}")
     if root_topic not in selectable:
         raise KeyError(f"Projection root is not selectable: {root_topic}")
     return _containment_subtree(root_topic, entries)
+
+
+def _topic_name(tree: dict[str, Any], root_topic: str) -> str:
+    if root_topic == "all":
+        return "all"
+    for item in topic_catalog(tree):
+        if item["id"] == root_topic:
+            return str(item.get("label") or root_topic)
+    entry = _entries(tree).get(root_topic)
+    return str((entry or {}).get("name") or root_topic)
 
 
 def _relation_adjacency(graph: dict[str, Any]) -> tuple[dict[str, list[tuple[str, str]]], set[str]]:
@@ -220,7 +255,7 @@ def filter_for_instance(
     relation_depth = max(0, min(MAX_RELATION_DEPTH, int(dependency_depth)))
     entries = _entries(tree)
     base_ids = projection_base_ids(tree, root_topic)
-    root_name = "all" if root_topic == "all" else str(entries[root_topic].get("name") or root_topic)
+    root_name = _topic_name(tree, root_topic)
     external_visible_ids = set(external_visible_ids or set()) - base_ids
 
     included = set(base_ids)
@@ -322,13 +357,14 @@ def filter_for_instance(
         "external_reference_count": len(external_references),
         "external_reference_ids": sorted({item["target_id"] for item in external_references}),
         "external_references": external_references,
-        "topic_rule": "explicit canonical identity plus explicit containment subtree",
+        "topic_rule": "replaceable topic profile when present; exact explicit canonical identity resolution only; canonical hierarchy remains authoritative",
         "expansion_rule": "all explicit documented graph relations; bidirectional discovery only",
         "projection_depth_rule": "recursive parent generation; generation 1 is odd; each explicit relation hop advances one generation",
         "projection_parent_rule": "base nodes use explicit StructureTree parent_id; relation-expanded nodes use the explicit recursion predecessor as presentation parent",
         "existing_identity_rule": "relation-expanded identity already visible/reserved in another projection is referenced, not duplicated, and recursion stops there",
         "projection_depth_semantic_authority": False,
         "projection_parent_semantic_authority": False,
+        "topic_profile_semantic_authority": False,
         "inference": False,
     }
     return {
