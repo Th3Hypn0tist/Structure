@@ -1,0 +1,91 @@
+{
+  "format": "CANONICALWIREFRAME_FLOW_TRACE_CONTRACT",
+  "version": "1.0",
+  "status": "locked",
+  "name": "CW Flow Trace",
+  "purpose": "Define explicit causal flow records and deterministic trace reconstruction without semantic guessing.",
+  "behavior_dimension": "flows",
+  "required_flow_fields": [
+    "id",
+    "kind",
+    "actor_ref",
+    "action_ref",
+    "target_ref",
+    "cause_ref",
+    "result_refs"
+  ],
+  "optional_flow_fields": [
+    "data_ref",
+    "condition_ref",
+    "payload_ref",
+    "error_refs",
+    "metadata"
+  ],
+  "flow_kinds": [
+    "read",
+    "write",
+    "create",
+    "update",
+    "delete",
+    "emit",
+    "trigger",
+    "invoke",
+    "send",
+    "receive"
+  ],
+  "questions": {
+    "WHO": "actor_ref",
+    "WHAT": ["kind", "action_ref", "data_ref"],
+    "WHERE": "target_ref",
+    "WHY": "cause_ref"
+  },
+  "trace": {
+    "entry": "stable semantic identity",
+    "allowed_causal_source": "behavior.flows[] only",
+    "recursive_rule": "A result_ref may continue to flows whose cause_ref resolves to that result identity.",
+    "branching_rule": "Multiple downstream flows are parallel branches unless explicit causal ordering says otherwise.",
+    "cycle_rule": "Revisited flow identity terminates that traversal branch.",
+    "forbidden_causal_sources": [
+      "dependencies",
+      "containment",
+      "ownership",
+      "authority",
+      "membership",
+      "generic relations",
+      "prose",
+      "names",
+      "paths",
+      "layout",
+      "array order",
+      "implementation behavior"
+    ]
+  },
+  "identity": {
+    "rule": "Every flow participant must use a stable resolvable semantic identity.",
+    "forbidden": "Deriving behavior identity from display names, parent names, paths or naming convention."
+  },
+  "cross_projection": {
+    "authoritative_duplicate_forbidden": true,
+    "reference_proxy_allowed": true,
+    "reference_proxy_semantic_authority": false,
+    "local_recursion_stops_at_existing_identity": true,
+    "trace_continues_from_existing_identity": true
+  },
+  "hard_gates": [
+    "CW_FLOW_UNRESOLVED_ACTOR",
+    "CW_FLOW_UNRESOLVED_ACTION",
+    "CW_FLOW_UNRESOLVED_TARGET",
+    "CW_FLOW_UNRESOLVED_CAUSE",
+    "CW_FLOW_UNRESOLVED_RESULT",
+    "CW_FLOW_IMPLICIT_CAUSALITY",
+    "CW_FLOW_IMPLICIT_ORDER",
+    "CW_FLOW_HIDDEN_EFFECT",
+    "CW_FLOW_HIDDEN_REFERENCE"
+  ],
+  "compatibility": {
+    "StructureTree": "1.1",
+    "AIGMos_contract_format_1_1": "flows supported when present; not required",
+    "AIGMos_contract_format_1_2": "flows required when Contract Format behavior.required contains flows"
+  },
+  "final_lock": "Every modeled causal effect is reconstructible as WHO did WHAT, WHERE and WHY from resolvable structured references only."
+}
