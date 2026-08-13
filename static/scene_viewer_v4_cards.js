@@ -1,14 +1,11 @@
 'use strict';
 
-// Viewer-only card enrichment and compact projection-style UI. It reads only
-// explicit Scene node properties and explicit Scene connections.
 const SP_originalBuildAtlas = Renderer.prototype.buildAtlas;
 const SP_originalBuild = Renderer.prototype.build;
 const SP_originalRenderInstances = renderInstances;
 const SP_originalLoadScene = loadScene;
 let SP_defaultRootsApplied = false;
 
-// Generation 1 is ODD and blue. Generation 2 is EVEN and silver.
 styleDefaults = function(){ return {even:'#AAB2C2', odd:'#087CFF', title:'#0B356B'}; };
 
 function spNodeRecord(key) {
@@ -19,7 +16,6 @@ function spNodeRecord(key) {
   const obj = (S.scene?.objects || []).find(o => o.id === objectId);
   const node = (obj?.nodes || []).find(n => String(n.id) === nodeId);
   if (!obj || !node) return null;
-
   let incoming = 0;
   let outgoing = 0;
   const byChannel = {};
@@ -70,21 +66,17 @@ Renderer.prototype.buildAtlas = function(records) {
     const props = info?.node?.properties || {};
     const pad = 14;
     const maxW = cellW - pad * 2;
-
     ctx.font = '700 25px Arial, sans-serif';
     ctx.fillText(spFit(ctx, props.name || record.text || info?.node?.id || '', maxW), x + pad, y + 25);
-
     const type = props.type || '—';
     const status = props.status || '—';
     ctx.font = '600 14px Arial, sans-serif';
     ctx.globalAlpha = .95;
     ctx.fillText(spFit(ctx, `${type} · ${status}`, maxW), x + pad, y + 55);
-
     const role = props.source_role || props.kind || '—';
     ctx.font = '500 13px Arial, sans-serif';
     ctx.globalAlpha = .82;
     ctx.fillText(spFit(ctx, role, maxW), x + pad, y + 78);
-
     const incoming = info?.incoming || 0;
     const outgoing = info?.outgoing || 0;
     const total = incoming + outgoing;
@@ -97,7 +89,6 @@ Renderer.prototype.buildAtlas = function(records) {
     ctx.globalAlpha = .92;
     ctx.fillText(spFit(ctx, `OUT ${outgoing}  IN ${incoming}  LINKS ${total}${channelSummary ? '  ' + channelSummary : ''}`, maxW), x + pad, y + 104);
     ctx.globalAlpha = 1;
-
     this.labelUV.set(record.key, {
       u0: x / canvas.width,
       v0: 1 - (y + cellH) / canvas.height,
@@ -130,37 +121,92 @@ function spBasisForChildDirection(direction) {
   const forward=spNormalizeVector(spCross(down,right),{x:0,y:0,z:1});
   return {right,down,forward};
 }
-function spOrientCanonicalPoint(point,direction) {
-  const basis=spBasisForChildDirection(direction);
-  // Atlas canonical frame: X=sibling, -Y=child direction, Z=sibling.
-  const depth=-point.y;
-  return {
-    x:basis.right.x*point.x+basis.down.x*depth+basis.forward.x*point.z,
-    y:basis.right.y*point.x+basis.down.y*depth+basis.forward.y*point.z,
-    z:basis.right.z*point.x+basis.down.z*depth+basis.forward.z*point.z,
-  };
+
+function spRecursive3DPositions(obj, state) {
+  const nodes = obj.nodes || [];
+  const byId = new Map(nodes.map(node => [String(node.id), node]));
+  const children = new Map();
+  const roots = [];
+  for (const node of nodes) {
+    const id = String(node.id);
+    const parent = node.properties?.projection_parent_id;
+    const parentId = parent == null ? null : String(parent);
+    if (parentId && byId.has(parentId)) {
+      if (!children.has(parentId)) children.set(parentId, []);
+      children.get(parentId).push(id);
+    } else {
+      roots.push(id);
+    }
+  }
+  for (const list of children.values()) list.sort();
+
+  const p = state.projection;
+  const basis = spBasisForChildDirection(p.child_direction || {x:0,y:-1,z:0});
+  const childGap = 300 * Math.max(.05, Number(p.spread_y)||1);
+  const siblingGapX = 210 * Math.max(.05, Number(p.spread_x)||1);
+  const siblingGapZ = 210 * Math.max(.05, Number(p.spread_z)||1);
+  const positions = new Map();
+
+  for (const rootId of roots.sort()) {
+    const node = byId.get(rootId);
+    const src = node?.transform?.position || {};
+    positions.set(rootId, {
+      x:(Number(src.x)||0) * Math.max(.05, Number(p.spread_x)||1),
+      y:(Number(src.y)||0) * Math.max(.05, Number(p.spread_y)||1),
+      z:(Number(src.z)||0) * Math.max(.05, Number(p.spread_z)||1),
+    });
+    const queue=[rootId];
+    while(queue.length){
+      const parentId=queue.shift();
+      const parentPos=positions.get(parentId);
+      const childIds=children.get(parentId)||[];
+      if(!parentPos||!childIds.length)continue;
+      const cols=Math.max(1,Math.ceil(Math.sqrt(childIds.length)));
+      const rows=Math.max(1,Math.ceil(childIds.length/cols));
+      childIds.forEach((childId,index)=>{
+        const row=Math.floor(index/cols), col=index%cols;
+        const ox=(col-(cols-1)/2)*siblingGapX;
+        const oz=(row-(rows-1)/2)*siblingGapZ;
+        positions.set(childId,{
+          x:parentPos.x+basis.down.x*childGap+basis.right.x*ox+basis.forward.x*oz,
+          y:parentPos.y+basis.down.y*childGap+basis.right.y*ox+basis.forward.y*oz,
+          z:parentPos.z+basis.down.z*childGap+basis.right.z*ox+basis.forward.z*oz,
+        });
+        queue.push(childId);
+      });
+    }
+  }
+
+  for(const node of nodes){
+    const id=String(node.id);
+    if(positions.has(id))continue;
+    const src=node?.transform?.position||{};
+    positions.set(id,{
+      x:(Number(src.x)||0)*Math.max(.05,Number(p.spread_x)||1),
+      y:(Number(src.y)||0)*Math.max(.05,Number(p.spread_y)||1),
+      z:(Number(src.z)||0)*Math.max(.05,Number(p.spread_z)||1),
+    });
+  }
+  return positions;
 }
 
 Renderer.prototype.build = function(scene) {
   const restores=[];
   try {
-    // Re-orient Atlas locally before the base renderer applies object transform.
-    // Spread values stay in Atlas-local axes, so changing child direction rotates
-    // the whole hierarchy rather than changing the meaning of X/Y/Z spread.
     for (const obj of scene?.objects || []) {
       const inst=S.instances.find(i=>i.id===obj.instance_id);
-      if (!inst || inst.projection_style!=='atlas' || inst.projection_dimension!=='3d') continue;
+      if (!inst || inst.projection_dimension!=='3d') continue;
       const state=ensureLocalState(inst,obj), p=state.projection;
-      const direction=p.child_direction || {x:0,y:-1,z:0};
+      const positions=spRecursive3DPositions(obj,state);
       const oldSpread={x:p.spread_x,y:p.spread_y,z:p.spread_z};
       p.spread_x=p.spread_y=p.spread_z=1;
       restores.push(()=>{p.spread_x=oldSpread.x;p.spread_y=oldSpread.y;p.spread_z=oldSpread.z});
-      for (const node of obj.nodes || []) {
+      for(const node of obj.nodes||[]){
         const pos=node.transform?.position;
-        if (!pos) continue;
+        const replacement=positions.get(String(node.id));
+        if(!pos||!replacement)continue;
         const original={x:Number(pos.x)||0,y:Number(pos.y)||0,z:Number(pos.z)||0};
-        const oriented=spOrientCanonicalPoint({x:original.x*oldSpread.x,y:original.y*oldSpread.y,z:original.z*oldSpread.z},direction);
-        pos.x=oriented.x; pos.y=oriented.y; pos.z=oriented.z;
+        pos.x=replacement.x;pos.y=replacement.y;pos.z=replacement.z;
         restores.push(()=>{pos.x=original.x;pos.y=original.y;pos.z=original.z});
       }
     }
@@ -176,7 +222,6 @@ Renderer.prototype.build = function(scene) {
 function spStyle(inst) {
   return (S.catalog?.styles || []).find(style => style.id === inst.projection_style) || null;
 }
-
 function spNormalizeDimension(inst) {
   const style = spStyle(inst);
   const dimensions = style?.dimensions || ['2d'];
@@ -185,13 +230,9 @@ function spNormalizeDimension(inst) {
   }
   return dimensions;
 }
-
 styleOptions = function(selected) {
-  return (S.catalog?.styles || [])
-    .map(style => `<option value="${esc(style.id)}" ${style.id===selected?'selected':''}>${esc(style.label)}</option>`)
-    .join('');
+  return (S.catalog?.styles || []).map(style => `<option value="${esc(style.id)}" ${style.id===selected?'selected':''}>${esc(style.label)}</option>`).join('');
 };
-
 function spDimensionOptions(inst) {
   const dimensions = spNormalizeDimension(inst);
   return ['2d','3d'].map(dimension => {
@@ -205,28 +246,13 @@ newInstance = function() {
   const style = (S.catalog?.styles || []).find(item => item.id === 'atlas') || S.catalog?.styles?.[0];
   const root = (S.catalog?.topics || []).find(item => item.id === 'IAM') || (S.catalog?.topics || []).find(item => item.id !== 'all');
   const dimension = style?.dimensions?.includes('3d') ? '3d' : style?.dimensions?.[0] || '2d';
-  return {
-    id,
-    name:`Projection ${id.slice(1)}`,
-    projection_style: style?.id || 'atlas',
-    projection_dimension: dimension,
-    root_topic: root?.id || 'all',
-    dependency_depth: 1,
-  };
+  return {id,name:`Projection ${id.slice(1)}`,projection_style:style?.id||'atlas',projection_dimension:dimension,root_topic:root?.id||'all',dependency_depth:1};
 };
 
 instancePayload = function() {
   return S.instances.map(instance => {
     spNormalizeDimension(instance);
-    return {
-      id: instance.id,
-      name: instance.name,
-      master: !!instance.master,
-      projection_style: instance.projection_style,
-      projection_dimension: instance.projection_dimension,
-      root_topic: instance.root_topic,
-      dependency_depth: instance.dependency_depth,
-    };
+    return {id:instance.id,name:instance.name,master:!!instance.master,projection_style:instance.projection_style,projection_dimension:instance.projection_dimension,root_topic:instance.root_topic,dependency_depth:instance.dependency_depth};
   });
 };
 
@@ -260,7 +286,7 @@ instanceHTML = function(inst) {
       <div class="subhead"><span>Rotation</span><span>degrees</span></div><div class="grid3">${axisFields(inst.id,'rotation',st.transform.rotation,5,-360,360)}</div>
       <div class="subhead"><span>Scale</span><span>XYZ</span></div><div class="grid3">${axisFields(inst.id,'scale',st.transform.scale,.05,.05,20)}</div>
       <div class="subhead"><span>Projection layout</span><span>local</span></div>
-      ${inst.projection_style==='atlas'&&inst.projection_dimension==='3d'?`<div class="subhead"><span>Child direction</span><span>XYZ vector</span></div><div class="grid3">${spDirectionFields(inst.id,p.child_direction)}</div>`:''}
+      ${inst.projection_dimension==='3d'?`<div class="subhead"><span>Child direction</span><span>XYZ vector</span></div><div class="grid3">${spDirectionFields(inst.id,p.child_direction)}</div>`:''}
       <div class="grid3">
         <div class="field axis x"><label>X spread</label><input type="number" step=".05" min=".05" max="20" data-proj="${inst.id}" data-proj-key="spread_x" value="${p.spread_x}"></div>
         <div class="field axis y"><label>Y spread</label><input type="number" step=".05" min=".05" max="20" data-proj="${inst.id}" data-proj-key="spread_y" value="${p.spread_y}"></div>
@@ -291,8 +317,6 @@ renderInstances = function() {
   });
 };
 
-// Extend the existing per-style/dimension projection-memory state with the
-// direction vector. Old state upgrades in place with the canonical -Y default.
 const SP_baseEnsureLocalState=ensureLocalState;
 ensureLocalState=function(instance,obj){
   const state=SP_baseEnsureLocalState(instance,obj);
@@ -310,30 +334,11 @@ function spApplyPrimaryDefaults() {
   if (!roots.length) return;
   const style = (S.catalog.styles || []).find(item => item.id === 'atlas') || S.catalog.styles?.[0];
   const dimension = style?.dimensions?.includes('3d') ? '3d' : style?.dimensions?.[0] || '2d';
-  const defaultPositions = {
-    IAM: {x:0, y:420, z:-120},
-    AccessCore: {x:0, y:0, z:0},
-    DWH: {x:0, y:-420, z:120},
-  };
-  S.instances = roots.map((root, index) => ({
-    id: `p${index + 1}`,
-    name: root,
-    master: index===0,
-    projection_style: style?.id || 'atlas',
-    projection_dimension: dimension,
-    root_topic: root,
-    dependency_depth: 1,
-  }));
+  const defaultPositions = {IAM:{x:0,y:420,z:-120},AccessCore:{x:0,y:0,z:0},DWH:{x:0,y:-420,z:120}};
+  S.instances = roots.map((root, index) => ({id:`p${index+1}`,name:root,master:index===0,projection_style:style?.id||'atlas',projection_dimension:dimension,root_topic:root,dependency_depth:1}));
   for (const inst of S.instances) {
-    const position = defaultPositions[inst.root_topic] || {x:0, y:0, z:0};
-    S.objectState[inst.id] = {
-      transform: {
-        position: {...position},
-        rotation: {x:0, y:0, z:0},
-        scale: {x:1, y:1, z:1},
-      },
-      projection: {...projectionDefaults(), child_direction:{x:0,y:-1,z:0}},
-    };
+    const position = defaultPositions[inst.root_topic] || {x:0,y:0,z:0};
+    S.objectState[inst.id] = {transform:{position:{...position},rotation:{x:0,y:0,z:0},scale:{x:1,y:1,z:1}},projection:{...projectionDefaults(),child_direction:{x:0,y:-1,z:0}}};
   }
   S.nextId = roots.length + 1;
   SP_defaultRootsApplied = true;
