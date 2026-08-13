@@ -134,62 +134,113 @@ def _dependency_depths(nodes: list[dict[str, Any]], edges: list[dict[str, Any]])
 
 
 def _atlas_3d(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[str, Any]:
-    """Visible projection generations descend on Y; peers spread on X/Z."""
-    hierarchy = _hierarchy_depths(nodes, edges)
-    by_depth: dict[int, list[dict[str, Any]]] = defaultdict(list)
-    unresolved: list[dict[str, Any]] = []
+    """Parent-centred recursive Atlas layout in canonical local coordinates.
 
-    for node in nodes:
-        node_id = str(node.get("id"))
-        explicit_projection_depth = node.get("projection_depth")
-        if isinstance(explicit_projection_depth, int) and explicit_projection_depth >= 0:
-            depth = explicit_projection_depth
+    Canonical child direction is -Y. The Viewer may rotate this local frame to a
+    configured child-direction vector without changing projection semantics.
+    """
+    hierarchy = _hierarchy_depths(nodes, edges)
+    node_by_id = {str(node.get("id")): node for node in nodes}
+    ids = set(node_by_id)
+
+    depth_by_id: dict[str, int | None] = {}
+    parent_by_id: dict[str, str | None] = {}
+    for node_id, node in node_by_id.items():
+        explicit_depth = node.get("projection_depth")
+        depth_by_id[node_id] = explicit_depth if isinstance(explicit_depth, int) and explicit_depth >= 0 else hierarchy.get(node_id)
+        raw_parent = node.get("projection_parent_id")
+        parent_by_id[node_id] = str(raw_parent) if raw_parent is not None and str(raw_parent) in ids else None
+
+    children: dict[str, list[str]] = defaultdict(list)
+    roots: list[str] = []
+    unresolved: list[str] = []
+    for node_id in sorted(ids):
+        if depth_by_id[node_id] is None:
+            unresolved.append(node_id)
+            continue
+        parent_id = parent_by_id[node_id]
+        if parent_id is None or depth_by_id.get(parent_id) is None:
+            roots.append(node_id)
         else:
-            depth = hierarchy.get(node_id)
-        if depth is None:
-            unresolved.append(node)
-        else:
-            by_depth[depth].append(node)
+            children[parent_id].append(node_id)
+    for values in children.values():
+        values.sort()
+
+    depth_gap = 300.0
+    sibling_gap = 210.0
+    root_gap = 900.0
+    positions: dict[str, tuple[float, float, float]] = {}
+
+    # Separate independent roots so their recursive child clusters do not start
+    # on top of each other. Children themselves remain centred on their parent.
+    for root_index, root_id in enumerate(sorted(roots)):
+        root_x = (root_index - (len(roots) - 1) / 2.0) * root_gap
+        root_depth = depth_by_id[root_id] or 0
+        positions[root_id] = (root_x, -root_depth * depth_gap, 0.0)
+
+        queue = deque([root_id])
+        while queue:
+            parent_id = queue.popleft()
+            px, _py, pz = positions[parent_id]
+            child_ids = children.get(parent_id, [])
+            count = len(child_ids)
+            if not count:
+                continue
+
+            # One child sits exactly beneath its parent. Multiple siblings spread
+            # symmetrically across the plane perpendicular to canonical -Y.
+            cols = max(1, math.ceil(math.sqrt(count)))
+            rows = max(1, math.ceil(count / cols))
+            for index, child_id in enumerate(child_ids):
+                row, col = divmod(index, cols)
+                x = px + (col - (cols - 1) / 2.0) * sibling_gap
+                z = pz + (row - (rows - 1) / 2.0) * sibling_gap
+                depth = depth_by_id[child_id]
+                y = -(depth if isinstance(depth, int) else 0) * depth_gap
+                positions[child_id] = (x, y, z)
+                queue.append(child_id)
+
+    # Defensive deterministic placement for any resolved node disconnected from
+    # the selected projection-parent forest.
+    missing = [node_id for node_id in sorted(ids) if depth_by_id[node_id] is not None and node_id not in positions]
+    for index, node_id in enumerate(missing):
+        depth = depth_by_id[node_id] or 0
+        positions[node_id] = (1200.0 + index * sibling_gap, -depth * depth_gap, 0.0)
 
     projected: list[dict[str, Any]] = []
     groups: list[dict[str, Any]] = []
-    depth_gap = 300.0
-    spacing = 185.0
-    max_plane_radius = 0.0
-    max_depth = max(by_depth, default=0)
+    by_depth: dict[int, list[str]] = defaultdict(list)
+    for node_id, depth in depth_by_id.items():
+        if isinstance(depth, int):
+            by_depth[depth].append(node_id)
 
     for depth in sorted(by_depth):
-        members = sorted(by_depth[depth], key=lambda n: str(n["id"]))
-        cols = max(1, math.ceil(math.sqrt(len(members))))
-        rows = max(1, math.ceil(len(members) / cols))
-        y = -depth * depth_gap
-        width = max(0.0, (cols - 1) * spacing)
-        depth_span = max(0.0, (rows - 1) * spacing)
-        max_plane_radius = max(max_plane_radius, width / 2.0, depth_span / 2.0)
+        members = sorted(by_depth[depth])
         groups.append({
             "id": f"projection-depth-{depth}",
             "title": f"projection depth {depth}",
             "x": 0.0,
-            "y": y,
+            "y": -depth * depth_gap,
             "z": 0.0,
             "count": len(members),
         })
-        for index, node in enumerate(members):
-            row, col = divmod(index, cols)
+        for node_id in members:
+            node = node_by_id[node_id]
+            x, y, z = positions[node_id]
             p = _public(node)
             p.update({
-                "x": (col - (cols - 1) / 2.0) * spacing,
+                "x": x,
                 "y": y,
-                "z": (row - (rows - 1) / 2.0) * spacing,
-                "hierarchy_depth": hierarchy.get(str(node.get("id"))),
+                "z": z,
+                "hierarchy_depth": hierarchy.get(node_id),
                 "projection_depth": depth,
+                "projection_generation": node.get("projection_generation"),
+                "projection_parent_id": parent_by_id.get(node_id),
             })
             projected.append(p)
 
     if unresolved:
-        cols = max(1, math.ceil(math.sqrt(len(unresolved))))
-        rows = max(1, math.ceil(len(unresolved) / cols))
-        unresolved_x = max(650.0, max_plane_radius + 650.0)
+        unresolved_x = max(1500.0, (len(roots) + 1) * root_gap / 2.0 + 650.0)
         groups.append({
             "id": "projection-depth-unresolved",
             "title": "projection depth unresolved",
@@ -198,26 +249,31 @@ def _atlas_3d(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[
             "z": 0.0,
             "count": len(unresolved),
         })
-        for index, node in enumerate(sorted(unresolved, key=lambda n: str(n["id"]))):
-            row, col = divmod(index, cols)
+        for index, node_id in enumerate(sorted(unresolved)):
+            node = node_by_id[node_id]
             p = _public(node)
             p.update({
-                "x": unresolved_x + (col - (cols - 1) / 2.0) * spacing,
+                "x": unresolved_x + index * sibling_gap,
                 "y": 0.0,
-                "z": (row - (rows - 1) / 2.0) * spacing,
-                "hierarchy_depth": hierarchy.get(str(node.get("id"))),
+                "z": 0.0,
+                "hierarchy_depth": hierarchy.get(node_id),
                 "projection_depth": None,
+                "projection_generation": node.get("projection_generation"),
+                "projection_parent_id": parent_by_id.get(node_id),
             })
             projected.append(p)
-        max_plane_radius = max(max_plane_radius, unresolved_x + (cols - 1) * spacing / 2.0)
 
-    extent = max(850.0, max_plane_radius + 500.0, max_depth * depth_gap + 500.0)
+    max_extent = max(
+        [850.0]
+        + [abs(coord) + 500.0 for position in positions.values() for coord in position]
+    )
     return {
         "nodes": projected,
         "edges": edges,
         "groups": groups,
-        "extent": extent,
-        "layout_rule": "projection depth decreases Y; hierarchy depth remains separate semantic evidence",
+        "extent": max_extent,
+        "layout_rule": "children anchor to projection_parent_id; canonical child direction is -Y; siblings spread on the perpendicular X/Z plane",
+        "child_direction_default": {"x": 0.0, "y": -1.0, "z": 0.0},
         "inference": False,
     }
 
