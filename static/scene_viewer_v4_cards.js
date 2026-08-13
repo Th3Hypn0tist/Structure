@@ -8,6 +8,9 @@ const SP_originalRenderInstances = renderInstances;
 const SP_originalLoadScene = loadScene;
 let SP_defaultRootsApplied = false;
 
+// Generation 1 is ODD and blue. Generation 2 is EVEN and silver.
+styleDefaults = function(){ return {even:'#AAB2C2', odd:'#087CFF', title:'#0B356B'}; };
+
 function spNodeRecord(key) {
   const split = key.lastIndexOf('::');
   if (split < 0) return null;
@@ -111,8 +114,60 @@ Renderer.prototype.buildAtlas = function(records) {
   g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_T, g.CLAMP_TO_EDGE);
 };
 
+function spNormalizeVector(v, fallback={x:0,y:-1,z:0}) {
+  const x=Number(v?.x), y=Number(v?.y), z=Number(v?.z);
+  const length=Math.hypot(x,y,z);
+  if (!Number.isFinite(length) || length < 1e-6) return {...fallback};
+  return {x:x/length,y:y/length,z:z/length};
+}
+function spCross(a,b){return{x:a.y*b.z-a.z*b.y,y:a.z*b.x-a.x*b.z,z:a.x*b.y-a.y*b.x}}
+function spDot(a,b){return a.x*b.x+a.y*b.y+a.z*b.z}
+function spBasisForChildDirection(direction) {
+  const down=spNormalizeVector(direction);
+  const worldY={x:0,y:1,z:0}, worldZ={x:0,y:0,z:1};
+  const ref=Math.abs(spDot(down,worldY))>.95?worldZ:worldY;
+  const right=spNormalizeVector(spCross(ref,down),{x:1,y:0,z:0});
+  const forward=spNormalizeVector(spCross(down,right),{x:0,y:0,z:1});
+  return {right,down,forward};
+}
+function spOrientCanonicalPoint(point,direction) {
+  const basis=spBasisForChildDirection(direction);
+  // Atlas canonical frame: X=sibling, -Y=child direction, Z=sibling.
+  const depth=-point.y;
+  return {
+    x:basis.right.x*point.x+basis.down.x*depth+basis.forward.x*point.z,
+    y:basis.right.y*point.x+basis.down.y*depth+basis.forward.y*point.z,
+    z:basis.right.z*point.x+basis.down.z*depth+basis.forward.z*point.z,
+  };
+}
+
 Renderer.prototype.build = function(scene) {
-  SP_originalBuild.call(this, scene);
+  const restores=[];
+  try {
+    // Re-orient Atlas locally before the base renderer applies object transform.
+    // Spread values stay in Atlas-local axes, so changing child direction rotates
+    // the whole hierarchy rather than changing the meaning of X/Y/Z spread.
+    for (const obj of scene?.objects || []) {
+      const inst=S.instances.find(i=>i.id===obj.instance_id);
+      if (!inst || inst.projection_style!=='atlas' || inst.projection_dimension!=='3d') continue;
+      const state=ensureLocalState(inst,obj), p=state.projection;
+      const direction=p.child_direction || {x:0,y:-1,z:0};
+      const oldSpread={x:p.spread_x,y:p.spread_y,z:p.spread_z};
+      p.spread_x=p.spread_y=p.spread_z=1;
+      restores.push(()=>{p.spread_x=oldSpread.x;p.spread_y=oldSpread.y;p.spread_z=oldSpread.z});
+      for (const node of obj.nodes || []) {
+        const pos=node.transform?.position;
+        if (!pos) continue;
+        const original={x:Number(pos.x)||0,y:Number(pos.y)||0,z:Number(pos.z)||0};
+        const oriented=spOrientCanonicalPoint({x:original.x*oldSpread.x,y:original.y*oldSpread.y,z:original.z*oldSpread.z},direction);
+        pos.x=oriented.x; pos.y=oriented.y; pos.z=oriented.z;
+        restores.push(()=>{pos.x=original.x;pos.y=original.y;pos.z=original.z});
+      }
+    }
+    SP_originalBuild.call(this, scene);
+  } finally {
+    for (let i=restores.length-1;i>=0;i--) restores[i]();
+  }
   for (const item of this.strips || []) item.matrix = m4mul(item.matrix, m4scale(1, 2.35, 1));
   for (const item of this.labels || []) item.matrix = m4mul(item.matrix, m4scale(1, 2.35, 1));
   this.upload();
@@ -166,6 +221,7 @@ instancePayload = function() {
     return {
       id: instance.id,
       name: instance.name,
+      master: !!instance.master,
       projection_style: instance.projection_style,
       projection_dimension: instance.projection_dimension,
       root_topic: instance.root_topic,
@@ -174,12 +230,17 @@ instancePayload = function() {
   });
 };
 
+function spDirectionFields(id, direction) {
+  return ['x','y','z'].map(axis=>`<div class="field axis ${axis}"><label>${axis.toUpperCase()}</label><input type="number" step=".1" min="-1" max="1" data-child-direction="${id}" data-axis="${axis}" value="${Number(direction?.[axis] ?? (axis==='y'?-1:0)).toFixed(2)}"></div>`).join('');
+}
+
 instanceHTML = function(inst) {
   spNormalizeDimension(inst);
   const obj = (S.scene?.objects || []).find(o => o.instance_id === inst.id);
   const st = ensureLocalState(inst, obj);
   const col = S.objectStyle[inst.id];
   const p = st.projection;
+  p.child_direction ||= {x:0,y:-1,z:0};
   const style = spStyle(inst);
   return `<details class="instance" open data-card="${inst.id}">
     <summary>${esc(inst.name)} · ${esc(style?.label || inst.projection_style)} · ${esc(inst.projection_dimension.toUpperCase())}</summary>
@@ -191,14 +252,15 @@ instanceHTML = function(inst) {
         <div class="field"><label>Root topic</label><select data-instance="${inst.id}" data-key="root_topic">${topicOptions(inst.root_topic)}</select></div>
       </div>
       <div class="field"><label>Relation depth outward (0–32)</label><input type="number" min="0" max="32" step="1" data-instance="${inst.id}" data-key="dependency_depth" value="${inst.dependency_depth}"></div>
-      <div class="subhead"><span>Instance colors</span><span>depth parity</span></div>
-      <div class="color-row"><label>Even depth</label><input type="color" data-color="${inst.id}" data-color-key="even" value="${col.even}"></div>
-      <div class="color-row"><label>Odd depth</label><input type="color" data-color="${inst.id}" data-color-key="odd" value="${col.odd}"></div>
+      <div class="subhead"><span>Instance colors</span><span>generation parity</span></div>
+      <div class="color-row"><label>Even generation</label><input type="color" data-color="${inst.id}" data-color-key="even" value="${col.even}"></div>
+      <div class="color-row"><label>Odd generation</label><input type="color" data-color="${inst.id}" data-color-key="odd" value="${col.odd}"></div>
       <div class="color-row"><label>Title surface</label><input type="color" data-color="${inst.id}" data-color-key="title" value="${col.title}"></div>
       <div class="subhead"><span>Position</span><span>XYZ</span></div><div class="grid3">${axisFields(inst.id,'position',st.transform.position,25)}</div>
       <div class="subhead"><span>Rotation</span><span>degrees</span></div><div class="grid3">${axisFields(inst.id,'rotation',st.transform.rotation,5,-360,360)}</div>
       <div class="subhead"><span>Scale</span><span>XYZ</span></div><div class="grid3">${axisFields(inst.id,'scale',st.transform.scale,.05,.05,20)}</div>
       <div class="subhead"><span>Projection layout</span><span>local</span></div>
+      ${inst.projection_style==='atlas'&&inst.projection_dimension==='3d'?`<div class="subhead"><span>Child direction</span><span>XYZ vector</span></div><div class="grid3">${spDirectionFields(inst.id,p.child_direction)}</div>`:''}
       <div class="grid3">
         <div class="field axis x"><label>X spread</label><input type="number" step=".05" min=".05" max="20" data-proj="${inst.id}" data-proj-key="spread_x" value="${p.spread_x}"></div>
         <div class="field axis y"><label>Y spread</label><input type="number" step=".05" min=".05" max="20" data-proj="${inst.id}" data-proj-key="spread_y" value="${p.spread_y}"></div>
@@ -215,6 +277,30 @@ instanceHTML = function(inst) {
 
 renderInstances = function() {
   SP_originalRenderInstances();
+  $('#instances').querySelectorAll('[data-child-direction]').forEach(el=>{
+    el.oninput=()=>{
+      const inst=S.instances.find(x=>x.id===el.dataset.childDirection); if(!inst)return;
+      const obj=(S.scene?.objects||[]).find(o=>o.instance_id===inst.id), state=ensureLocalState(inst,obj);
+      const value=Number(el.value); if(!Number.isFinite(value))return;
+      state.projection.child_direction ||= {x:0,y:-1,z:0};
+      state.projection.child_direction[el.dataset.axis]=value;
+      const d=state.projection.child_direction;
+      if(Math.hypot(Number(d.x)||0,Number(d.y)||0,Number(d.z)||0)<1e-6)return;
+      rebuildRenderer();
+    };
+  });
+};
+
+// Extend the existing per-style/dimension projection-memory state with the
+// direction vector. Old state upgrades in place with the canonical -Y default.
+const SP_baseEnsureLocalState=ensureLocalState;
+ensureLocalState=function(instance,obj){
+  const state=SP_baseEnsureLocalState(instance,obj);
+  state.projection.child_direction ||= {x:0,y:-1,z:0};
+  if(state.projection_memory){
+    for(const value of Object.values(state.projection_memory)) value.child_direction ||= {x:0,y:-1,z:0};
+  }
+  return state;
 };
 
 function spApplyPrimaryDefaults() {
@@ -232,6 +318,7 @@ function spApplyPrimaryDefaults() {
   S.instances = roots.map((root, index) => ({
     id: `p${index + 1}`,
     name: root,
+    master: index===0,
     projection_style: style?.id || 'atlas',
     projection_dimension: dimension,
     root_topic: root,
@@ -245,7 +332,7 @@ function spApplyPrimaryDefaults() {
         rotation: {x:0, y:0, z:0},
         scale: {x:1, y:1, z:1},
       },
-      projection: projectionDefaults(),
+      projection: {...projectionDefaults(), child_direction:{x:0,y:-1,z:0}},
     };
   }
   S.nextId = roots.length + 1;
