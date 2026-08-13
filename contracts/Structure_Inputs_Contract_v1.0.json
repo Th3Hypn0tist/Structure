@@ -1,0 +1,44 @@
+{
+  "format": "STRUCTURE_INPUT_REGISTRY_CONTRACT",
+  "version": "1.0",
+  "status": "locked",
+  "product": "Structure",
+  "purpose": "Define named read-only inputs that can be selected by Projector, Mapper, Planner comparison and future Structure tools without duplicating source configuration.",
+  "invariants": [
+    "Every input has a stable id and human-readable name.",
+    "Every input is read-only.",
+    "Every projection instance references exactly one input_id.",
+    "Input source configuration is owned by the Inputs registry, never copied into projection semantics.",
+    "Input roles are presentation/organization metadata and do not create semantic relations.",
+    "Input detectors may emit only source-proven facts.",
+    "Input scopes MUST satisfy Structure_Input_Output_Isolation_Contract_v1.2.",
+    "Two input scopes MUST NOT overlap.",
+    "Multiple projections may reference the same input.",
+    "Different inputs are not automatically related even if their node identities or names match.",
+    "Cross-input relations require explicit mapping/evidence."
+  ],
+  "input": {
+    "required": ["id", "name", "role", "detector", "repository", "branch"],
+    "fields": {
+      "id": "Stable Structure-local input identity.",
+      "name": "Human-readable input name.",
+      "role": "Organizational role such as specification, code, reference, data or other. Role is non-semantic.",
+      "detector": "Read-only detector/input-module id.",
+      "repository": "Read-only repository identity in owner/repository form.",
+      "branch": "Mutable source selector resolved to an immutable revision before parsing.",
+      "directory": "Optional explicit repository-relative read scope. Required when another input shares the repository.",
+      "path": "Optional detector-specific path inside the input scope, for example a single Raw JSON file.",
+      "enabled": "Whether the input is currently available for projection selection."
+    }
+  },
+  "projection_binding": {
+    "field": "input_id",
+    "cardinality": "exactly_one",
+    "rule": "The selected input determines the StructureTree/topic catalog used by that projection instance."
+  },
+  "organization": {
+    "projector": "Projection instances SHOULD be grouped by input in the UI.",
+    "selector": "Input selectors SHOULD group inputs by role and show the input name.",
+    "semantics": "Grouping is viewer organization only and never source semantics."
+  }
+}
