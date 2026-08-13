@@ -130,7 +130,7 @@ def _compose_projection_instance_result(snapshot, specs: list[dict]) -> dict:
             root_topic=instance['root_topic'],
             dependency_depth=instance['dependency_depth'],
         )
-        projection_body = _build_canonical_projection(filtered_graph, instance['projection_style'])
+        projection_body = _build_canonical_projection(filtered_graph, instance['projection_generator'])
         items.append({
             'instance': instance,
             'projection': projection_body,
@@ -153,7 +153,7 @@ def _compose_projection_instance_result(snapshot, specs: list[dict]) -> dict:
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.23.0'
+    server_version = 'StructureProjector/0.23.1'
 
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode('utf-8')
@@ -208,8 +208,8 @@ class Handler(BaseHandler):
                     'input_model': 'StructureTree/1.0',
                     'scene_model': 'Scene/1.1',
                     'projection_instances': True,
+                    'projection_style_dimension_split': True,
                     'relation_expansion': 'all_explicit_documented_links',
-                    'structure_reveal_projection_styles': sorted(STRUCTURE_REVEAL_PROJECTIONS),
                     'renderer': 'webgl2_projection_instances_v4_cards',
                     'effects': 'none',
                 })
@@ -226,10 +226,11 @@ class Handler(BaseHandler):
                 tree = read_canonical(snapshot)
                 return self._write_json({
                     'styles': style_catalog(),
+                    'dimensions': ['2d', '3d'],
                     'topics': [{'id': 'all', 'label': 'all', 'entry_count': len(tree.get('entries', []))}] + topic_catalog(tree),
                     'relation_depth': {'min': 0, 'max': 32, 'default': 1},
                     'wire_compatibility': {'dependency_depth': 'relation_depth'},
-                    'defaults': {'even': '#087CFF', 'odd': '#AAB2C2', 'label_text': '#FFFFFF'},
+                    'defaults': {'projection_style': 'atlas', 'projection_dimension': '2d', 'even': '#087CFF', 'odd': '#AAB2C2', 'label_text': '#FFFFFF'},
                 })
             if path == '/api/scene':
                 branch = query.get('branch', ['main'])[0]
