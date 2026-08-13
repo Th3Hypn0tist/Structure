@@ -35,12 +35,6 @@ def _generator_catalog() -> dict[str, dict[str, Any]]:
 
 
 def style_catalog() -> list[dict[str, Any]]:
-    """Return one clean user-facing projection-style list.
-
-    2D/3D is a separate selection. `variants` maps the user-facing style and
-    dimension to the internal projection generator id. Missing variants remain
-    missing; StructureProjector never substitutes an unavailable dimension.
-    """
     generators = _generator_catalog()
     out: list[dict[str, Any]] = []
     for style_id, spec in STYLE_FAMILIES.items():
@@ -63,12 +57,6 @@ def style_catalog() -> list[dict[str, Any]]:
 
 
 def resolve_projection_style(style: str, dimension: str | None = None) -> tuple[str, str, str]:
-    """Resolve user-facing style + dimension to an internal generator id.
-
-    Exact legacy generator ids are accepted for compatibility. When dimension
-    is omitted, 2D is preferred only when that style explicitly provides 2D;
-    otherwise its sole/3D variant is used. No unavailable variant is guessed.
-    """
     style = str(style or "atlas").strip()
     dimension = str(dimension).lower().strip() if dimension is not None else None
     generators = _generator_catalog()
@@ -157,11 +145,11 @@ def topic_catalog(tree: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def _projection_hierarchy_depths(tree: dict[str, Any], included: set[str]) -> dict[str, int | None]:
+def _absolute_hierarchy_depths(tree: dict[str, Any]) -> dict[str, int | None]:
+    entries = _entries(tree)
     parents = {
-        str(entry.get("id")): (str(entry.get("parent_id")) if entry.get("parent_id") is not None else None)
-        for entry in tree.get("entries", [])
-        if entry.get("id") is not None and str(entry.get("id")) in included
+        entry_id: (str(entry.get("parent_id")) if entry.get("parent_id") is not None else None)
+        for entry_id, entry in entries.items()
     }
     memo: dict[str, int | None] = {}
 
@@ -172,16 +160,41 @@ def _projection_hierarchy_depths(tree: dict[str, Any], included: set[str]) -> di
             memo[entry_id] = None
             return None
         parent_id = parents.get(entry_id)
-        if parent_id is None or parent_id not in included:
+        if parent_id is None:
             memo[entry_id] = 0
             return 0
+        if parent_id not in entries:
+            memo[entry_id] = None
+            return None
         parent_depth = depth(parent_id, stack | {entry_id})
         memo[entry_id] = None if parent_depth is None else parent_depth + 1
         return memo[entry_id]
 
-    for entry_id in parents:
+    for entry_id in entries:
         depth(entry_id, set())
     return memo
+
+
+def _projection_hierarchy_depths(tree: dict[str, Any], included: set[str]) -> dict[str, int | None]:
+    absolute = _absolute_hierarchy_depths(tree)
+    return {entry_id: absolute.get(entry_id) for entry_id in included}
+
+
+def projection_base_ids(tree: dict[str, Any], root_topic: str) -> set[str]:
+    """Return the explicit base identities owned by one projection root.
+
+    This helper performs no relation expansion and is used to reserve all
+    projection roots before any one projection begins relation recursion.
+    """
+    entries = _entries(tree)
+    if root_topic == "all":
+        return set(entries)
+    selectable = {item["id"] for item in topic_catalog(tree)}
+    if root_topic not in entries:
+        raise KeyError(f"Unknown projection root topic: {root_topic}")
+    if root_topic not in selectable:
+        raise KeyError(f"Projection root is not selectable: {root_topic}")
+    return _containment_subtree(root_topic, entries)
 
 
 def _relation_adjacency(graph: dict[str, Any]) -> tuple[dict[str, list[tuple[str, str]]], set[str]]:
@@ -207,65 +220,87 @@ def filter_for_instance(
     *,
     root_topic: str,
     dependency_depth: int,
+    external_visible_ids: set[str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, int | None], dict[str, Any]]:
+    """Build one projection subgraph without duplicating scene identities.
+
+    Base/root identities always remain local to their explicit projection. During
+    relation expansion, an identity already reserved/materialized by another
+    projection becomes an external reference boundary: it is not copied locally
+    and recursion stops at that identity.
+    """
     relation_depth = max(0, min(MAX_RELATION_DEPTH, int(dependency_depth)))
     entries = _entries(tree)
-    selectable = {item["id"] for item in topic_catalog(tree)}
-
-    if root_topic == "all":
-        base_ids = set(entries)
-        root_name = "all"
-    else:
-        if root_topic not in entries:
-            raise KeyError(f"Unknown projection root topic: {root_topic}")
-        if root_topic not in selectable:
-            raise KeyError(f"Projection root is not selectable: {root_topic}")
-        base_ids = _containment_subtree(root_topic, entries)
-        root_name = str(entries[root_topic].get("name") or root_topic)
+    base_ids = projection_base_ids(tree, root_topic)
+    root_name = "all" if root_topic == "all" else str(entries[root_topic].get("name") or root_topic)
+    external_visible_ids = set(external_visible_ids or set()) - base_ids
 
     included = set(base_ids)
-    base_hierarchy_depths = _projection_hierarchy_depths(tree, base_ids)
-    projection_depths: dict[str, int | None] = dict(base_hierarchy_depths)
+    absolute_depths = _absolute_hierarchy_depths(tree)
+    hierarchy_depths = {entry_id: absolute_depths.get(entry_id) for entry_id in base_ids}
+
+    # Generation is one-based for recursive parity: generation 1 is ODD. Base
+    # nodes inherit their real canonical parent chain even when that parent is not
+    # visible in this projection. Relation-expanded nodes continue recursively
+    # from the generation of the node that reached them.
+    projection_generations: dict[str, int | None] = {
+        entry_id: (depth + 1 if isinstance(depth, int) else None)
+        for entry_id, depth in hierarchy_depths.items()
+    }
+    projection_depths: dict[str, int | None] = {
+        entry_id: (generation - 1 if isinstance(generation, int) else None)
+        for entry_id, generation in projection_generations.items()
+    }
 
     adjacency, available_dimensions = _relation_adjacency(graph)
-    # Relation depth controls how many explicit graph hops are exposed. Projection
-    # depth is separate presentation state: each outward hop is one visible
-    # generation below the node from which that shortest path was reached.
     frontier = deque(
-        (entry_id, 0, int(base_hierarchy_depths.get(entry_id) or 0))
+        (entry_id, 0, projection_generations.get(entry_id))
         for entry_id in sorted(base_ids)
     )
-    best_path: dict[str, tuple[int, int]] = {
-        entry_id: (0, int(base_hierarchy_depths.get(entry_id) or 0))
-        for entry_id in base_ids
-    }
+    best_hops: dict[str, int] = {entry_id: 0 for entry_id in base_ids}
     reached_by_dimension: dict[str, int] = {}
+    external_references: list[dict[str, Any]] = []
+    external_ref_keys: set[tuple[str, str, str]] = set()
 
     while frontier:
-        current, hops, display_depth = frontier.popleft()
+        current, hops, generation = frontier.popleft()
         if hops >= relation_depth:
             continue
         for neighbor, relation_dimension in adjacency.get(current, []):
             next_hops = hops + 1
-            next_display_depth = display_depth + 1
+            next_generation = generation + 1 if isinstance(generation, int) else None
 
-            # Base hierarchy is authoritative for base nodes; an outward relation
-            # path must never move an existing base node to another generation.
             if neighbor in base_ids:
                 continue
 
-            previous = best_path.get(neighbor)
-            candidate = (next_hops, next_display_depth)
-            if previous is not None and previous <= candidate:
+            if neighbor in external_visible_ids:
+                key = (current, neighbor, relation_dimension)
+                if key not in external_ref_keys:
+                    external_ref_keys.add(key)
+                    external_references.append({
+                        "source_id": current,
+                        "target_id": neighbor,
+                        "dimension": relation_dimension,
+                        "relation_hops": next_hops,
+                        "projection_generation": next_generation,
+                        "recursion": "stopped_at_existing_scene_identity",
+                    })
+                # Critical boundary rule: the other projection owns the visual
+                # node and any deeper recursion from that node.
+                continue
+
+            previous_hops = best_hops.get(neighbor)
+            if previous_hops is not None and previous_hops <= next_hops:
                 continue
 
             first_reach = neighbor not in included
-            best_path[neighbor] = candidate
-            projection_depths[neighbor] = next_display_depth
+            best_hops[neighbor] = next_hops
+            projection_generations[neighbor] = next_generation
+            projection_depths[neighbor] = next_generation - 1 if isinstance(next_generation, int) else None
             included.add(neighbor)
             if first_reach:
                 reached_by_dimension[relation_dimension] = reached_by_dimension.get(relation_dimension, 0) + 1
-            frontier.append((neighbor, next_hops, next_display_depth))
+            frontier.append((neighbor, next_hops, next_generation))
 
     hierarchy_depths = _projection_hierarchy_depths(tree, included)
     nodes = []
@@ -275,8 +310,9 @@ def filter_for_instance(
             continue
         projected_node = deepcopy(node)
         projected_node["hierarchy_depth"] = hierarchy_depths.get(node_id)
-        projected_node["projection_depth"] = projection_depths.get(node_id, hierarchy_depths.get(node_id))
-        projected_node["relation_depth"] = best_path.get(node_id, (0, 0))[0]
+        projected_node["projection_depth"] = projection_depths.get(node_id)
+        projected_node["projection_generation"] = projection_generations.get(node_id)
+        projected_node["relation_depth"] = best_hops.get(node_id, 0)
         nodes.append(projected_node)
 
     edges = [
@@ -293,9 +329,13 @@ def filter_for_instance(
         "relation_added_count": max(0, len(included) - len(base_ids)),
         "reached_by_dimension": reached_by_dimension,
         "available_dimensions": sorted(available_dimensions),
+        "external_reference_count": len(external_references),
+        "external_reference_ids": sorted({item["target_id"] for item in external_references}),
+        "external_references": external_references,
         "topic_rule": "explicit canonical identity plus explicit containment subtree",
         "expansion_rule": "all explicit documented graph relations; bidirectional discovery only",
-        "projection_depth_rule": "base hierarchy depth plus one visible generation per outward explicit relation hop",
+        "projection_depth_rule": "recursive parent generation; generation 1 is odd; each explicit relation hop advances one generation",
+        "existing_identity_rule": "relation-expanded identity already visible/reserved in another projection is referenced, not duplicated, and recursion stops there",
         "projection_depth_semantic_authority": False,
         "inference": False,
     }
@@ -306,6 +346,7 @@ def filter_for_instance(
         "projection_root_name": root_name,
         "projection_base_ids": sorted(base_ids),
         "projection_relation_depth": relation_depth,
+        "projection_external_references": external_references,
     }, hierarchy_depths, metadata
 
 
