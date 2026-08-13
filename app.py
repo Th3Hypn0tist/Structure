@@ -17,6 +17,7 @@ from raw_json_projection import build_raw_json_space_3d
 from scene_composer import compose_projection_instances, compose_scene
 from scene_contract import projection_to_scene, validate_scene
 from source_adapter import list_branches, load_snapshot
+from structure_reveal_projections import PROJECTIONS as STRUCTURE_REVEAL_PROJECTIONS, build_projection as build_structure_reveal_projection
 from structure_tree import tree_to_graph
 from structureprojector import (
     APP_HOST,
@@ -33,7 +34,7 @@ SCENE_VIEWER_JS = os.path.join(BASE_DIR, 'static', 'scene_viewer_v4.js')
 SCENE_VIEWER_CARDS_JS = os.path.join(BASE_DIR, 'static', 'scene_viewer_v4_cards.js')
 LEGACY_INDEX_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v31.html')
 
-ALL_CANONICAL_PROJECTIONS = {**CORE_PROJECTIONS, **EXTRA_PROJECTIONS}
+ALL_CANONICAL_PROJECTIONS = {**CORE_PROJECTIONS, **EXTRA_PROJECTIONS, **STRUCTURE_REVEAL_PROJECTIONS}
 
 
 def _file_payload(path: str) -> bytes:
@@ -42,6 +43,8 @@ def _file_payload(path: str) -> bytes:
 
 
 def _build_canonical_projection(graph: dict, projection_id: str) -> dict:
+    if projection_id in STRUCTURE_REVEAL_PROJECTIONS:
+        return build_structure_reveal_projection(graph, projection_id)
     if projection_id == 'dependency_flow_3d':
         return build_dependency_flow_3d(graph)
     if projection_id in EXTRA_PROJECTIONS:
@@ -150,7 +153,7 @@ def _compose_projection_instance_result(snapshot, specs: list[dict]) -> dict:
 
 
 class Handler(BaseHandler):
-    server_version = 'StructureProjector/0.22.2'
+    server_version = 'StructureProjector/0.23.0'
 
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode('utf-8')
@@ -206,6 +209,7 @@ class Handler(BaseHandler):
                     'scene_model': 'Scene/1.1',
                     'projection_instances': True,
                     'relation_expansion': 'all_explicit_documented_links',
+                    'structure_reveal_projection_styles': sorted(STRUCTURE_REVEAL_PROJECTIONS),
                     'renderer': 'webgl2_projection_instances_v4_cards',
                     'effects': 'none',
                 })
