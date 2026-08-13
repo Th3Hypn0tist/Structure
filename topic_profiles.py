@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections import deque
 from copy import deepcopy
 from typing import Any
 
@@ -20,8 +21,7 @@ def load_topic_profile(base_dir: str, path: str | None = None) -> dict[str, Any]
         profile = json.load(handle)
     if not isinstance(profile, dict) or profile.get("profile_type") != "structure_projector_topic_profile":
         raise ValueError(f"Invalid Structure topic profile: {relative}")
-    topics = profile.get("topics")
-    if not isinstance(topics, list):
+    if not isinstance(profile.get("topics"), list):
         raise ValueError(f"Structure topic profile topics must be an array: {relative}")
     return profile
 
@@ -29,26 +29,43 @@ def load_topic_profile(base_dir: str, path: str | None = None) -> dict[str, Any]
 def attach_topic_profile(tree: dict[str, Any], profile: dict[str, Any] | None) -> dict[str, Any]:
     if profile is None:
         tree.pop("topic_profile", None)
-        return tree
-    tree["topic_profile"] = deepcopy(profile)
+    else:
+        tree["topic_profile"] = deepcopy(profile)
     return tree
 
 
 def _entries(tree: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    return {
-        str(entry.get("id")): entry
-        for entry in tree.get("entries", [])
-        if entry.get("id") is not None
-    }
+    return {str(e.get("id")): e for e in tree.get("entries", []) if e.get("id") is not None}
+
+
+def _children(entries: dict[str, dict[str, Any]]) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {}
+    for entry_id, entry in entries.items():
+        parent = entry.get("parent_id")
+        if parent is not None and str(parent) in entries:
+            out.setdefault(str(parent), []).append(entry_id)
+    for values in out.values():
+        values.sort()
+    return out
+
+
+def _subtree(root_id: str, entries: dict[str, dict[str, Any]]) -> set[str]:
+    if root_id not in entries:
+        return set()
+    children = _children(entries)
+    seen: set[str] = set()
+    queue = deque([root_id])
+    while queue:
+        current = queue.popleft()
+        if current in seen:
+            continue
+        seen.add(current)
+        queue.extend(children.get(current, []))
+    return seen
 
 
 def resolve_topic_profile(tree: dict[str, Any]) -> list[dict[str, Any]]:
-    """Resolve profile selectors without inventing semantic membership.
-
-    `include[]` is software-profile evidence. A selector resolves only when it is
-    an exact canonical identity id or an exact, unambiguous canonical display
-    name. Parent/children/category/layout fields are navigation/presentation only.
-    """
+    """Resolve profile selectors without inventing canonical semantics."""
     profile = tree.get("topic_profile")
     if not isinstance(profile, dict):
         return []
@@ -79,6 +96,9 @@ def resolve_topic_profile(tree: dict[str, Any]) -> list[dict[str, Any]]:
                 ambiguous[selector] = matches
             else:
                 unresolved.append(selector)
+        base_ids: set[str] = set()
+        for identity_id in resolved:
+            base_ids.update(_subtree(identity_id, entries))
         result.append({
             "id": str(raw_topic["id"]),
             "label": str(raw_topic.get("label") or raw_topic["id"]),
@@ -89,12 +109,21 @@ def resolve_topic_profile(tree: dict[str, Any]) -> list[dict[str, Any]]:
             "layout_hint": deepcopy(raw_topic.get("layout_hint")),
             "resolved_identity_ids": sorted(resolved),
             "resolved_identity_count": len(resolved),
+            "projection_base_ids": sorted(base_ids),
+            "entry_count": len(base_ids),
             "unresolved_selectors": unresolved,
             "ambiguous_selectors": ambiguous,
             "profile_membership_semantic_authority": False,
-            "resolution_rule": "exact canonical id or exact unambiguous canonical display name only",
+            "resolution_rule": "include selector resolves only by exact canonical id or exact unambiguous canonical display name; descendants come only from canonical parent_id",
         })
     return result
+
+
+def topic_base_ids(tree: dict[str, Any], topic_id: str) -> set[str] | None:
+    for topic in resolve_topic_profile(tree):
+        if topic["id"] == topic_id:
+            return set(topic.get("projection_base_ids", []))
+    return None
 
 
 def profile_catalog(tree: dict[str, Any]) -> dict[str, Any] | None:
