@@ -34,14 +34,19 @@
     return '';
   }
 
-  function activateDirectory(popup,path){
+  function syncDirectoryPath(popup,path){
     const input=popup?.querySelector('[data-source-path]');
     const type=popup?.querySelector('[data-source-type]');
-    const use=popup?.querySelector('[data-source-use]');
-    if(!input||!use)return;
+    if(!input)return;
     if(type)type.value='directory';
     input.value=path||'';
-    input.dispatchEvent(new Event('change',{bubbles:true}));
+    input.dispatchEvent(new Event('input',{bubbles:true}));
+  }
+
+  function activateDirectory(popup,path){
+    const use=popup?.querySelector('[data-source-use]');
+    if(!use)return;
+    syncDirectoryPath(popup,path);
     use.click();
   }
 
@@ -50,6 +55,7 @@
     try{
       const data=await directoryData(path);
       host.dataset.currentPath=data.path||'';
+      syncDirectoryPath(host.closest('.source-popup'),data.path||'');
       const currentFormat=formatLabel(data.source_format);
       host.innerHTML=`
         <div class="directory-browser-head">
@@ -64,7 +70,7 @@
             return `<button type="button" class="directory-browser-item" data-dir-open="${esc(item.path)}"><span class="dir-name">▸ ${esc(item.name)}</span>${hint?`<span class="dir-format">${esc(hint)}</span>`:''}</button>`;
           }).join('')||'<div class="muted" style="padding:8px">No subdirectories.</div>'}
         </div>
-        <div class="directory-browser-help">Click to open · double-click to use as source${currentFormat?' · double-click the path above to use current directory':''}</div>`;
+        <div class="directory-browser-help">Click to open · Use source uses the currently open directory · double-click to use immediately</div>`;
 
       host.querySelector('[data-dir-parent]')?.addEventListener('click',()=>renderBrowser(host,data.parent));
       host.querySelectorAll('[data-dir-open]').forEach(button=>{
