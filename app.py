@@ -13,10 +13,11 @@ from input_modules.canonical import read as read_canonical
 from input_modules.raw_json import read as read_raw_json
 from nanocms import projection, resolve_page, resolve_view
 from primitive_registry import load_registry
-from projection_instances import style_catalog, topic_catalog
+from projection_instances import topic_catalog
 from raw_json_projection import build_raw_json_space_3d
 from scene_composer import compose_scene
 from scene_contract import projection_to_scene, validate_scene
+from semantic_visual_projections import PROJECTIONS as SEMANTIC_VISUAL_PROJECTIONS, build_visual_projection, style_catalog
 from session_engine import build_session_scene, load_masters, normalize_sources, session_catalog
 from source_adapter import list_branches
 from source_selection import browse_directories, load_source, source_spec_from_query
@@ -36,7 +37,7 @@ SESSION_UI_JS = os.path.join(BASE_DIR, 'static', 'session_ui.js')
 DIAGNOSTICS_UI_JS = os.path.join(BASE_DIR, 'static', 'diagnostics_ui.js')
 LEGACY_INDEX_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v31.html')
 
-ALL_CANONICAL_PROJECTIONS = {**CORE_PROJECTIONS, **EXTRA_PROJECTIONS, **STRUCTURE_REVEAL_PROJECTIONS}
+ALL_CANONICAL_PROJECTIONS = {**CORE_PROJECTIONS, **EXTRA_PROJECTIONS, **STRUCTURE_REVEAL_PROJECTIONS, **SEMANTIC_VISUAL_PROJECTIONS}
 
 
 def _file_payload(path: str) -> bytes:
@@ -115,6 +116,8 @@ def _viewer_cards_payload() -> bytes:
 
 
 def _build_canonical_projection(graph: dict, projection_id: str) -> dict:
+    if projection_id in SEMANTIC_VISUAL_PROJECTIONS:
+        return build_visual_projection(graph, projection_id)
     if projection_id in STRUCTURE_REVEAL_PROJECTIONS:
         return build_structure_reveal_projection(graph, projection_id)
     if projection_id == 'dependency_flow_3d':
@@ -181,9 +184,6 @@ def _session_result(body: dict) -> dict:
         valid = valid and bool(tree.get('valid'))
         projectable = projectable and bool(tree.get('projectable'))
 
-    # Canonical findings describe the projected master; they are not a reason
-    # to suppress the projection. Structure must render degraded/incomplete
-    # sources so gaps, ambiguities and unresolved references can be inspected.
     result.update({
         'valid': valid and not errors,
         'projectable': projectable,
@@ -198,7 +198,7 @@ def _session_result(body: dict) -> dict:
 
 
 class Handler(BaseHandler):
-    server_version = 'Structure/0.27.6'
+    server_version = 'Structure/0.28.0'
 
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode('utf-8')
@@ -233,7 +233,7 @@ class Handler(BaseHandler):
             if path == '/static/session_ui.js': return self._write_file(SESSION_UI_JS, 'application/javascript; charset=utf-8')
             if path == '/static/diagnostics_ui.js': return self._write_file(DIAGNOSTICS_UI_JS, 'application/javascript; charset=utf-8')
             if path == '/legacy': return self._write_file(LEGACY_INDEX_HTML, 'text/html; charset=utf-8')
-            if path == '/api/health': return self._write_json({'ok': True, 'server': self.server_version, 'startup': 'empty', 'automatic_source_read': False, 'automatic_projection': False, 'first_selected_source_becomes_first_master': True, 'multi_master': True, 'projection_master_cardinality': 'source 1:N projection', 'semantic_projection_styles': True, 'implemented_semantic_styles': ['topic', 'impact'], 'visual_style_separate': True, 'selectable_sources': ['github', 'directory'], 'directory_browser': True, 'event_trace_causality': 'explicit_only', 'cross_master_inference': False, 'diagnostics': 'structured'})
+            if path == '/api/health': return self._write_json({'ok': True, 'server': self.server_version, 'startup': 'empty', 'automatic_source_read': False, 'automatic_projection': False, 'first_selected_source_becomes_first_master': True, 'multi_master': True, 'projection_master_cardinality': 'source 1:N projection', 'semantic_projection_styles': True, 'implemented_semantic_styles': ['topic', 'impact', 'dependency', 'authority', 'ownership', 'containment', 'relation'], 'visual_style_separate': True, 'visual_styles_semantic_neutral': True, 'visual_dimensions': ['2d', '3d'], 'selectable_sources': ['github', 'directory'], 'directory_browser': True, 'event_trace_causality': 'explicit_only', 'cross_master_inference': False, 'diagnostics': 'structured'})
             if path == '/api/primitives': return self._write_json(load_registry())
             if path == '/api/branches':
                 repo = (query.get('repo') or [SOURCE_REPO])[0]; return self._write_json({'repository': repo, 'branches': list_branches(repo)})
