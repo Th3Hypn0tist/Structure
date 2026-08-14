@@ -53,6 +53,45 @@ def _viewer_html_payload() -> bytes:
     return text.encode('utf-8')
 
 
+def _viewer_js_payload() -> bytes:
+    """Serve the renderer without the legacy auto-load bootstrap.
+
+    Structure opens with no source, no master and no projection. The renderer and
+    UI controls are initialized locally only. Source selection is the first
+    operation that may read semantic data; the first selected source becomes the
+    first master, and projections are created explicitly afterwards.
+    """
+    text = _file_payload(SCENE_VIEWER_JS).decode('utf-8')
+    legacy = '\ninit();\n'
+    empty_bootstrap = '''
+(function initEmptyStructure(){
+  try {
+    S.catalog = null;
+    S.scene = null;
+    S.source = null;
+    S.instances = [];
+    S.objectState = {};
+    S.objectStyle = {};
+    S.channelState = {};
+    S.renderer = new Renderer($('#gl'));
+    bindStatic();
+    renderInstances();
+    renderChannels();
+    $('#revision').textContent = '';
+    $('#sceneInfo').textContent = 'Choose a source. The first selected source becomes the first master.';
+    $('#error').textContent = 'None.';
+    setStatus('choose source');
+    syncView();
+    draw();
+  } catch (e) { showError(e); }
+})();
+'''
+    if legacy not in text:
+        raise RuntimeError('scene_viewer_v4.js legacy init bootstrap marker not found')
+    text = text.replace(legacy, '\n' + empty_bootstrap, 1)
+    return text.encode('utf-8')
+
+
 def _viewer_cards_payload() -> bytes:
     return _file_payload(SCENE_VIEWER_CARDS_JS)
 
@@ -126,7 +165,7 @@ def _session_result(body: dict) -> dict:
 
 
 class Handler(BaseHandler):
-    server_version = 'Structure/0.26.1'
+    server_version = 'Structure/0.27.0'
 
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode('utf-8')
@@ -152,13 +191,13 @@ class Handler(BaseHandler):
         parsed = urllib.parse.urlparse(self.path); path = parsed.path; query = urllib.parse.parse_qs(parsed.query)
         try:
             if path == '/': return self._write_body(_viewer_html_payload(), 'text/html; charset=utf-8')
-            if path == '/static/scene_viewer_v4.js': return self._write_file(SCENE_VIEWER_JS, 'application/javascript; charset=utf-8')
+            if path == '/static/scene_viewer_v4.js': return self._write_body(_viewer_js_payload(), 'application/javascript; charset=utf-8')
             if path == '/static/scene_viewer_v4_cards.js': return self._write_body(_viewer_cards_payload(), 'application/javascript; charset=utf-8')
             if path == '/static/source_picker_browse.js': return self._write_file(SOURCE_PICKER_BROWSE_JS, 'application/javascript; charset=utf-8')
             if path == '/static/event_trace_viewer.js': return self._write_file(EVENT_TRACE_VIEWER_JS, 'application/javascript; charset=utf-8')
             if path == '/static/session_ui.js': return self._write_file(SESSION_UI_JS, 'application/javascript; charset=utf-8')
             if path == '/legacy': return self._write_file(LEGACY_INDEX_HTML, 'text/html; charset=utf-8')
-            if path == '/api/health': return self._write_json({'ok': True, 'server': self.server_version, 'input_model': 'StructureTree/1.1', 'scene_model': 'Scene/1.1', 'multi_master': True, 'projection_master_cardinality': 'source 1:N projection', 'semantic_projection_styles': True, 'implemented_semantic_styles': ['topic', 'impact'], 'visual_style_separate': True, 'selectable_sources': ['github', 'directory'], 'directory_browser': True, 'event_trace_causality': 'explicit_only', 'cross_master_inference': False, 'effects': 'none'})
+            if path == '/api/health': return self._write_json({'ok': True, 'server': self.server_version, 'input_model': 'StructureTree/1.1', 'scene_model': 'Scene/1.1', 'startup': 'empty', 'automatic_source_read': False, 'automatic_projection': False, 'first_selected_source_becomes_first_master': True, 'multi_master': True, 'projection_master_cardinality': 'source 1:N projection', 'semantic_projection_styles': True, 'implemented_semantic_styles': ['topic', 'impact'], 'visual_style_separate': True, 'selectable_sources': ['github', 'directory'], 'directory_browser': True, 'event_trace_causality': 'explicit_only', 'cross_master_inference': False, 'effects': 'none'})
             if path == '/api/primitives': return self._write_json(load_registry())
             if path == '/api/branches':
                 repo = (query.get('repo') or [SOURCE_REPO])[0]; return self._write_json({'repository': repo, 'branches': list_branches(repo)})
