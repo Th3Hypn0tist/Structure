@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import urllib.parse
-from http.server import ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from base_visual_projections import PROJECTIONS, build_projection
 from nanocms import projection
@@ -12,7 +12,7 @@ from session_cache import cache_stats
 from session_engine import build_session_scene, load_masters, normalize_sources, session_catalog
 from source_adapter import list_branches
 from source_selection import browse_directories, source_spec_from_query
-from structureprojector import APP_HOST, APP_PORT, SOURCE_REPO, Handler as BaseHandler, ProjectorError
+from structure_runtime import APP_HOST, APP_PORT, SUGGESTED_SOURCE_REPO, StructureError
 from view_rules import ViewRuleError, binding_children, binding_tree
 
 
@@ -97,14 +97,15 @@ def _query_master(query: dict[str, list[str]]) -> dict:
     return load_masters([{"id": "master-1", "name": "master-1", "source": source}])["master-1"]
 
 
-class Handler(BaseHandler):
-    server_version = "Structure/0.32.0"
+class Handler(BaseHTTPRequestHandler):
+    server_version = "Structure/0.33.0"
 
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 
@@ -128,7 +129,7 @@ class Handler(BaseHandler):
         return data
 
     def _error(self, exc: Exception) -> None:
-        payload = exc.as_dict() if isinstance(exc, ProjectorError) else {
+        payload = exc.as_dict() if isinstance(exc, StructureError) else {
             "id": "SP_REQUEST_FAILED",
             "message": str(exc),
             "type": type(exc).__name__,
@@ -162,8 +163,7 @@ class Handler(BaseHandler):
                     "projection_api": "POST /api/scene only",
                     "projection_contract": ["projection_base", "projection_style", "scope_type", "scope_ref", "scope_style", "projection_dimension"],
                     "projection_generators": sorted(PROJECTIONS),
-                    "legacy_projection_apis": False,
-                    "legacy_projection_generators": False,
+                    "compatibility_aliases": False,
                     "automatic_source_read": False,
                     "automatic_projection": False,
                     "structure_tree_indexes": "resolved_once_at_import",
@@ -173,7 +173,7 @@ class Handler(BaseHandler):
             if path == "/api/primitives":
                 return self._write_json(load_registry())
             if path == "/api/branches":
-                repo = (query.get("repo") or [SOURCE_REPO])[0]
+                repo = (query.get("repo") or [SUGGESTED_SOURCE_REPO])[0]
                 return self._write_json({"repository": repo, "branches": list_branches(repo)})
             if path == "/api/directories":
                 return self._write_json(browse_directories((query.get("path") or [None])[0]))
@@ -195,8 +195,8 @@ class Handler(BaseHandler):
             if path == "/api/binding-children":
                 master = _query_master(query)
                 return self._write_json(binding_children(master["graph"], node_id=query.get("node", [None])[0]))
-            return super().do_GET()
-        except (ProjectorError, ViewRuleError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            return self._write_json({"ok": False, "error": {"id": "SP_NOT_FOUND", "message": path}}, 404)
+        except (StructureError, ViewRuleError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             return self._error(exc)
 
     def do_POST(self) -> None:
@@ -205,14 +205,22 @@ class Handler(BaseHandler):
                 return self._write_json({"ok": False, "error": {"id": "SP_NOT_FOUND", "message": self.path}}, 404)
             result = _session_result(self._read_json_body())
             return self._write_json(result, 200 if result.get("projectable") else 422)
-        except (ProjectorError, ViewRuleError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        except (StructureError, ViewRuleError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             return self._error(exc)
+
+    def log_message(self, fmt: str, *args: object) -> None:
+        print(f"{self.address_string()} - {fmt % args}")
 
 
 def main() -> None:
     server = ThreadingHTTPServer((APP_HOST, APP_PORT), Handler)
     print(f"Structure listening on http://{APP_HOST}:{APP_PORT}")
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
 
 
 if __name__ == "__main__":
