@@ -7,7 +7,7 @@ from typing import Any
 
 APP_HOST = os.getenv("STRUCTURE_HOST", "127.0.0.1")
 APP_PORT = int(os.getenv("STRUCTURE_PORT", "6969"))
-SUGGESTED_SOURCE_REPO = os.getenv("STRUCTURE_SOURCE_REPO", "Th3Hypn0tist/AIGMos_docs")
+SUGGESTED_SOURCE_REPO = os.getenv("STRUCTURE_SOURCE_REPO", "Th3Hypn0tist/AIGMos-CW")
 USER_AGENT = "Structure/0.32"
 
 
