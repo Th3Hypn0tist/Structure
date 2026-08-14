@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from structureprojector import ProjectorError, SourceSnapshot
+from structure_runtime import SourceSnapshot, StructureError
 
 FORMAT_MAGIC = "AIGMOS_CANONICAL_CONTRACT"
-BOOTSTRAP_PATH = "canonical/json/00_Contract_Format.json"  # virtual compatibility mount only
+BOOTSTRAP_PATH = "canonical/json/00_Contract_Format.json"
 CANONICAL_ROOT = "canonical/json/"
 ACTIVE_STATUSES = {"unlocked", "locked"}
 INACTIVE_STATUSES = {"superseded", "deprecated"}
@@ -26,13 +26,13 @@ class CanonicalGraphError(ValueError):
 def _json_file(snapshot: SourceSnapshot, path: str) -> dict[str, Any]:
     raw = snapshot.files.get(path)
     if raw is None:
-        raise ProjectorError("SP_CANONICAL_BOOTSTRAP_MISSING", f"Required canonical bootstrap is missing: {path}", path=path)
+        raise StructureError("STRUCTURE_CANONICAL_BOOTSTRAP_MISSING", f"Required canonical bootstrap is missing: {path}", path=path)
     try:
         data = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ProjectorError("SP_CANONICAL_BOOTSTRAP_INVALID", f"Required canonical bootstrap is invalid JSON: {path}", path=path) from exc
+        raise StructureError("STRUCTURE_CANONICAL_BOOTSTRAP_INVALID", f"Required canonical bootstrap is invalid JSON: {path}", path=path) from exc
     if not isinstance(data, dict):
-        raise ProjectorError("SP_CANONICAL_BOOTSTRAP_INVALID", f"Required canonical bootstrap must be a JSON object: {path}", path=path)
+        raise StructureError("STRUCTURE_CANONICAL_BOOTSTRAP_INVALID", f"Required canonical bootstrap must be a JSON object: {path}", path=path)
     return data
 
 
@@ -40,17 +40,17 @@ def load_contract_format(snapshot: SourceSnapshot) -> dict[str, Any]:
     data = _json_file(snapshot, BOOTSTRAP_PATH)
     shape = data.get("contract_shape")
     if not isinstance(shape, dict):
-        raise ProjectorError("SP_CONTRACT_FORMAT_INVALID", "Contract Format bootstrap has no contract_shape object", path=BOOTSTRAP_PATH)
+        raise StructureError("STRUCTURE_CONTRACT_FORMAT_INVALID", "Contract Format bootstrap has no contract_shape object", path=BOOTSTRAP_PATH)
     fmt = shape.get("format")
     if not isinstance(fmt, dict):
-        raise ProjectorError("SP_CONTRACT_FORMAT_INVALID", "Contract Format bootstrap has no contract_shape.format object", path=BOOTSTRAP_PATH)
+        raise StructureError("STRUCTURE_CONTRACT_FORMAT_INVALID", "Contract Format bootstrap has no contract_shape.format object", path=BOOTSTRAP_PATH)
     version = fmt.get("format_version")
     required = shape.get("required")
     status_values = (shape.get("status") or {}).get("values") if isinstance(shape.get("status"), dict) else None
     if not isinstance(version, str) or not version:
-        raise ProjectorError("SP_CONTRACT_FORMAT_INVALID", "Contract Format bootstrap does not declare format_version", path=BOOTSTRAP_PATH)
+        raise StructureError("STRUCTURE_CONTRACT_FORMAT_INVALID", "Contract Format bootstrap does not declare format_version", path=BOOTSTRAP_PATH)
     if not isinstance(required, list) or not all(isinstance(x, str) for x in required):
-        raise ProjectorError("SP_CONTRACT_FORMAT_INVALID", "Contract Format bootstrap does not declare required fields", path=BOOTSTRAP_PATH)
+        raise StructureError("STRUCTURE_CONTRACT_FORMAT_INVALID", "Contract Format bootstrap does not declare required fields", path=BOOTSTRAP_PATH)
     return {
         "version": version,
         "required": required,
@@ -153,12 +153,6 @@ def _load_contracts(snapshot: SourceSnapshot, format_spec: dict[str, Any]) -> tu
 
 
 def _master_metadata(contracts: list[dict[str, Any]]) -> dict[str, Any]:
-    """Describe an explicit canonical master if one exists; never require one.
-
-    Contract Format 1.4 bootstraps the canonical tree from the project-root
-    format authority and canonical/json/**. A canonical master is ordinary
-    canonical data and may be represented by source_role/type, not a filename.
-    """
     candidates = []
     for item in contracts:
         if not item.get("architecture_active"):
@@ -168,7 +162,9 @@ def _master_metadata(contracts: list[dict[str, Any]]) -> dict[str, Any]:
         if data.get("source_role") == "boundary_master" or identity.get("type") == "canonical_master":
             candidates.append(item)
     if len(candidates) == 1:
-        item = candidates[0]; data = item["data"]; identity = data.get("identity") or {}
+        item = candidates[0]
+        data = item["data"]
+        identity = data.get("identity") or {}
         return {"path": item["path"], "identity": identity.get("id"), "status": data.get("status"), "required": False}
     if len(candidates) > 1:
         return {"path": None, "identity": None, "status": None, "required": False, "ambiguous": [item["path"] for item in candidates]}
@@ -193,10 +189,16 @@ def _node_from_contract(path: str, data: dict[str, Any]) -> dict[str, Any]:
 
 def _node_from_member(path: str, member: dict[str, Any], *, registry: bool, owner_ref: str | None) -> dict[str, Any]:
     return {
-        "id": member["id"], "name": member.get("name") or member["id"], "type": member.get("type"),
-        "status": member.get("status"), "source_role": "membership_registry" if registry else "member",
-        "source": path, "kind": "registry_member" if registry else "member", "member_of": owner_ref,
-        "semantics": member.get("semantics", {}), "raw": member,
+        "id": member["id"],
+        "name": member.get("name") or member["id"],
+        "type": member.get("type"),
+        "status": member.get("status"),
+        "source_role": "membership_registry" if registry else "member",
+        "source": path,
+        "kind": "registry_member" if registry else "member",
+        "member_of": owner_ref,
+        "semantics": member.get("semantics", {}),
+        "raw": member,
     }
 
 
@@ -216,41 +218,67 @@ def build_graph(snapshot: SourceSnapshot) -> dict[str, Any]:
         role = data.get("source_role")
         root_id = (data.get("identity") or {}).get("id")
         if root_id:
-            if root_id in nodes: errors.append({"id": "CF_AMBIGUOUS_IDENTITY", "message": f"Duplicate active identity: {root_id}", "contract": path})
-            else: nodes[root_id] = _node_from_contract(path, data)
+            if root_id in nodes:
+                errors.append({"id": "CF_AMBIGUOUS_IDENTITY", "message": f"Duplicate active identity: {root_id}", "contract": path})
+            else:
+                nodes[root_id] = _node_from_contract(path, data)
         for member in data.get("members", []):
-            if not isinstance(member, dict) or not member.get("id"): continue
-            if role == "membership_registry": registry_members.append((path, root_id, member)); continue
+            if not isinstance(member, dict) or not member.get("id"):
+                continue
+            if role == "membership_registry":
+                registry_members.append((path, root_id, member))
+                continue
             member_id = member["id"]
-            if member_id in nodes: errors.append({"id": "CF_AMBIGUOUS_IDENTITY", "message": f"Duplicate active identity: {member_id}", "contract": path})
-            else: nodes[member_id] = _node_from_member(path, member, registry=False, owner_ref=root_id)
+            if member_id in nodes:
+                errors.append({"id": "CF_AMBIGUOUS_IDENTITY", "message": f"Duplicate active identity: {member_id}", "contract": path})
+            else:
+                nodes[member_id] = _node_from_member(path, member, registry=False, owner_ref=root_id)
 
     for path, owner_ref, member in registry_members:
         member_id = member["id"]
-        if member_id not in nodes: nodes[member_id] = _node_from_member(path, member, registry=True, owner_ref=owner_ref)
+        if member_id not in nodes:
+            nodes[member_id] = _node_from_member(path, member, registry=True, owner_ref=owner_ref)
 
     def add_edge(dimension: str, edge: dict[str, Any], source_key: str, target_key: str) -> None:
-        source = edge.get(source_key); target = edge.get(target_key)
-        if not source or not target: return
-        normalized = {"id": edge.get("id"), "dimension": dimension, "source": source, "target": target, "type": edge.get("relation_type") or edge.get("ownership_type") or edge.get("authority_type") or edge.get("dependency_type") or dimension, "raw": edge}
+        source = edge.get(source_key)
+        target = edge.get(target_key)
+        if not source or not target:
+            return
+        normalized = {
+            "id": edge.get("id"),
+            "dimension": dimension,
+            "source": source,
+            "target": target,
+            "type": edge.get("relation_type") or edge.get("ownership_type") or edge.get("authority_type") or edge.get("dependency_type") or dimension,
+            "raw": edge,
+        }
         edges.append(normalized)
-        refs_to_check.append((str(source), str(normalized["id"] or dimension), "source")); refs_to_check.append((str(target), str(normalized["id"] or dimension), "target"))
+        refs_to_check.append((str(source), str(normalized["id"] or dimension), "source"))
+        refs_to_check.append((str(target), str(normalized["id"] or dimension), "target"))
 
     for item in architecture_contracts:
-        data = item["data"]; structure = data.get("structure", {})
-        for edge in structure.get("containment", []): add_edge("containment", edge, "parent_ref", "child_ref")
-        for edge in structure.get("relations", []): add_edge("relations", edge, "source_ref", "target_ref")
-        for edge in structure.get("ownership", []): add_edge("ownership", edge, "owner_ref", "target_ref")
-        for edge in structure.get("authority", []): add_edge("authority", edge, "authority_ref", "target_ref")
-        for edge in structure.get("dependencies", []): add_edge("dependencies", edge, "source_ref", "target_ref")
+        data = item["data"]
+        structure = data.get("structure", {})
+        for edge in structure.get("containment", []):
+            add_edge("containment", edge, "parent_ref", "child_ref")
+        for edge in structure.get("relations", []):
+            add_edge("relations", edge, "source_ref", "target_ref")
+        for edge in structure.get("ownership", []):
+            add_edge("ownership", edge, "owner_ref", "target_ref")
+        for edge in structure.get("authority", []):
+            add_edge("authority", edge, "authority_ref", "target_ref")
+        for edge in structure.get("dependencies", []):
+            add_edge("dependencies", edge, "source_ref", "target_ref")
         for ref in data.get("references", []):
-            if isinstance(ref, dict) and ref.get("target_ref"): refs_to_check.append((str(ref["target_ref"]), str(ref.get("id") or "reference"), "target_ref"))
+            if isinstance(ref, dict) and ref.get("target_ref"):
+                refs_to_check.append((str(ref["target_ref"]), str(ref.get("id") or "reference"), "target_ref"))
 
     unresolved_refs: list[dict[str, Any]] = []
     for target_ref, owner, role in refs_to_check:
         if target_ref not in nodes:
             error = {"id": "CF_UNRESOLVED_REFERENCE", "message": f"Unresolved active reference {target_ref} in {owner} ({role})"}
-            errors.append(error); unresolved_refs.append(error)
+            errors.append(error)
+            unresolved_refs.append(error)
 
     validation_valid = not errors
     lifecycle_active_count = sum(1 for c in contracts if c["lifecycle_active"])
@@ -261,8 +289,24 @@ def build_graph(snapshot: SourceSnapshot) -> dict[str, Any]:
         "valid": validation_valid,
         "projectable": projectable,
         "projection_status": "valid" if validation_valid else "degraded",
-        "source": {"repository": snapshot.repo, "branch": snapshot.branch, "revision": snapshot.revision, "files": len(snapshot.files), "canonical_root": CANONICAL_ROOT, "contract_format": format_spec["version"], "contracts": len(contracts), "lifecycle_active_contracts": lifecycle_active_count, "architecture_contracts": len(architecture_contracts), "excluded_non_node_contracts": excluded_non_node_count, "inactive_contracts": len(contracts) - lifecycle_active_count},
-        "format": {"path": BOOTSTRAP_PATH, "version": format_spec["version"], "required_top": format_spec["required"], "virtual_mount": True},
+        "source": {
+            "repository": snapshot.repo,
+            "branch": snapshot.branch,
+            "revision": snapshot.revision,
+            "files": len(snapshot.files),
+            "canonical_root": CANONICAL_ROOT,
+            "contract_format": format_spec["version"],
+            "contracts": len(contracts),
+            "lifecycle_active_contracts": lifecycle_active_count,
+            "architecture_contracts": len(architecture_contracts),
+            "excluded_non_node_contracts": excluded_non_node_count,
+            "inactive_contracts": len(contracts) - lifecycle_active_count,
+        },
+        "format": {
+            "path": BOOTSTRAP_PATH,
+            "version": format_spec["version"],
+            "required_top": format_spec["required"],
+        },
         "master": master,
         "graph": {"nodes": list(nodes.values()), "edges": edges},
         "inventory": inventory,
