@@ -77,10 +77,6 @@ def read(snapshot, options=None):
     tree = _read(snapshot, options)
 
     if is_v14(snapshot):
-        # CW 1.4 owns Topic materialization and resolution. enrich_v14 computes
-        # inherited grouping membership, composition trace surfaces and coverage.
-        # Running generic topic_enrichment afterwards would overwrite those
-        # resolved projection surfaces with raw Topic records.
         tree = enrich_v14(tree, snapshot)
         topic_reader = "cw14_native_resolved"
     else:
@@ -98,9 +94,18 @@ def read(snapshot, options=None):
         "topic_reader": topic_reader,
         "discovery_inference": False,
     }
+
+    # Validation findings describe the source; they do not make the source
+    # unprojectable. Structure must be able to project incomplete, ambiguous and
+    # internally inconsistent masters precisely so those gaps can be inspected.
+    # Only failure to materialize a usable StructureTree is projection-blocking.
+    base_projectable = bool(tree.get("projectable"))
     tree["validation_errors"] = validate_tree(tree)
     tree["valid"] = bool(tree.get("valid")) and not tree.get("errors") and not tree["validation_errors"]
-    tree["projectable"] = bool(tree.get("projectable")) and not tree.get("errors") and not tree["validation_errors"]
+    tree["projectable"] = base_projectable
+    tree["degraded"] = bool(tree.get("errors") or tree["validation_errors"])
+    tree["validation_finding_count"] = len(tree.get("errors", [])) + len(tree["validation_errors"])
+    tree["source_result"]["canonical_reader"]["projection_policy"] = "validation_findings_do_not_block_projection"
     return tree
 
 
