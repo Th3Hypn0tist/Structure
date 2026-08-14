@@ -1,7 +1,7 @@
 'use strict';
 
 (function installExplicitSourceSelector(){
-  const SUGGESTED_REPO='Th3Hypn0tist/AIGMos_docs';
+  const SUGGESTED_REPO='Th3Hypn0tist/AIGMos-CW';
 
   function sourceQuery(spec){
     const q=new URLSearchParams();
