@@ -17,7 +17,7 @@ from raw_json_projection import build_raw_json_space_3d
 from scene_composer import compose_projection_instances, compose_scene
 from scene_contract import projection_to_scene, validate_scene
 from source_adapter import list_branches
-from source_selection import load_source, source_spec_from_query, normalize_source_spec
+from source_selection import browse_directories, load_source, source_spec_from_query
 from structure_reveal_projections import PROJECTIONS as STRUCTURE_REVEAL_PROJECTIONS, build_projection as build_structure_reveal_projection
 from structure_tree import tree_to_graph
 from structureprojector import (
@@ -44,7 +44,6 @@ def _file_payload(path: str) -> bytes:
 
 
 def _viewer_html_payload() -> bytes:
-    """Apply working product/view labels without changing semantic source data."""
     text = _file_payload(SCENE_VIEWER_HTML).decode('utf-8')
     text = text.replace('<title>StructureProjector</title>', '<title>Structure</title>')
     text = text.replace('<header><strong>StructureProjector</strong>', '<header><strong>Structure</strong>')
@@ -53,13 +52,23 @@ def _viewer_html_payload() -> bytes:
 
 
 def _viewer_cards_payload() -> bytes:
-    """Serve viewer cards safely; apply working primary-depth defaults when possible."""
     text = _file_payload(SCENE_VIEWER_CARDS_JS).decode('utf-8')
     marker = "root_topic:root,dependency_depth:1"
     replacement = "root_topic:root,dependency_depth:(root==='DWH'?3:0)"
     if marker in text:
         text = text.replace(marker, replacement, 1)
     return text.encode('utf-8')
+
+
+def _post_source(body: dict) -> dict:
+    source = body.get('source')
+    if isinstance(source, dict):
+        return source
+    return {
+        'type': 'github',
+        'repo': str(body.get('repo') or SOURCE_REPO),
+        'branch': str(body.get('branch') or 'main'),
+    }
 
 
 def _build_canonical_projection(graph: dict, projection_id: str) -> dict:
@@ -200,17 +209,6 @@ def _compose_projection_instance_result(snapshot, specs: list[dict]) -> dict:
     return result
 
 
-def _post_source(body: dict) -> dict:
-    source = body.get('source')
-    if isinstance(source, dict):
-        return normalize_source_spec(source)
-    return normalize_source_spec({
-        'type': 'github',
-        'repo': body.get('repo') or SOURCE_REPO,
-        'branch': body.get('branch') or 'main',
-    })
-
-
 class Handler(BaseHandler):
     server_version = 'Structure/0.24.0'
 
@@ -244,7 +242,7 @@ class Handler(BaseHandler):
 
     def _error(self, exc: Exception) -> None:
         if isinstance(exc, ProjectorError):
-            payload = {'ok': False, 'error': exc.to_dict()}
+            payload = {'ok': False, 'error': exc.as_dict()}
         else:
             payload = {'ok': False, 'error': {'id': 'SP_REQUEST_FAILED', 'message': str(exc)}}
         self._write_json(payload, 400)
@@ -271,6 +269,7 @@ class Handler(BaseHandler):
                     'projection_instances': True,
                     'projection_style_dimension_split': True,
                     'selectable_sources': ['github', 'directory'],
+                    'directory_browser': True,
                     'relation_expansion': 'all_explicit_documented_links',
                     'renderer': 'webgl2_projection_instances_v4_cards',
                     'effects': 'none',
@@ -280,6 +279,9 @@ class Handler(BaseHandler):
             if path == '/api/branches':
                 repo = (query.get('repo') or [SOURCE_REPO])[0]
                 return self._write_json({'repository': repo, 'branches': list_branches(repo)})
+            if path == '/api/directories':
+                browse_path = (query.get('path') or [None])[0]
+                return self._write_json(browse_directories(browse_path))
             if path == '/api/nanocms':
                 page = query.get('page', ['canonical'])[0]
                 return self._write_json(projection(page))
