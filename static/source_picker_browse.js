@@ -30,20 +30,26 @@
       host.dataset.currentPath=data.path||'';
       host.innerHTML=`
         <div class="directory-browser-head">
-          <button data-dir-parent ${data.parent?'':'disabled'}>↑</button>
+          <button type="button" data-dir-parent ${data.parent?'':'disabled'}>↑</button>
           <span class="directory-browser-path" title="${esc(data.path||'')}">${esc(data.path||'')}</span>
-          <button data-dir-select>Use this folder</button>
+          <button type="button" data-dir-select>Select this directory</button>
         </div>
-        ${(data.roots||[]).length?`<div class="directory-browser-roots">${data.roots.map(root=>`<button data-dir-open="${esc(root)}">${esc(root)}</button>`).join('')}</div>`:''}
+        ${(data.roots||[]).length?`<div class="directory-browser-roots">${data.roots.map(root=>`<button type="button" data-dir-open="${esc(root)}">${esc(root)}</button>`).join('')}</div>`:''}
         <div class="directory-browser-list">
-          ${(data.directories||[]).map(item=>`<button class="directory-browser-item" data-dir-open="${esc(item.path)}">▸ ${esc(item.name)}</button>`).join('')||'<div class="muted" style="padding:8px">No subdirectories.</div>'}
+          ${(data.directories||[]).map(item=>`<button type="button" class="directory-browser-item" data-dir-open="${esc(item.path)}">▸ ${esc(item.name)}</button>`).join('')||'<div class="muted" style="padding:8px">No subdirectories.</div>'}
         </div>`;
       host.querySelector('[data-dir-parent]')?.addEventListener('click',()=>renderBrowser(host,data.parent));
       host.querySelectorAll('[data-dir-open]').forEach(button=>button.addEventListener('click',()=>renderBrowser(host,button.dataset.dirOpen)));
       host.querySelector('[data-dir-select]')?.addEventListener('click',()=>{
         const popup=host.closest('.source-popup');
         const input=popup?.querySelector('[data-source-path]');
-        if(input)input.value=data.path||'';
+        const type=popup?.querySelector('[data-source-type]');
+        const use=popup?.querySelector('[data-source-use]');
+        if(!input||!use)return;
+        if(type)type.value='directory';
+        input.value=data.path||'';
+        input.dispatchEvent(new Event('change',{bubbles:true}));
+        use.click();
       });
     }catch(error){
       host.innerHTML=`<div class="source-error" style="padding:9px">${esc(error.message||String(error))}</div>`;
