@@ -5,7 +5,6 @@ import os
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from base_visual_projections import PROJECTIONS, build_projection
 from nanocms import projection
 from primitive_registry import load_registry
 from session_cache import cache_stats
@@ -13,6 +12,7 @@ from session_engine import build_session_scene, load_masters, normalize_sources,
 from source_adapter import list_branches
 from source_selection import browse_directories, source_spec_from_query
 from structure_runtime import APP_HOST, APP_PORT, SUGGESTED_SOURCE_REPO, StructureError
+from topic_projection import PROJECTIONS
 from view_rules import ViewRuleError, binding_children, binding_tree
 
 
@@ -22,7 +22,6 @@ UI_RUNTIME_JS = os.path.join(BASE_DIR, "static", "ui_runtime.js")
 RENDERER_JS = os.path.join(BASE_DIR, "static", "renderer.js")
 SOURCE_SELECT_UI_JS = os.path.join(BASE_DIR, "static", "source_select_ui.js")
 SOURCE_PICKER_BROWSE_JS = os.path.join(BASE_DIR, "static", "source_picker_browse.js")
-EVENT_TRACE_VIEWER_JS = os.path.join(BASE_DIR, "static", "event_trace_viewer.js")
 SESSION_UI_JS = os.path.join(BASE_DIR, "static", "session_ui.js")
 DIAGNOSTICS_UI_JS = os.path.join(BASE_DIR, "static", "diagnostics_ui.js")
 
@@ -38,7 +37,7 @@ def _session_result(body: dict) -> dict:
     if not isinstance(instances, list) or not instances or not all(isinstance(item, dict) for item in instances):
         raise ValueError("POST /api/scene requires a non-empty instances array of objects")
 
-    result = build_session_scene(masters, instances, build_projection)
+    result = build_session_scene(masters, instances)
     errors: list[dict] = []
     warnings: list[dict] = []
     valid = True
@@ -57,8 +56,8 @@ def _session_result(body: dict) -> dict:
         "finding_count": len(errors) + len(warnings),
         "errors": errors,
         "warnings": warnings,
-        "ruleset": "structure_session",
-        "projection_policy": "canonical_findings_are_visible_not_blocking",
+        "ruleset": "structure_topic_session",
+        "projection_policy": "Topic only; canonical findings are visible and non-blocking when a projectable StructureTree exists",
     })
     return result
 
@@ -69,7 +68,7 @@ def _query_master(query: dict[str, list[str]]) -> dict:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "Structure/0.34.1"
+    server_version = "Structure/0.35.0"
 
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
@@ -118,10 +117,9 @@ class Handler(BaseHTTPRequestHandler):
             static_routes = {
                 "/static/ui_runtime.js": UI_RUNTIME_JS,
                 "/static/renderer.js": RENDERER_JS,
+                "/static/session_ui.js": SESSION_UI_JS,
                 "/static/source_select_ui.js": SOURCE_SELECT_UI_JS,
                 "/static/source_picker_browse.js": SOURCE_PICKER_BROWSE_JS,
-                "/static/event_trace_viewer.js": EVENT_TRACE_VIEWER_JS,
-                "/static/session_ui.js": SESSION_UI_JS,
                 "/static/diagnostics_ui.js": DIAGNOSTICS_UI_JS,
             }
             if path in static_routes:
@@ -131,8 +129,9 @@ class Handler(BaseHTTPRequestHandler):
                     "ok": True,
                     "server": self.server_version,
                     "startup": "empty",
+                    "projection_types": ["topic"],
                     "projection_api": "POST /api/scene only",
-                    "projection_contract": ["projection_base", "projection_style", "scope_type", "scope_ref", "scope_style", "projection_dimension"],
+                    "projection_contract": ["master_ref", "scope_ref", "scope_style", "projection_dimension"],
                     "projection_generators": sorted(PROJECTIONS),
                     "compatibility_aliases": False,
                     "automatic_source_read": False,
@@ -152,9 +151,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._write_json(projection(query.get("page", ["canonical"])[0]))
             if path == "/api/projection-catalog":
                 master = _query_master(query)
-                catalog = session_catalog({"master-1": master})
-                catalog["relation_depth"] = {"min": 0, "max": 32, "default": 0}
-                return self._write_json(catalog)
+                return self._write_json(session_catalog({"master-1": master}))
             if path == "/api/binding-tree":
                 master = _query_master(query)
                 return self._write_json(binding_tree(
