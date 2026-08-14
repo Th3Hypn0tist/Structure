@@ -8,43 +8,189 @@ from typing import Any
 from semantic_visual_projections import build_visual_projection
 
 
+# User-facing projection style names are contracts, not decorative labels.
+# Every style declares the geometry it promises. The implementation must match
+# that promise in both 2D and 3D.
 BASE_STYLE_SPECS: dict[str, dict[str, dict[str, Any]]] = {
     "map": {
-        "atlas": {"label": "Atlas", "generic": "atlas"},
-        "radial": {"label": "Radial map", "generic": "map"},
-        "tree": {"label": "Topic tree", "generic": "hierarchy_tree"},
+        "atlas": {
+            "label": "Atlas",
+            "builder": "atlas_grid",
+            "layout": "tiled_grid",
+            "description": "Tiled atlas of the selected scope. 2D uses grouped card grids; 3D uses stacked grid planes by projection depth. Never radial.",
+        },
+        "radial": {
+            "label": "Radial map",
+            "generic": "map",
+            "layout": "radial_shells",
+            "description": "Radial distance shells around the selected scope; 3D uses spherical shells.",
+        },
+        "tree": {
+            "label": "Topic tree",
+            "generic": "hierarchy_tree",
+            "layout": "hierarchy_tree",
+            "description": "Hierarchy arranged by projection depth and explicit/layout parent relationships.",
+        },
     },
     "event": {
-        "causal_flow": {"label": "Causal flow", "builder": "event_causal_flow"},
-        "mechanism_lanes": {"label": "Mechanism lanes", "builder": "event_mechanism_lanes"},
-        "evidence_stack": {"label": "Evidence stack", "builder": "event_evidence_stack"},
+        "causal_flow": {
+            "label": "Causal flow",
+            "builder": "event_causal_flow",
+            "layout": "directed_causal_axis",
+            "description": "Explicit Event causal path on the main axis with non-causal context and gaps kept outside the causal chain.",
+        },
+        "mechanism_lanes": {
+            "label": "Mechanism lanes",
+            "builder": "event_mechanism_lanes",
+            "layout": "semantic_lanes",
+            "description": "Separate lanes for Event, payload, context, Flow, causal steps, other steps and gaps.",
+        },
+        "evidence_stack": {
+            "label": "Evidence stack",
+            "builder": "event_evidence_stack",
+            "layout": "evidence_layers",
+            "description": "Evidence categories stacked as ordered layers; 3D places each category on its own plane.",
+        },
     },
     "dependency": {
-        "directional_flow": {"label": "Upstream / downstream", "builder": "directional"},
-        "tree": {"label": "Dependency tree", "generic": "hierarchy_tree"},
-        "shells": {"label": "Dependency shells", "generic": "relation_shells"},
+        "directional_flow": {
+            "label": "Upstream / downstream",
+            "builder": "directional",
+            "layout": "directed_sides",
+            "description": "Selected scope in the center, incoming dependency direction upstream and outgoing direction downstream.",
+        },
+        "tree": {
+            "label": "Dependency tree",
+            "generic": "hierarchy_tree",
+            "layout": "hierarchy_tree",
+            "description": "Dependency surface arranged as a depth tree while preserving the selected dependency edges.",
+        },
+        "shells": {
+            "label": "Dependency shells",
+            "generic": "relation_shells",
+            "layout": "distance_shells",
+            "description": "Dependency nodes grouped into graph-distance shells around the selected scope.",
+        },
     },
     "relation": {
-        "network": {"label": "Relation network", "generic": "map"},
-        "matrix": {"label": "Relation matrix", "generic": "matrix"},
-        "orbits": {"label": "Relation orbits", "generic": "relation_orbits"},
+        "network": {
+            "label": "Radial relation network",
+            "generic": "map",
+            "layout": "radial_shells",
+            "description": "Relation network arranged as radial/spherical distance shells.",
+        },
+        "matrix": {
+            "label": "Relation matrix",
+            "generic": "matrix",
+            "layout": "adjacency_matrix",
+            "description": "Adjacency-style matrix with relation cells at source/target intersections.",
+        },
+        "orbits": {
+            "label": "Relation orbits",
+            "generic": "relation_orbits",
+            "layout": "connectivity_orbits",
+            "description": "Nodes placed on orbits grouped by connectivity degree.",
+        },
     },
     "authority": {
-        "directional_flow": {"label": "Authority direction", "builder": "directional"},
-        "layers": {"label": "Authority layers", "generic": "role_layers"},
-        "tree": {"label": "Authority tree", "generic": "hierarchy_tree"},
+        "directional_flow": {
+            "label": "Authority direction",
+            "builder": "directional",
+            "layout": "directed_sides",
+            "description": "Authority paths separated by incoming and outgoing direction around the selected scope.",
+        },
+        "layers": {
+            "label": "Authority depth layers",
+            "generic": "role_layers",
+            "layout": "depth_layers",
+            "description": "Authority surface separated into projection-depth layers.",
+        },
+        "tree": {
+            "label": "Authority tree",
+            "generic": "hierarchy_tree",
+            "layout": "hierarchy_tree",
+            "description": "Authority surface arranged as a depth tree while preserving authority edges.",
+        },
     },
     "ownership": {
-        "tree": {"label": "Ownership tree", "generic": "hierarchy_tree"},
-        "layers": {"label": "Ownership layers", "generic": "role_layers"},
-        "islands": {"label": "Ownership islands", "generic": "component_islands"},
+        "tree": {
+            "label": "Ownership tree",
+            "generic": "hierarchy_tree",
+            "layout": "hierarchy_tree",
+            "description": "Ownership surface arranged as a depth tree while preserving ownership edges.",
+        },
+        "layers": {
+            "label": "Ownership depth layers",
+            "generic": "role_layers",
+            "layout": "depth_layers",
+            "description": "Ownership surface separated into projection-depth layers.",
+        },
+        "islands": {
+            "label": "Ownership islands",
+            "generic": "component_islands",
+            "layout": "connected_components",
+            "description": "Disconnected ownership components shown as separate islands.",
+        },
     },
     "containment": {
-        "tree": {"label": "Containment tree", "generic": "hierarchy_tree"},
-        "layers": {"label": "Containment layers", "generic": "role_layers"},
-        "islands": {"label": "Containment islands", "generic": "component_islands"},
+        "tree": {
+            "label": "Containment tree",
+            "generic": "hierarchy_tree",
+            "layout": "hierarchy_tree",
+            "description": "Containment surface arranged as a depth tree while preserving containment edges.",
+        },
+        "layers": {
+            "label": "Containment depth layers",
+            "generic": "role_layers",
+            "layout": "depth_layers",
+            "description": "Containment surface separated into projection-depth layers.",
+        },
+        "islands": {
+            "label": "Containment islands",
+            "generic": "component_islands",
+            "layout": "connected_components",
+            "description": "Disconnected containment components shown as separate islands.",
+        },
     },
 }
+
+
+_KNOWN_BUILDERS = {
+    "atlas_grid",
+    "event_causal_flow",
+    "event_mechanism_lanes",
+    "event_evidence_stack",
+    "directional",
+}
+_KNOWN_GENERIC_LAYOUTS = {
+    "map",
+    "matrix",
+    "hierarchy_tree",
+    "relation_shells",
+    "relation_orbits",
+    "role_layers",
+    "component_islands",
+}
+
+
+def validate_style_specs() -> None:
+    for base_id, styles in BASE_STYLE_SPECS.items():
+        for style_id, spec in styles.items():
+            for field in ("label", "layout", "description"):
+                if not str(spec.get(field) or "").strip():
+                    raise ValueError(f"Projection style {base_id}/{style_id} is missing {field}")
+            builder = spec.get("builder")
+            generic = spec.get("generic")
+            if bool(builder) == bool(generic):
+                raise ValueError(f"Projection style {base_id}/{style_id} must declare exactly one implementation")
+            if builder and builder not in _KNOWN_BUILDERS:
+                raise ValueError(f"Projection style {base_id}/{style_id} has unknown builder {builder}")
+            if generic and generic not in _KNOWN_GENERIC_LAYOUTS:
+                raise ValueError(f"Projection style {base_id}/{style_id} has unknown generic layout {generic}")
+
+
+validate_style_specs()
+
 
 PROJECTIONS: dict[str, dict[str, Any]] = {}
 for _base, _styles in BASE_STYLE_SPECS.items():
@@ -64,6 +210,8 @@ def style_catalog(base_id: str) -> list[dict[str, Any]]:
         {
             "id": style_id,
             "label": str(spec.get("label") or style_id),
+            "layout": str(spec.get("layout") or ""),
+            "description": str(spec.get("description") or ""),
             "dimensions": ["2d", "3d"],
             "variants": {
                 "2d": f"base_{base_id}_{style_id}_2d",
@@ -142,6 +290,8 @@ def _projection_result(
         "kind": "base_visual",
         "projection_base": spec["projection_base"],
         "projection_style": spec["projection_style"],
+        "projection_layout": spec.get("layout"),
+        "projection_style_description": spec.get("description"),
         "semantic_graph_only": True,
         "inference": False,
         "nodes": nodes,
@@ -153,6 +303,102 @@ def _projection_result(
     if extent is not None:
         out["extent"] = extent
     return out
+
+
+def _atlas_grid(graph: dict[str, Any], projection_id: str, spec: dict[str, Any]) -> dict[str, Any]:
+    """Atlas is a tiled index, never a radial/orbit layout.
+
+    2D: each projection-depth group is a card matrix.
+    3D: the same matrices become stacked X/Z planes along Y.
+    """
+    nodes, edges = _nodes(graph), _edges(graph)
+    by_depth: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for node in nodes:
+        by_depth[max(0, int(node.get("projection_depth") or 0))].append(node)
+    for members in by_depth.values():
+        members.sort(key=lambda node: str(node["id"]))
+
+    projected: list[dict[str, Any]] = []
+    groups: list[dict[str, Any]] = []
+    if spec["dimension"] == "2d":
+        width = 3600.0
+        cursor_y = 100.0
+        for level in sorted(by_depth):
+            members = by_depth[level]
+            cols = max(1, min(9, math.ceil(math.sqrt(len(members)))))
+            rows = max(1, math.ceil(len(members) / cols))
+            card_w, card_h, gap_x, gap_y = 320.0, 84.0, 28.0, 24.0
+            grid_w = cols * card_w + max(0, cols - 1) * gap_x
+            start_x = (width - grid_w) / 2.0
+            groups.append({
+                "id": f"atlas-depth-{level}",
+                "title": f"projection depth {level}",
+                "layout": "grid",
+                "count": len(members),
+            })
+            for index, node in enumerate(members):
+                row, col = divmod(index, cols)
+                p = _public(node)
+                p.update({
+                    "x": start_x + col * (card_w + gap_x),
+                    "y": cursor_y + row * (card_h + gap_y),
+                    "z": 0.0,
+                    "width": card_w,
+                    "height": card_h,
+                    "depth": 54.0,
+                    "projection_depth": level,
+                })
+                projected.append(p)
+            cursor_y += rows * (card_h + gap_y) + 150.0
+        return _projection_result(
+            projection_id,
+            spec,
+            projected,
+            edges,
+            groups=groups,
+            bounds={"width": width, "height": max(1000.0, cursor_y + 100.0)},
+        )
+
+    plane_gap = 320.0
+    max_span = 0.0
+    for level in sorted(by_depth):
+        members = by_depth[level]
+        cols = max(1, min(9, math.ceil(math.sqrt(len(members)))))
+        rows = max(1, math.ceil(len(members) / cols))
+        gap_x, gap_z = 360.0, 190.0
+        span_x = max(0.0, (cols - 1) * gap_x)
+        span_z = max(0.0, (rows - 1) * gap_z)
+        max_span = max(max_span, span_x, span_z)
+        groups.append({
+            "id": f"atlas-depth-{level}",
+            "title": f"projection depth {level}",
+            "layout": "grid_plane",
+            "y": -level * plane_gap,
+            "rows": rows,
+            "columns": cols,
+            "count": len(members),
+        })
+        for index, node in enumerate(members):
+            row, col = divmod(index, cols)
+            p = _public(node)
+            p.update({
+                "x": (col - (cols - 1) / 2.0) * gap_x,
+                "y": -level * plane_gap,
+                "z": (row - (rows - 1) / 2.0) * gap_z,
+                "width": 300.0,
+                "height": 82.0,
+                "depth": 58.0,
+                "projection_depth": level,
+            })
+            projected.append(p)
+    return _projection_result(
+        projection_id,
+        spec,
+        projected,
+        edges,
+        groups=groups,
+        extent=max(1000.0, max_span * 0.75 + (max(by_depth, default=0) + 1) * plane_gap),
+    )
 
 
 def _event_role(node: dict[str, Any], base_ids: set[str]) -> str:
@@ -406,6 +652,8 @@ def build_projection(graph: dict[str, Any], projection_id: str) -> dict[str, Any
     if spec is None:
         raise KeyError(f"Unknown projection-base visual generator: {projection_id}")
     builder = spec.get("builder")
+    if builder == "atlas_grid":
+        return _atlas_grid(graph, projection_id, spec)
     if builder == "event_causal_flow":
         return _event_causal_flow(graph, projection_id, spec)
     if builder == "event_mechanism_lanes":
@@ -421,7 +669,16 @@ def build_projection(graph: dict[str, Any], projection_id: str) -> dict[str, Any
     projection["kind"] = "base_visual"
     projection["projection_base"] = spec["projection_base"]
     projection["projection_style"] = spec["projection_style"]
+    projection["projection_layout"] = spec.get("layout")
+    projection["projection_style_description"] = spec.get("description")
     return projection
 
 
-__all__ = ["BASE_STYLE_SPECS", "PROJECTIONS", "style_catalog", "resolve_style", "build_projection"]
+__all__ = [
+    "BASE_STYLE_SPECS",
+    "PROJECTIONS",
+    "style_catalog",
+    "resolve_style",
+    "validate_style_specs",
+    "build_projection",
+]
