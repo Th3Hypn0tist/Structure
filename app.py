@@ -8,6 +8,7 @@ from http.server import ThreadingHTTPServer
 from canonical_projections import PROJECTIONS as CORE_PROJECTIONS, build_canonical_projection
 from canonical_projections_extra3d import PROJECTIONS as EXTRA_PROJECTIONS, build_projection as build_extra_projection
 from dependency_flow_projection import build_dependency_flow_3d
+from event_trace import build_event_surface
 from input_modules.canonical import read as read_canonical
 from input_modules.raw_json import read as read_raw_json
 from nanocms import projection, resolve_page, resolve_view
@@ -28,6 +29,7 @@ SCENE_VIEWER_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v4.html')
 SCENE_VIEWER_JS = os.path.join(BASE_DIR, 'static', 'scene_viewer_v4.js')
 SCENE_VIEWER_CARDS_JS = os.path.join(BASE_DIR, 'static', 'scene_viewer_v4_cards.js')
 SOURCE_PICKER_BROWSE_JS = os.path.join(BASE_DIR, 'static', 'source_picker_browse.js')
+EVENT_TRACE_VIEWER_JS = os.path.join(BASE_DIR, 'static', 'event_trace_viewer.js')
 LEGACY_INDEX_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v31.html')
 
 ALL_CANONICAL_PROJECTIONS = {**CORE_PROJECTIONS, **EXTRA_PROJECTIONS, **STRUCTURE_REVEAL_PROJECTIONS}
@@ -45,6 +47,8 @@ def _viewer_html_payload() -> bytes:
     text = text.replace('even = blue, odd = silver', 'odd = blue, even = silver')
     if '/static/source_picker_browse.js' not in text:
         text = text.replace('</body>', '<script src="/static/source_picker_browse.js"></script>\n</body>')
+    if '/static/event_trace_viewer.js' not in text:
+        text = text.replace('</body>', '<script src="/static/event_trace_viewer.js"></script>\n</body>')
     return text.encode('utf-8')
 
 
@@ -83,6 +87,7 @@ def _result_from_tree(tree: dict, ruleset: str) -> dict:
 def _attach_scene(result: dict, base_projection: dict) -> None:
     result['projection'] = base_projection
     scene = projection_to_scene(base_projection, result['structure_tree'])
+    scene['event_surface'] = build_event_surface(result['structure_tree'])
     result['scene'] = scene
     scene_errors = validate_scene(scene)
     if scene_errors:
@@ -110,6 +115,7 @@ def _compose_scene_result(snapshot, page: str, views: list[str]) -> dict:
     selected_views = [resolve_view(page, view_id) for view_id in views]
     projections = [_build_canonical_projection(result['graph'], item['projection_id']) for item in selected_views]
     scene = compose_scene(projections, tree)
+    scene['event_surface'] = build_event_surface(tree)
     result['scene'] = scene
     result['views'] = selected_views
     scene_errors = list(scene.get('validation_errors', []))
@@ -153,6 +159,7 @@ def _compose_projection_instance_result(snapshot, specs: list[dict]) -> dict:
     scene.setdefault('composition', {})['master_instance_id'] = next((item['id'] for item in normalized if item['master']), None)
     scene['composition']['single_master'] = True
     scene['composition']['existing_identity_policy'] = 'reference_existing_and_stop_recursion'
+    scene['event_surface'] = build_event_surface(tree)
     result['scene'] = scene
     result['instances'] = normalized
     result['catalog'] = {'styles': style_catalog(), 'topics': [{'id': 'all', 'label': 'all', 'entry_count': len(tree.get('entries', []))}] + topic_catalog(tree)}
@@ -164,7 +171,7 @@ def _compose_projection_instance_result(snapshot, specs: list[dict]) -> dict:
 
 
 class Handler(BaseHandler):
-    server_version = 'Structure/0.24.1'
+    server_version = 'Structure/0.25.0'
 
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode('utf-8')
@@ -210,10 +217,12 @@ class Handler(BaseHandler):
                 return self._write_body(_viewer_cards_payload(), 'application/javascript; charset=utf-8')
             if path == '/static/source_picker_browse.js':
                 return self._write_file(SOURCE_PICKER_BROWSE_JS, 'application/javascript; charset=utf-8')
+            if path == '/static/event_trace_viewer.js':
+                return self._write_file(EVENT_TRACE_VIEWER_JS, 'application/javascript; charset=utf-8')
             if path == '/legacy':
                 return self._write_file(LEGACY_INDEX_HTML, 'text/html; charset=utf-8')
             if path == '/api/health':
-                return self._write_json({'ok': True, 'server': self.server_version, 'input_model': 'StructureTree/1.1', 'scene_model': 'Scene/1.1', 'projection_instances': True, 'projection_style_dimension_split': True, 'selectable_sources': ['github', 'directory'], 'directory_browser': True, 'relation_expansion': 'all_explicit_documented_links', 'renderer': 'webgl2_projection_instances_v4_cards', 'effects': 'none'})
+                return self._write_json({'ok': True, 'server': self.server_version, 'input_model': 'StructureTree/1.1', 'scene_model': 'Scene/1.1', 'projection_instances': True, 'projection_style_dimension_split': True, 'selectable_sources': ['github', 'directory'], 'directory_browser': True, 'event_trace': True, 'event_trace_causality': 'explicit_only', 'relation_expansion': 'all_explicit_documented_links', 'renderer': 'webgl2_projection_instances_v4_cards', 'effects': 'none'})
             if path == '/api/primitives':
                 return self._write_json(load_registry())
             if path == '/api/branches':
