@@ -3,162 +3,78 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>StructureProjector</title>
+<title>Structure</title>
 <style>
 :root{--bg:#020304;--fg:#fff;--muted:#aab2c2;--blue:#087cff;--silver:#aab2c2;--red:#ff176b;--gold:#ffd83d;--panel:#080b10;--line:#394252}
-*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--fg);font:13px/1.35 Inter,"Segoe UI",Arial,sans-serif}button,input,select{font:inherit}button,input,select{background:#05070a;color:#fff;border:1px solid var(--line);border-radius:7px;padding:6px 8px}button{cursor:pointer}button:hover{border-color:var(--blue)}input[type=color]{padding:2px;width:36px;height:27px}input[type=range]{padding:0;width:100%;accent-color:var(--blue)}
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--fg);font:13px/1.35 Inter,"Segoe UI",Arial,sans-serif}button,input,select{font:inherit;background:#05070a;color:#fff;border:1px solid var(--line);border-radius:7px;padding:6px 8px}button{cursor:pointer}button:hover{border-color:var(--blue)}button:disabled,input:disabled,select:disabled{opacity:.55;cursor:not-allowed}input[type=color]{padding:2px;width:36px;height:27px}input[type=range]{padding:0;width:100%;accent-color:var(--blue)}
 header{height:56px;display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line);background:#030507}header strong{font-size:18px}.spacer{flex:1}.muted{color:var(--muted);font-size:11px}.status{border:1px solid var(--line);border-radius:999px;padding:3px 8px;font-size:11px}.status.ok{color:var(--blue);border-color:var(--blue)}.status.bad{color:var(--red);border-color:var(--red)}
 .shell{height:calc(100vh - 56px);display:grid;grid-template-columns:390px minmax(0,1fr) 290px}.left,.right{background:var(--panel);overflow:auto}.left{border-right:1px solid var(--line)}.right{border-left:1px solid var(--line)}.viewer{position:relative;overflow:hidden;background:radial-gradient(circle at center,#07101c 0,#020304 60%)}#gl{position:absolute;inset:0;width:100%;height:100%}.toolbar{position:absolute;z-index:30;top:10px;left:10px;display:flex;gap:6px;background:#020304dd;border:1px solid var(--line);border-radius:9px;padding:6px}#axisGizmo{position:absolute;right:12px;bottom:12px;width:128px;height:128px;z-index:30;background:#020304cc;border:1px solid var(--line);border-radius:10px;pointer-events:none}#rootLabels{position:absolute;inset:0;z-index:20;pointer-events:none;overflow:hidden}.root-label{position:absolute;transform:translate(-50%,-50%);color:#fff;font-weight:800;font-size:20px;letter-spacing:.04em;text-shadow:0 2px 8px #000,0 0 12px #000;white-space:nowrap}.root-label small{display:block;text-align:center;color:#fff;font-size:10px;font-weight:600;opacity:.72;letter-spacing:.03em}
 .section{border-bottom:1px solid var(--line)}.section>summary{cursor:pointer;list-style:none;padding:11px 12px;color:var(--muted);font-weight:800;font-size:11px;letter-spacing:.08em}.section[open]>summary{color:#fff;background:#05070a}.section>summary::-webkit-details-marker{display:none}.body{padding:10px 12px}.instance{border:1px solid var(--line);border-radius:10px;margin:0 0 10px;overflow:hidden}.instance>summary{cursor:pointer;padding:9px;background:#05070a;font-weight:700}.instance-body{padding:9px}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:7px}.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.field{display:grid;gap:3px;margin:0 0 8px}.field label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}.field input,.field select{width:100%;min-width:0}.axis label{font-weight:800}.axis.x label{color:#ff3b30}.axis.y label{color:#32d74b}.axis.z label{color:#087cff}.subhead{display:flex;align-items:center;justify-content:space-between;margin:10px 0 6px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}.color-row{display:grid;grid-template-columns:1fr 36px;gap:8px;align-items:center;margin:6px 0}.remove{border-color:#64243c;color:#ff8bb8}.add{width:100%;border-color:#245ea8}.metric{display:grid;grid-template-columns:1fr auto;gap:8px;margin:5px 0}.metric span:last-child{font-family:ui-monospace,monospace}.panel{padding:12px;border-bottom:1px solid var(--line)}.panel h2{margin:0 0 9px;font-size:13px}.kv{margin:0 0 9px}.kv b{display:block;color:var(--blue);font-size:9px;text-transform:uppercase;letter-spacing:.05em}.warn{color:var(--gold)}pre{white-space:pre-wrap;word-break:break-word;border:1px solid var(--line);border-radius:8px;padding:8px;font:10px ui-monospace,monospace}
 </style>
 </head>
 <body>
-<header><strong>StructureProjector</strong><span id="status" class="status">idle</span><span class="muted">Projection Instances</span><div class="spacer"></div><label>Branch <select id="branch"></select></label><button id="reload">Reload</button><span id="revision" class="muted"></span></header>
+<header>
+  <strong>Structure</strong>
+  <span id="status" class="status">idle</span>
+  <span class="muted">Semantic projections</span>
+  <div class="spacer"></div>
+  <button id="sourcePickerButton" type="button">Select source</button>
+  <label style="display:none">Branch <select id="branch"></select></label>
+  <button id="reload" type="button">Reload</button>
+  <span id="revision" class="muted"></span>
+</header>
 <div class="shell">
-<aside class="left">
-<details class="section" open><summary>PROJECTION INSTANCES</summary><div class="body"><div id="instances"></div><button id="addInstance" class="add">+ Add projection instance</button></div></details>
-<details class="section" open><summary>CONNECTIONS</summary><div class="body" id="channels"><span class="muted">Load scene.</span></div></details>
-<details class="section"><summary>VIEW</summary><div class="body"><div class="field"><label>Yaw</label><input id="yaw" type="range" min="-180" max="180" step="1" value="26"></div><div class="field"><label>Pitch</label><input id="pitch" type="range" min="-89" max="89" step="1" value="-16"></div><div class="field"><label>FOV</label><input id="fov" type="range" min="20" max="100" step="1" value="60"></div><div class="field"><label>Camera distance</label><input id="distance" type="range" min="200" max="50000" step="50" value="3600"></div></div></details>
-<details class="section"><summary>RENDERER</summary><div class="body"><div class="field"><label>Node limit</label><input id="nodeLimit" type="number" min="1" max="500000" value="100000"></div><div class="field"><label>Connection limit</label><input id="connectionLimit" type="number" min="0" max="500000" value="100000"></div><div class="field"><label>Label limit</label><input id="labelLimit" type="number" min="0" max="100000" value="5000"></div></div></details>
-</aside>
-<main class="viewer"><canvas id="gl"></canvas><div id="rootLabels"></div><div class="toolbar"><button id="fit">Fit</button><button id="resetCamera">Reset camera</button><span id="zoom" class="muted">100%</span></div><canvas id="axisGizmo" width="128" height="128"></canvas></main>
-<aside class="right"><section class="panel"><h2>Scene</h2><div id="sceneInfo" class="muted">No scene.</div></section><section class="panel"><h2>Rules</h2><div class="kv"><b>Default hierarchy colors</b>even = blue, odd = silver</div><div class="kv"><b>Hierarchy size</b>child = 80% of parent</div><div class="kv"><b>Node cards</b>name, type/status, source role and explicit link counts</div><div class="kv"><b>Root label</b>white billboard, always faces camera</div><div class="kv"><b>Relation depth</b>all explicit documented graph relations; no inferred links</div><div class="kv"><b>Projection layout memory</b>remembered per projection style + 2D/3D dimension</div><div class="kv"><b>Evidence</b>structure.* and explicit references[] only</div></section><section class="panel"><h2>Error</h2><div id="error" class="muted">None.</div></section></aside>
+  <aside class="left">
+    <details class="section" open>
+      <summary>PROJECTIONS</summary>
+      <div class="body"><div id="instances"></div><button id="addInstance" class="add" type="button">+ Add projection</button></div>
+    </details>
+    <details class="section" open>
+      <summary>CONNECTIONS</summary>
+      <div class="body" id="channels"><span class="muted">No scene.</span></div>
+    </details>
+    <details class="section">
+      <summary>VIEW</summary>
+      <div class="body">
+        <div class="field"><label>Yaw</label><input id="yaw" type="range" min="-180" max="180" step="1" value="26"></div>
+        <div class="field"><label>Pitch</label><input id="pitch" type="range" min="-89" max="89" step="1" value="-16"></div>
+        <div class="field"><label>FOV</label><input id="fov" type="range" min="20" max="100" step="1" value="60"></div>
+        <div class="field"><label>Camera distance</label><input id="distance" type="range" min="200" max="50000" step="50" value="3600"></div>
+      </div>
+    </details>
+    <details class="section">
+      <summary>RENDERER</summary>
+      <div class="body">
+        <div class="field"><label>Node limit</label><input id="nodeLimit" type="number" min="1" max="500000" value="100000"></div>
+        <div class="field"><label>Connection limit</label><input id="connectionLimit" type="number" min="0" max="500000" value="100000"></div>
+        <div class="field"><label>Label limit</label><input id="labelLimit" type="number" min="0" max="100000" value="5000"></div>
+      </div>
+    </details>
+  </aside>
+  <main class="viewer">
+    <canvas id="gl"></canvas>
+    <div id="rootLabels"></div>
+    <div class="toolbar"><button id="fit" type="button">Fit</button><button id="resetCamera" type="button">Reset camera</button><span id="zoom" class="muted">100%</span></div>
+    <canvas id="axisGizmo" width="128" height="128"></canvas>
+  </main>
+  <aside class="right">
+    <section class="panel"><h2>Scene</h2><div id="sceneInfo" class="muted">No scene.</div></section>
+    <section class="panel"><h2>Rules</h2>
+      <div class="kv"><b>Semantic projection</b>selects the identities and explicit semantic edges</div>
+      <div class="kv"><b>Visual style</b>geometry only; never changes semantic membership</div>
+      <div class="kv"><b>Dimensions</b>every visual style has native 2D and 3D variants</div>
+      <div class="kv"><b>Relation depth</b>explicit documented relations only; no inferred links</div>
+      <div class="kv"><b>Hierarchy colors</b>even = blue, odd = silver</div>
+      <div class="kv"><b>Evidence</b>canonical structured data and explicit references only</div>
+    </section>
+    <section class="panel"><h2>Error</h2><div id="error" class="muted">None.</div></section>
+  </aside>
 </div>
 <script src="/static/scene_viewer_v4.js"></script>
-<script src="/static/scene_viewer_v4_cards.js"></script>
-<script>
-'use strict';
-const SP_axisSpreadBasePositions=spRecursive3DPositions;
-function spAxisSpreadValue(value){const n=Number(value);return Number.isFinite(n)?Math.max(.05,Math.min(20,n)):1}
-spRecursive3DPositions=function(obj,state){const positions=SP_axisSpreadBasePositions(obj,state);const p=state?.projection||{};const sx=spAxisSpreadValue(p.spread_x),sy=spAxisSpreadValue(p.spread_y),sz=spAxisSpreadValue(p.spread_z);for(const pos of positions.values()){pos.x*=sx;pos.y*=sy;pos.z*=sz}return positions};
-const SP_axisSpreadRenderInstances=renderInstances;
-renderInstances=function(){SP_axisSpreadRenderInstances();for(const card of $('#instances').querySelectorAll('.instance')){if(card.querySelector('[data-axis-spread-grid]'))continue;const inst=S.instances.find(x=>x.id===card.dataset.card);if(!inst)continue;const obj=(S.scene?.objects||[]).find(x=>x.instance_id===inst.id),state=ensureLocalState(inst,obj),p=state.projection||projectionDefaults();const baseSpread=card.querySelector('[data-base-spread]')?.closest('.field');if(!baseSpread)continue;const wrap=document.createElement('div');wrap.dataset.axisSpreadGrid='1';wrap.innerHTML=`<div class="subhead"><span>Axis spread</span><span>XYZ</span></div><div class="grid3"><div class="field axis x"><label>X spread</label><input type="number" min=".05" max="20" step=".05" data-proj="${inst.id}" data-proj-key="spread_x" value="${spAxisSpreadValue(p.spread_x)}"></div><div class="field axis y"><label>Y spread</label><input type="number" min=".05" max="20" step=".05" data-proj="${inst.id}" data-proj-key="spread_y" value="${spAxisSpreadValue(p.spread_y)}"></div><div class="field axis z"><label>Z spread</label><input type="number" min=".05" max="20" step=".05" data-proj="${inst.id}" data-proj-key="spread_z" value="${spAxisSpreadValue(p.spread_z)}"></div></div>`;baseSpread.insertAdjacentElement('afterend',wrap)}};
-</script>
-<script>
-'use strict';
-const SP_memoryEnsureLocalState=ensureLocalState,SP_memoryRenderInstances=renderInstances;
-function spProjectionMemoryKey(i){return `${String(i?.projection_style||'atlas')}:${String(i?.projection_dimension||'2d').toLowerCase()}`}
-function spCloneProjectionState(v){const s=v||projectionDefaults();return{spread_x:Number.isFinite(Number(s.spread_x))?Number(s.spread_x):1,spread_y:Number.isFinite(Number(s.spread_y))?Number(s.spread_y):1,spread_z:Number.isFinite(Number(s.spread_z))?Number(s.spread_z):1,node_scale:Number.isFinite(Number(s.node_scale))?Number(s.node_scale):1,edge_opacity:Number.isFinite(Number(s.edge_opacity))?Number(s.edge_opacity):.28}}
-function spProjectionMemory(i,s){s.projection_memory||={};const k=spProjectionMemoryKey(i);if(!s.projection_memory[k])s.projection_memory[k]=spCloneProjectionState(projectionDefaults());s.projection=s.projection_memory[k];s.projection_memory_active=k;return s.projection}
-ensureLocalState=function(i,o){const s=SP_memoryEnsureLocalState(i,o);spProjectionMemory(i,s);return s};
-function spResetInstanceTransform(id){const s=S.objectState[id];if(s)s.transform=objectTransformDefaults()}
-renderInstances=function(){SP_memoryRenderInstances();$('#instances').querySelectorAll('[data-proj]').forEach(el=>{el.oninput=()=>{const i=S.instances.find(x=>x.id===el.dataset.proj);if(!i)return;const o=(S.scene?.objects||[]).find(x=>x.instance_id===i.id),s=ensureLocalState(i,o);let v=Number(el.value);if(!Number.isFinite(v))return;const k=el.dataset.projKey;if(k==='node_scale'||k.startsWith('spread_'))v=Math.max(.05,v);if(k==='edge_opacity')v=Math.max(0,Math.min(1,v));s.projection[k]=v;s.projection_memory[spProjectionMemoryKey(i)]=s.projection;rebuildRenderer()}});$('#instances').querySelectorAll('[data-reset]').forEach(b=>{b.onclick=()=>{const i=S.instances.find(x=>x.id===b.dataset.reset);if(!i)return;spResetInstanceTransform(i.id);renderInstances();rebuildRenderer()}})};
-</script>
-<script>
-'use strict';
-(function installSourcePicker(){
-  const DEFAULT_REPO='Th3Hypn0tist/AIGMos_docs';
-  S.sourceSpec ||= {type:'github',repo:DEFAULT_REPO,branch:$('#branch')?.value||'main'};
-
-  function sourceQuery(spec){
-    const q=new URLSearchParams();
-    if(spec.type==='directory'){
-      q.set('source_type','directory');q.set('source_path',spec.path||'');
-    }else{
-      q.set('source_type','github');q.set('repo',spec.repo||DEFAULT_REPO);q.set('branch',spec.branch||'main');
-    }
-    return q.toString();
-  }
-  function sourceLabel(spec){
-    if(spec.type==='directory'){
-      const parts=String(spec.path||'').replace(/\\/g,'/').split('/').filter(Boolean);
-      return `Source · ${parts.at(-1)||'Directory'}`;
-    }
-    return `Source · ${spec.branch||'main'}`;
-  }
-  function ensureSourceUI(){
-    if($('#sourcePickerButton'))return;
-    const branch=$('#branch'),branchLabel=branch?.closest('label');if(branchLabel)branchLabel.style.display='none';
-    const button=document.createElement('button');button.id='sourcePickerButton';button.textContent=sourceLabel(S.sourceSpec);
-    const reload=$('#reload');reload?.parentElement?.insertBefore(button,reload||null);
-
-    const style=document.createElement('style');style.id='sourcePickerStyle';style.textContent=`
-      .source-backdrop{position:fixed;inset:0;z-index:200;background:#0009;display:grid;place-items:center;padding:20px}
-      .source-popup{width:min(520px,calc(100vw - 40px));background:#080b10;border:1px solid var(--line);border-radius:12px;box-shadow:0 24px 80px #000;padding:16px}
-      .source-popup h2{margin:0 0 14px;font-size:15px}.source-popup .source-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}.source-popup .source-error{min-height:18px;color:var(--red);font-size:11px;margin-top:6px}.source-popup .source-note{color:var(--muted);font-size:10px;margin-top:-3px;margin-bottom:9px}
-    `;document.head.appendChild(style);
-    button.onclick=openSourcePopup;
-  }
-  function sourceFields(popup){
-    const type=popup.querySelector('[data-source-type]').value;
-    popup.querySelector('[data-source-github]').style.display=type==='github'?'block':'none';
-    popup.querySelector('[data-source-directory]').style.display=type==='directory'?'block':'none';
-  }
-  async function refreshPopupBranches(popup){
-    const repo=popup.querySelector('[data-source-repo]').value.trim()||DEFAULT_REPO;
-    const select=popup.querySelector('[data-source-branch]');
-    const previous=select.value||S.sourceSpec.branch||'main';
-    select.innerHTML='<option>loading…</option>';select.disabled=true;
-    try{
-      const data=await getJSON(`/api/branches?repo=${encodeURIComponent(repo)}`);
-      select.innerHTML=(data.branches||[]).map(b=>`<option value="${esc(b.name)}">${esc(b.name)}</option>`).join('');
-      select.value=(data.branches||[]).some(b=>b.name===previous)?previous:((data.branches||[]).some(b=>b.name==='main')?'main':data.branches?.[0]?.name||'main');
-    }catch(e){select.innerHTML=`<option value="${esc(previous)}">${esc(previous)}</option>`;popup.querySelector('.source-error').textContent=e.message||String(e)}
-    finally{select.disabled=false}
-  }
-  function openSourcePopup(){
-    const spec=S.sourceSpec||{type:'github',repo:DEFAULT_REPO,branch:'main'};
-    const overlay=document.createElement('div');overlay.className='source-backdrop';overlay.innerHTML=`<div class="source-popup">
-      <h2>Source</h2>
-      <div class="field"><label>Source type</label><select data-source-type><option value="github" ${spec.type==='github'?'selected':''}>GitHub repository</option><option value="directory" ${spec.type==='directory'?'selected':''}>Local directory</option></select></div>
-      <div data-source-github>
-        <div class="field"><label>Repository</label><input data-source-repo value="${esc(spec.repo||DEFAULT_REPO)}" placeholder="owner/repository"></div>
-        <div class="field"><label>Branch</label><select data-source-branch><option value="${esc(spec.branch||'main')}">${esc(spec.branch||'main')}</option></select></div>
-      </div>
-      <div data-source-directory>
-        <div class="field"><label>Directory path</label><input data-source-path value="${esc(spec.path||'')}" placeholder="C:\\path\\to\\project or /path/to/project"></div>
-        <div class="source-note">Path is read by the Structure server. On localhost this is a directory on this computer.</div>
-      </div>
-      <div class="source-error"></div>
-      <div class="source-actions"><button data-source-cancel>Cancel</button><button data-source-use>Use source</button></div>
-    </div>`;
-    document.body.appendChild(overlay);const popup=overlay.querySelector('.source-popup');sourceFields(popup);
-    popup.querySelector('[data-source-type]').onchange=()=>sourceFields(popup);
-    popup.querySelector('[data-source-repo]').onchange=()=>refreshPopupBranches(popup);
-    popup.querySelector('[data-source-cancel]').onclick=()=>overlay.remove();overlay.onclick=e=>{if(e.target===overlay)overlay.remove()};
-    popup.querySelector('[data-source-use]').onclick=async()=>{
-      const type=popup.querySelector('[data-source-type]').value;
-      const candidate=type==='directory'?{type:'directory',path:popup.querySelector('[data-source-path]').value.trim()}:{type:'github',repo:popup.querySelector('[data-source-repo]').value.trim()||DEFAULT_REPO,branch:popup.querySelector('[data-source-branch]').value||'main'};
-      const error=popup.querySelector('.source-error');error.textContent='';popup.querySelector('[data-source-use]').disabled=true;
-      try{await activateSource(candidate);overlay.remove()}catch(e){error.textContent=e.message||String(e);popup.querySelector('[data-source-use]').disabled=false}
-    };
-    if(spec.type==='github')refreshPopupBranches(popup);
-  }
-  async function catalogFor(spec){return getJSON(`/api/projection-catalog?${sourceQuery(spec)}`)}
-  function normalizeInstancesForCatalog(){
-    const styles=S.catalog?.styles||[],topics=S.catalog?.topics||[];
-    for(const inst of S.instances){
-      if(!styles.some(x=>x.id===inst.projection_style)){const s=styles.find(x=>x.id==='atlas')||styles[0];inst.projection_style=s?.id||'atlas';inst.projection_dimension=s?.dimensions?.includes('3d')?'3d':s?.dimensions?.[0]||'2d'}
-      if(!topics.some(x=>x.id===inst.root_topic))inst.root_topic=topics.find(x=>x.id!=='all')?.id||'all';
-    }
-  }
-  async function activateSource(candidate){
-    setStatus('source');
-    const catalog=await catalogFor(candidate);
-    S.sourceSpec=candidate;S.catalog=catalog;S.scene=null;S.objectState={};S.objectStyle={};
-    const hiddenBranch=$('#branch');if(hiddenBranch&&candidate.type==='github')hiddenBranch.value=candidate.branch;
-    normalizeInstancesForCatalog();
-    if(!S.instances.length)S.instances=[newInstance()];
-    $('#sourcePickerButton').textContent=sourceLabel(candidate);renderInstances();await loadScene();
-  }
-
-  loadScene=async function(){
-    spApplyPrimaryDefaults();
-    if(!S.instances.length)return;
-    setStatus('loading');$('#error').textContent='None.';
-    try{
-      const data=await postJSON('/api/scene',{source:S.sourceSpec,instances:instancePayload()});
-      S.scene=data.scene;S.source=data.source||{};$('#revision').textContent=(S.source.revision||'').slice(0,12);
-      for(const inst of S.instances)ensureLocalState(inst,(S.scene.objects||[]).find(o=>o.instance_id===inst.id));
-      syncChannels();renderInstances();renderChannels();rebuildRenderer(false);fit(false);renderSceneInfo();draw();setStatus(`${S.scene?.composition?.node_instance_count||0} nodes`);
-    }catch(e){showError(e)}
-  };
-
-  setTimeout(()=>{
-    const initialBranch=$('#branch')?.value||'main';S.sourceSpec={type:'github',repo:DEFAULT_REPO,branch:initialBranch};ensureSourceUI();
-    const branch=$('#branch');if(branch)branch.onchange=null;
-  },0);
-})();
-</script>
+<script src="/static/source_select_ui.js"></script>
+<script src="/static/source_picker_browse.js"></script>
+<script src="/static/event_trace_viewer.js"></script>
+<script src="/static/session_ui.js"></script>
+<script src="/static/diagnostics_ui.js"></script>
 </body>
 </html>
