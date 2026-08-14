@@ -12,11 +12,7 @@ LEGACY_BOOTSTRAP = "00_Contract_Format.json"
 
 
 def _project_candidates(snapshot):
-    """Discover projects only from the explicit Contract Format 1.4 authority.
-
-    The active authority is <project-root>/AIGMos_Canonical_Contract_Format_v1.4.0.json.
-    canonical/json/00_Contract_Format.json is never an active bootstrap source.
-    """
+    """Discover projects only from the explicit Contract Format 1.4 authority."""
     candidates = []
     for path in sorted(snapshot.files):
         normalized = path.replace("\\", "/")
@@ -54,9 +50,6 @@ def _canonicalized_snapshot(snapshot):
     if not canonical_files:
         raise ValueError("Contract Format 1.4 bootstrap found, but canonical/json contains no canonical JSON contracts")
 
-    # Internal compatibility mount: existing normalized CW readers expect the
-    # bootstrapped format at this virtual path. This file does NOT originate
-    # from canonical/json and is not treated as a canonical contract.
     files = dict(canonical_files)
     files[f"canonical/json/{LEGACY_BOOTSTRAP}"] = format_raw
 
@@ -84,18 +77,25 @@ def read(snapshot, options=None):
     tree = _read(snapshot, options)
 
     if is_v14(snapshot):
+        # CW 1.4 owns Topic materialization and resolution. enrich_v14 computes
+        # inherited grouping membership, composition trace surfaces and coverage.
+        # Running generic topic_enrichment afterwards would overwrite those
+        # resolved projection surfaces with raw Topic records.
         tree = enrich_v14(tree, snapshot)
+        topic_reader = "cw14_native_resolved"
     else:
         tree = enrich(tree, snapshot)
+        tree = enrich_topics(tree, snapshot)
+        topic_reader = "generic_explicit"
 
-    tree = enrich_topics(tree, snapshot)
     tree.setdefault("source_result", {})["canonical_reader"] = {
         "enabled": True,
         "mode": "canonical",
-        "contract_format": "1.4",
+        "contract_format": "1.4" if is_v14(snapshot) else "pre-1.4",
         "bootstrap_authority": FORMAT_ROOT_FILENAME,
         "canonical_contract_root": "canonical/json/",
         "legacy_bootstrap_is_authority": False,
+        "topic_reader": topic_reader,
         "discovery_inference": False,
     }
     tree["validation_errors"] = validate_tree(tree)
