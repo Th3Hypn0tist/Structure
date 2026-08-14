@@ -33,6 +33,7 @@ SOURCE_SELECT_UI_JS = os.path.join(BASE_DIR, 'static', 'source_select_ui.js')
 SOURCE_PICKER_BROWSE_JS = os.path.join(BASE_DIR, 'static', 'source_picker_browse.js')
 EVENT_TRACE_VIEWER_JS = os.path.join(BASE_DIR, 'static', 'event_trace_viewer.js')
 SESSION_UI_JS = os.path.join(BASE_DIR, 'static', 'session_ui.js')
+DIAGNOSTICS_UI_JS = os.path.join(BASE_DIR, 'static', 'diagnostics_ui.js')
 LEGACY_INDEX_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v31.html')
 
 ALL_CANONICAL_PROJECTIONS = {**CORE_PROJECTIONS, **EXTRA_PROJECTIONS, **STRUCTURE_REVEAL_PROJECTIONS}
@@ -44,7 +45,6 @@ def _file_payload(path: str) -> bytes:
 
 
 def _strip_legacy_source_picker(text: str) -> str:
-    """Remove the old inline source picker so only one source UI owns the button."""
     marker = "<script>\n'use strict';\n(function installSourcePicker(){"
     start = text.find(marker)
     if start < 0:
@@ -71,6 +71,7 @@ def _viewer_html_payload() -> bytes:
         '/static/source_picker_browse.js',
         '/static/event_trace_viewer.js',
         '/static/session_ui.js',
+        '/static/diagnostics_ui.js',
     )
     for script in scripts:
         if f'<script src="{script}"></script>' not in text:
@@ -79,11 +80,6 @@ def _viewer_html_payload() -> bytes:
 
 
 def _viewer_js_payload() -> bytes:
-    """Replace the legacy auto-start call with an explicit empty startup.
-
-    Match the final call itself instead of depending on a trailing newline. The
-    checked-in viewer currently ends exactly with ``init();``.
-    """
     text = _file_payload(SCENE_VIEWER_JS).decode('utf-8')
     empty_bootstrap = '''(function initEmptyStructure(){
   try {
@@ -187,7 +183,7 @@ def _session_result(body: dict) -> dict:
 
 
 class Handler(BaseHandler):
-    server_version = 'Structure/0.27.4'
+    server_version = 'Structure/0.27.5'
 
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode('utf-8')
@@ -207,7 +203,8 @@ class Handler(BaseHandler):
         return data
 
     def _error(self, exc: Exception) -> None:
-        self._write_json({'ok': False, 'error': exc.as_dict() if isinstance(exc, ProjectorError) else {'id': 'SP_REQUEST_FAILED', 'message': str(exc)}}, 400)
+        payload = exc.as_dict() if isinstance(exc, ProjectorError) else {'id': 'SP_REQUEST_FAILED', 'message': str(exc), 'type': type(exc).__name__}
+        self._write_json({'ok': False, 'error': payload}, 400)
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path); path = parsed.path; query = urllib.parse.parse_qs(parsed.query)
@@ -219,8 +216,9 @@ class Handler(BaseHandler):
             if path == '/static/source_picker_browse.js': return self._write_file(SOURCE_PICKER_BROWSE_JS, 'application/javascript; charset=utf-8')
             if path == '/static/event_trace_viewer.js': return self._write_file(EVENT_TRACE_VIEWER_JS, 'application/javascript; charset=utf-8')
             if path == '/static/session_ui.js': return self._write_file(SESSION_UI_JS, 'application/javascript; charset=utf-8')
+            if path == '/static/diagnostics_ui.js': return self._write_file(DIAGNOSTICS_UI_JS, 'application/javascript; charset=utf-8')
             if path == '/legacy': return self._write_file(LEGACY_INDEX_HTML, 'text/html; charset=utf-8')
-            if path == '/api/health': return self._write_json({'ok': True, 'server': self.server_version, 'startup': 'empty', 'automatic_source_read': False, 'automatic_projection': False, 'first_selected_source_becomes_first_master': True, 'multi_master': True, 'projection_master_cardinality': 'source 1:N projection', 'semantic_projection_styles': True, 'implemented_semantic_styles': ['topic', 'impact'], 'visual_style_separate': True, 'selectable_sources': ['github', 'directory'], 'directory_browser': True, 'event_trace_causality': 'explicit_only', 'cross_master_inference': False})
+            if path == '/api/health': return self._write_json({'ok': True, 'server': self.server_version, 'startup': 'empty', 'automatic_source_read': False, 'automatic_projection': False, 'first_selected_source_becomes_first_master': True, 'multi_master': True, 'projection_master_cardinality': 'source 1:N projection', 'semantic_projection_styles': True, 'implemented_semantic_styles': ['topic', 'impact'], 'visual_style_separate': True, 'selectable_sources': ['github', 'directory'], 'directory_browser': True, 'event_trace_causality': 'explicit_only', 'cross_master_inference': False, 'diagnostics': 'structured'})
             if path == '/api/primitives': return self._write_json(load_registry())
             if path == '/api/branches':
                 repo = (query.get('repo') or [SOURCE_REPO])[0]; return self._write_json({'repository': repo, 'branches': list_branches(repo)})
