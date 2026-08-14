@@ -4,6 +4,15 @@
   let projectionBusy=false;
   let progressHideTimer=null;
 
+  // scene_viewer_v4_cards.js used to replace every 3D projection with its own
+  // recursive client-side layout. That made the selected backend generator
+  // irrelevant and could make Atlas 3D look like an old/fallback layout. The
+  // semantic visual kernel is now the sole geometry authority: Renderer only
+  // consumes positions returned by the server.
+  if(typeof SP_originalBuild==='function'){
+    Renderer.prototype.build=function(scene){SP_originalBuild.call(this,scene);};
+  }
+
   function semanticStyles(){return S.catalog?.projection_styles||[]}
   function visualStyles(){return S.catalog?.visual_styles||S.catalog?.styles||[]}
   function masters(){return S.catalog?.masters||[]}
@@ -157,9 +166,6 @@
 
   function nextAnimationFrame(){return new Promise(resolve=>requestAnimationFrame(resolve));}
   async function waitUntilPainted(){
-    // draw() submits the frame synchronously. Two RAF boundaries guarantee that
-    // the browser has had a paint opportunity with that submitted frame before
-    // projection controls are unlocked.
     await nextAnimationFrame();
     await nextAnimationFrame();
   }
@@ -203,8 +209,15 @@
 
     const legacyProjection=body.querySelector('[data-key="projection_style"]')?.closest('.grid2');
     const legacyDepth=body.querySelector('[data-key="dependency_depth"]')?.closest('.field');
+    const legacyChildAxis=body.querySelector('[data-child-axis]')?.closest('.grid2');
+    const legacyBaseSpread=body.querySelector('[data-base-spread]')?.closest('.field');
     if(legacyProjection)legacyProjection.remove();
     if(legacyDepth)legacyDepth.remove();
+    if(legacyChildAxis)legacyChildAxis.remove();
+    if(legacyBaseSpread)legacyBaseSpread.remove();
+    for(const subhead of body.querySelectorAll('.subhead')){
+      if(subhead.textContent?.includes('Projection layout'))subhead.remove();
+    }
 
     const style=semanticFor(inst),scopeTypes=style?.scope_types||['topic'];
     const visual=visualFor(inst),dims=visual?.dimensions||['2d'];
@@ -225,7 +238,7 @@
       </div>`;
     const nameField=body.querySelector('.field');
     nameField?.insertAdjacentElement('afterend',controls);
-    card.querySelector('summary').textContent=`${inst.name} · ${style?.label||inst.semantic_projection_style} · ${masterFor(inst)?.name||inst.master_ref}`;
+    card.querySelector('summary').textContent=`${inst.name} · ${style?.label||inst.semantic_projection_style} · ${visual?.label||inst.visual_style} ${inst.projection_dimension.toUpperCase()} · ${masterFor(inst)?.name||inst.master_ref}`;
     return card.outerHTML;
   };
 
@@ -267,6 +280,39 @@
     renderInstances();
   }
 
+  function synchronizeResolvedInstances(data){
+    if(!Array.isArray(data?.instances))return;
+    for(const resolved of data.instances){
+      const local=S.instances.find(item=>item.id===resolved.id);
+      if(!local)continue;
+      local.master_ref=resolved.master_ref;
+      local.semantic_projection_style=resolved.projection_style;
+      local.scope_type=resolved.scope_type;
+      local.scope_ref=resolved.scope_ref;
+      local.visual_style=resolved.visual_style;
+      local.projection_style=resolved.visual_style;
+      local.projection_dimension=resolved.projection_dimension;
+      local.relation_depth=resolved.relation_depth;
+      local.dependency_depth=resolved.relation_depth;
+      local.impact_depth=resolved.impact_depth;
+      local.projection_generator=resolved.projection_generator;
+      local.root_topic=resolved.scope_ref;
+    }
+  }
+
+  function verifyRenderedProjectionIdentity(){
+    for(const inst of S.instances){
+      const obj=(S.scene?.objects||[]).find(item=>item.instance_id===inst.id);
+      if(!obj)throw new Error(`Rendered scene is missing projection object ${inst.id}`);
+      if(String(obj.projection_dimension)!==String(inst.projection_dimension)){
+        throw new Error(`Projection dimension mismatch for ${inst.id}: requested ${inst.projection_dimension}, rendered ${obj.projection_dimension}`);
+      }
+      if(inst.projection_generator&&String(obj.projection_generator)!==String(inst.projection_generator)){
+        throw new Error(`Projection generator mismatch for ${inst.id}: resolved ${inst.projection_generator}, rendered ${obj.projection_generator}`);
+      }
+    }
+  }
+
   loadScene=async function(options={}){
     if(!S.instances.length){
       S.scene=null;
@@ -282,8 +328,6 @@
     setStatus('projecting');
     $('#error').textContent='None.';
     try{
-      // Let the selected-state + progress bar paint before the potentially long
-      // source read / projection calculation begins.
       await nextAnimationFrame();
       setProjectionProgress(18,'Calculating semantic projection…');
 
@@ -297,6 +341,8 @@
       setProjectionProgress(62,'Projection calculated — building renderer…');
       S.scene=data.scene;
       S.catalog=data.catalog||S.catalog;
+      synchronizeResolvedInstances(data);
+      verifyRenderedProjectionIdentity();
       S.source=data.masters?.[0]?.source||{};
       $('#revision').textContent=(S.source.revision||'').slice(0,12);
       for(const inst of S.instances)ensureLocalState(inst,(S.scene.objects||[]).find(o=>o.instance_id===inst.id));
@@ -314,7 +360,9 @@
       await waitUntilPainted();
 
       const nodeCount=S.scene?.objects?.reduce((n,o)=>n+(o.nodes?.length||0),0)||0;
-      setStatus(`${S.instances.length} projection${S.instances.length===1?'':'s'} · ${nodeCount} nodes`);
+      const active=S.instances[S.instances.length-1];
+      const generator=active?.projection_generator?` · ${active.projection_generator}`:'';
+      setStatus(`${S.instances.length} projection${S.instances.length===1?'':'s'} · ${nodeCount} nodes${generator}`);
       finishProjectionWork();
       return true;
     }catch(e){
