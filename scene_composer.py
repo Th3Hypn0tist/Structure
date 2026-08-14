@@ -131,7 +131,7 @@ def compose_projection_instances(
     include_internal_connections: bool = True,
     include_cross_projection_connections: bool = True,
 ) -> dict[str, Any]:
-    """Compose canonical projection instances without re-resolving semantics."""
+    """Compose Topic projection instances without re-resolving semantics."""
     scene = new_scene(source_tree=source_tree)
     nodes_by_object: dict[str, set[str]] = {}
     connection_primitive_ref, _definition = resolve_primitive(connection_primitive, connection=True)
@@ -150,21 +150,18 @@ def compose_projection_instances(
             "name": instance["name"],
             "title": instance["name"],
             "instance_id": instance_id,
-            "projection_base": instance["projection_base"],
-            "projection_style": instance["projection_style"],
+            "projection_base": "topic",
+            "projection_style": "atlas",
             "projection_dimension": instance["projection_dimension"],
             "projection_generator": instance["projection_generator"],
             "scope_type": instance["scope_type"],
             "scope_ref": instance["scope_ref"],
             "scope_style": instance["scope_style"],
-            "relation_depth": instance.get("relation_depth", 0),
-            "impact_depth": instance.get("impact_depth", 32),
             "filter": filter_metadata,
             "local_origin": deepcopy(projection.get("local_origin", {})),
             "style_defaults": {
                 "base": "#087CFF",
                 "related": "#AAB2C2",
-                "causal": "#FFD83D",
                 "gap": "#FF176B",
                 "label_text": "#FFFFFF",
             },
