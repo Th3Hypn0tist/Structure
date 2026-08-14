@@ -7,58 +7,58 @@ from .cw_flow import enrich
 from .module import read as _read
 from .topic_enrichment import enrich_topics
 
-BOOTSTRAP = "00_Contract_Format.json"
+FORMAT_ROOT_FILENAME = "AIGMos_Canonical_Contract_Format_v1.4.0.json"
+LEGACY_BOOTSTRAP = "00_Contract_Format.json"
 
 
-def _canonical_candidates(snapshot):
-    """Return explicit canonical roots identified by the bootstrap contract.
+def _project_candidates(snapshot):
+    """Discover projects only from the explicit Contract Format 1.4 authority.
 
-    This is format discovery, not semantic inference. The bootstrap itself is the
-    explicit authority that identifies a canonical source subtree.
+    The active authority is <project-root>/AIGMos_Canonical_Contract_Format_v1.4.0.json.
+    canonical/json/00_Contract_Format.json is never an active bootstrap source.
     """
     candidates = []
     for path in sorted(snapshot.files):
         normalized = path.replace("\\", "/")
-        if normalized == f"canonical/json/{BOOTSTRAP}":
-            candidates.append(("", "project"))
-        elif normalized == f"json/{BOOTSTRAP}":
-            candidates.append(("", "canonical"))
-        elif normalized == BOOTSTRAP:
-            candidates.append(("", "json"))
-        elif normalized.endswith(f"/canonical/json/{BOOTSTRAP}"):
-            prefix = normalized[: -len(f"canonical/json/{BOOTSTRAP}")].rstrip("/")
-            candidates.append((prefix, "project"))
-        elif normalized.endswith(f"/json/{BOOTSTRAP}"):
-            prefix = normalized[: -len(f"json/{BOOTSTRAP}")].rstrip("/")
-            candidates.append((prefix, "canonical"))
-        elif normalized.endswith(f"/{BOOTSTRAP}"):
-            prefix = normalized[: -len(BOOTSTRAP)].rstrip("/")
-            candidates.append((prefix, "json"))
+        if normalized == FORMAT_ROOT_FILENAME:
+            candidates.append("")
+        elif normalized.endswith(f"/{FORMAT_ROOT_FILENAME}"):
+            candidates.append(normalized[: -len(FORMAT_ROOT_FILENAME)].rstrip("/"))
     return sorted(set(candidates))
 
 
 def _canonicalized_snapshot(snapshot):
-    candidates = _canonical_candidates(snapshot)
+    candidates = _project_candidates(snapshot)
     if not candidates:
         return None
     if len(candidates) > 1:
-        rendered = ", ".join(f"{prefix or '.'}:{kind}" for prefix, kind in candidates)
-        raise ValueError(f"Multiple canonical bootstrap roots found in selected source: {rendered}")
+        rendered = ", ".join(prefix or "." for prefix in candidates)
+        raise ValueError(f"Multiple Contract Format 1.4 project roots found in selected source: {rendered}")
 
-    prefix, kind = candidates[0]
+    prefix = candidates[0]
     base = f"{prefix}/" if prefix else ""
     scoped = {
         path[len(base):]: payload
         for path, payload in snapshot.files.items()
         if not base or path.startswith(base)
     }
+    format_raw = scoped.get(FORMAT_ROOT_FILENAME)
+    if format_raw is None:
+        return None
 
-    if kind == "project":
-        files = scoped
-    elif kind == "canonical":
-        files = {f"canonical/{path}": payload for path, payload in scoped.items()}
-    else:
-        files = {f"canonical/json/{path}": payload for path, payload in scoped.items()}
+    canonical_files = {
+        path: payload
+        for path, payload in scoped.items()
+        if path.startswith("canonical/json/") and path.endswith(".json")
+    }
+    if not canonical_files:
+        raise ValueError("Contract Format 1.4 bootstrap found, but canonical/json contains no canonical JSON contracts")
+
+    # Internal compatibility mount: existing normalized CW readers expect the
+    # bootstrapped format at this virtual path. This file does NOT originate
+    # from canonical/json and is not treated as a canonical contract.
+    files = dict(canonical_files)
+    files[f"canonical/json/{LEGACY_BOOTSTRAP}"] = format_raw
 
     return type(snapshot)(
         repo=snapshot.repo,
@@ -75,7 +75,8 @@ def read(snapshot, options=None):
         tree.setdefault("source_result", {})["canonical_reader"] = {
             "enabled": False,
             "mode": "directory",
-            "reason": "no explicit canonical bootstrap found",
+            "reason": f"no project-root {FORMAT_ROOT_FILENAME} bootstrap authority found",
+            "legacy_bootstrap_is_authority": False,
         }
         return tree
 
@@ -91,7 +92,11 @@ def read(snapshot, options=None):
     tree.setdefault("source_result", {})["canonical_reader"] = {
         "enabled": True,
         "mode": "canonical",
-        "bootstrap": f"canonical/json/{BOOTSTRAP}",
+        "contract_format": "1.4",
+        "bootstrap_authority": FORMAT_ROOT_FILENAME,
+        "canonical_contract_root": "canonical/json/",
+        "legacy_bootstrap_is_authority": False,
+        "discovery_inference": False,
     }
     tree["validation_errors"] = validate_tree(tree)
     tree["valid"] = bool(tree.get("valid")) and not tree.get("errors") and not tree["validation_errors"]
