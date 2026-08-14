@@ -13,10 +13,11 @@ from input_modules.canonical import read as read_canonical
 from input_modules.raw_json import read as read_raw_json
 from nanocms import projection, resolve_page, resolve_view
 from primitive_registry import load_registry
-from projection_instances import filter_for_instance, normalize_instance_spec, projection_base_ids, style_catalog, topic_catalog
+from projection_instances import style_catalog, topic_catalog
 from raw_json_projection import build_raw_json_space_3d
-from scene_composer import compose_projection_instances, compose_scene
+from scene_composer import compose_scene
 from scene_contract import projection_to_scene, validate_scene
+from session_engine import build_session_scene, load_masters, normalize_sources, session_catalog
 from source_adapter import list_branches
 from source_selection import browse_directories, load_source, source_spec_from_query
 from structure_reveal_projections import PROJECTIONS as STRUCTURE_REVEAL_PROJECTIONS, build_projection as build_structure_reveal_projection
@@ -53,19 +54,7 @@ def _viewer_html_payload() -> bytes:
 
 
 def _viewer_cards_payload() -> bytes:
-    text = _file_payload(SCENE_VIEWER_CARDS_JS).decode('utf-8')
-    marker = "root_topic:root,dependency_depth:1"
-    replacement = "root_topic:root,dependency_depth:(root==='DWH'?3:0)"
-    if marker in text:
-        text = text.replace(marker, replacement, 1)
-    return text.encode('utf-8')
-
-
-def _post_source(body: dict) -> dict:
-    source = body.get('source')
-    if isinstance(source, dict):
-        return source
-    return {'type': 'github', 'repo': str(body.get('repo') or SOURCE_REPO), 'branch': str(body.get('branch') or 'main')}
+    return _file_payload(SCENE_VIEWER_CARDS_JS)
 
 
 def _build_canonical_projection(graph: dict, projection_id: str) -> dict:
@@ -93,7 +82,6 @@ def _attach_scene(result: dict, base_projection: dict) -> None:
     if scene_errors:
         result.setdefault('errors', []).extend(scene_errors)
         result['valid'] = False
-        result.setdefault('warnings', []).append({'id': 'SP_SCENE_INVALID', 'message': 'Projection produced a Scene that does not satisfy Scene Contract 1.1.'})
 
 
 def _build_result(snapshot, page: str, view: str | None = None) -> dict:
@@ -118,60 +106,31 @@ def _compose_scene_result(snapshot, page: str, views: list[str]) -> dict:
     scene['event_surface'] = build_event_surface(tree)
     result['scene'] = scene
     result['views'] = selected_views
-    scene_errors = list(scene.get('validation_errors', []))
-    if scene_errors:
-        result.setdefault('errors', []).extend(scene_errors)
-        result['valid'] = False
     return result
 
 
-def _normalize_master_instances(specs: list[dict]) -> list[dict]:
-    normalized = [normalize_instance_spec(spec, index) for index, spec in enumerate(specs)]
-    explicit_masters = [item for item in normalized if item.get('master')]
-    if len(explicit_masters) > 1:
-        raise ValueError('Exactly one projection instance may be master')
-    if not explicit_masters and normalized:
-        normalized[0]['master'] = True
-    for item in normalized:
-        item['master'] = bool(item.get('master'))
-    return normalized
-
-
-def _compose_projection_instance_result(snapshot, specs: list[dict]) -> dict:
-    tree = read_canonical(snapshot)
-    result = _result_from_tree(tree, 'canonical_contract')
-    full_graph = result['graph']
-    normalized = _normalize_master_instances(specs)
-    ids = [item['id'] for item in normalized]
-    if len(ids) != len(set(ids)):
-        raise ValueError('Projection instance ids must be unique')
-    reserved_by_instance = {instance['id']: projection_base_ids(tree, instance['root_topic']) for instance in normalized}
-    all_reserved = set().union(*reserved_by_instance.values()) if reserved_by_instance else set()
-    items = []
-    materialized_ids: set[str] = set()
-    for instance in normalized:
-        own_base = reserved_by_instance[instance['id']]
-        filtered_graph, hierarchy_depths, filter_metadata = filter_for_instance(tree, full_graph, root_topic=instance['root_topic'], dependency_depth=instance['dependency_depth'], external_visible_ids=(all_reserved - own_base) | materialized_ids)
-        projection_body = _build_canonical_projection(filtered_graph, instance['projection_generator'])
-        materialized_ids.update(str(node.get('id')) for node in filtered_graph.get('nodes', []) if node.get('id') is not None)
-        items.append({'instance': instance, 'projection': projection_body, 'hierarchy_depths': hierarchy_depths, 'filter_metadata': filter_metadata})
-    scene = compose_projection_instances(items, tree)
-    scene.setdefault('composition', {})['master_instance_id'] = next((item['id'] for item in normalized if item['master']), None)
-    scene['composition']['single_master'] = True
-    scene['composition']['existing_identity_policy'] = 'reference_existing_and_stop_recursion'
-    scene['event_surface'] = build_event_surface(tree)
-    result['scene'] = scene
-    result['instances'] = normalized
-    result['catalog'] = {'styles': style_catalog(), 'topics': [{'id': 'all', 'label': 'all', 'entry_count': len(tree.get('entries', []))}] + topic_catalog(tree)}
-    scene_errors = list(scene.get('validation_errors', []))
-    if scene_errors:
-        result.setdefault('errors', []).extend(scene_errors)
-        result['valid'] = False
+def _session_result(body: dict) -> dict:
+    masters = load_masters(normalize_sources(body))
+    instances = body.get('instances')
+    if not isinstance(instances, list) or not instances or not all(isinstance(item, dict) for item in instances):
+        raise ValueError('POST /api/scene requires a non-empty instances array of objects')
+    result = build_session_scene(masters, instances, _build_canonical_projection)
+    errors = []
+    warnings = []
+    valid = True
+    projectable = True
+    for master in masters.values():
+        tree = master['tree']
+        errors.extend(tree.get('errors', []))
+        warnings.extend(tree.get('warnings', []))
+        valid = valid and bool(tree.get('valid'))
+        projectable = projectable and bool(tree.get('projectable'))
+    result.update({'valid': valid and not errors, 'projectable': projectable and not errors, 'errors': errors, 'warnings': warnings, 'ruleset': 'structure_session'})
     return result
 
 
 class Handler(BaseHandler):
-    server_version = 'Structure/0.25.0'
+    server_version = 'Structure/0.26.0'
 
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode('utf-8')
@@ -222,7 +181,7 @@ class Handler(BaseHandler):
             if path == '/legacy':
                 return self._write_file(LEGACY_INDEX_HTML, 'text/html; charset=utf-8')
             if path == '/api/health':
-                return self._write_json({'ok': True, 'server': self.server_version, 'input_model': 'StructureTree/1.1', 'scene_model': 'Scene/1.1', 'projection_instances': True, 'projection_style_dimension_split': True, 'selectable_sources': ['github', 'directory'], 'directory_browser': True, 'event_trace': True, 'event_trace_causality': 'explicit_only', 'relation_expansion': 'all_explicit_documented_links', 'renderer': 'webgl2_projection_instances_v4_cards', 'effects': 'none'})
+                return self._write_json({'ok': True, 'server': self.server_version, 'input_model': 'StructureTree/1.1', 'scene_model': 'Scene/1.1', 'multi_master': True, 'projection_master_cardinality': 'source 1:N projection', 'semantic_projection_styles': True, 'implemented_semantic_styles': ['topic', 'impact'], 'visual_style_separate': True, 'selectable_sources': ['github', 'directory'], 'directory_browser': True, 'event_trace_causality': 'explicit_only', 'cross_master_inference': False, 'effects': 'none'})
             if path == '/api/primitives':
                 return self._write_json(load_registry())
             if path == '/api/branches':
@@ -235,7 +194,14 @@ class Handler(BaseHandler):
             if path == '/api/projection-catalog':
                 snapshot = load_source(source_spec_from_query(query))
                 tree = read_canonical(snapshot)
-                return self._write_json({'styles': style_catalog(), 'dimensions': ['2d', '3d'], 'topics': [{'id': 'all', 'label': 'all', 'entry_count': len(tree.get('entries', []))}] + topic_catalog(tree), 'relation_depth': {'min': 0, 'max': 32, 'default': 1}, 'wire_compatibility': {'dependency_depth': 'relation_depth'}, 'source': tree.get('source', {}), 'defaults': {'projection_style': 'atlas', 'projection_dimension': '3d', 'primary_relation_depth': {'IAM': 0, 'AccessCore': 0, 'DWH': 3}, 'even': '#AAB2C2', 'odd': '#087CFF', 'label_text': '#FFFFFF'}})
+                masters = {'master-1': {'id': 'master-1', 'name': 'master-1', 'source_spec': {}, 'snapshot': snapshot, 'tree': tree, 'graph': tree_to_graph(tree)}}
+                catalog = session_catalog(masters)
+                # Legacy keys remain during viewer migration.
+                catalog['styles'] = style_catalog()
+                catalog['topics'] = [{'id': 'all', 'label': 'all', 'entry_count': len(tree.get('entries', []))}] + topic_catalog(tree)
+                catalog['relation_depth'] = {'min': 0, 'max': 32, 'default': 0}
+                catalog['defaults'] = {'semantic_projection_style': 'topic', 'visual_style': 'atlas', 'projection_dimension': '3d', 'relation_depth': 0}
+                return self._write_json(catalog)
             if path == '/api/scene':
                 page = query.get('page', ['canonical'])[0]
                 views = [part for part in query.get('views', [''])[0].split(',') if part]
@@ -260,11 +226,7 @@ class Handler(BaseHandler):
         try:
             if urllib.parse.urlparse(self.path).path != '/api/scene':
                 return self._write_json({'ok': False, 'error': {'id': 'SP_NOT_FOUND', 'message': self.path}}, 404)
-            body = self._read_json_body()
-            specs = body.get('instances')
-            if not isinstance(specs, list) or not specs or not all(isinstance(item, dict) for item in specs):
-                raise ValueError('POST /api/scene requires a non-empty instances array of objects')
-            result = _compose_projection_instance_result(load_source(_post_source(body)), specs)
+            result = _session_result(self._read_json_body())
             return self._write_json(result, 200 if result.get('projectable') else 422)
         except (ProjectorError, ViewRuleError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             return self._error(exc)
