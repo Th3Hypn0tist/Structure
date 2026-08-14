@@ -16,7 +16,9 @@ def new_tree(*, input_module: str, source: dict[str, Any]) -> dict[str, Any]:
         "roots": [],
         "entries": [],
         "links": [],
+        "topics": [],
         "flows": [],
+        "outsiders": {},
         "errors": [],
         "warnings": [],
     }
@@ -92,6 +94,7 @@ def add_flow(
     metadata: dict[str, Any] | None = None,
     provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Legacy flat-flow writer retained for pre-1.4 inputs."""
     flow = {
         "id": flow_id,
         "kind": kind,
@@ -112,6 +115,95 @@ def add_flow(
     return flow
 
 
+def _validate_flat_flow(flow: dict[str, Any], ids: set[str], errors: list[dict[str, Any]]) -> None:
+    flow_id = str(flow.get("id") or "")
+    for field, error_id in (
+        ("actor_ref", "CW_FLOW_UNRESOLVED_ACTOR"),
+        ("action_ref", "CW_FLOW_UNRESOLVED_ACTION"),
+        ("target_ref", "CW_FLOW_UNRESOLVED_TARGET"),
+        ("cause_ref", "CW_FLOW_UNRESOLVED_CAUSE"),
+    ):
+        ref = flow.get(field)
+        if not isinstance(ref, str) or ref not in ids:
+            errors.append({"id": error_id, "message": f"Flow {flow_id} has unresolved {field}: {ref}", "flow": flow_id, "field": field})
+    data_ref = flow.get("data_ref")
+    if data_ref is not None and data_ref not in ids:
+        errors.append({"id": "CW_FLOW_HIDDEN_REFERENCE", "message": f"Flow {flow_id} has unresolved data_ref: {data_ref}", "flow": flow_id})
+    result_refs = flow.get("result_refs")
+    if not isinstance(result_refs, list):
+        errors.append({"id": "CW_FLOW_RESULT_REFS_SHAPE", "message": f"Flow {flow_id} result_refs must be an array", "flow": flow_id})
+    else:
+        for ref in result_refs:
+            if ref not in ids:
+                errors.append({"id": "CW_FLOW_UNRESOLVED_RESULT", "message": f"Flow {flow_id} has unresolved result_ref: {ref}", "flow": flow_id})
+
+
+def _validate_flow_container(
+    flow: dict[str, Any],
+    ids: set[str],
+    flow_ids: set[str],
+    global_step_ids: set[str],
+    errors: list[dict[str, Any]],
+) -> None:
+    flow_id = str(flow.get("id") or "")
+    owner_ref = flow.get("owner_ref")
+    if not isinstance(owner_ref, str) or owner_ref not in ids:
+        errors.append({"id": "CW_FLOW_UNRESOLVED_OWNER", "message": f"Flow {flow_id} has unresolved owner_ref: {owner_ref}", "flow": flow_id})
+
+    steps = flow.get("steps")
+    if not isinstance(steps, list):
+        errors.append({"id": "CW_FLOW_STEPS_SHAPE", "message": f"Flow {flow_id} steps must be an array", "flow": flow_id})
+        return
+    local_step_ids = {str(step.get("id")) for step in steps if isinstance(step, dict) and step.get("id")}
+
+    for field in ("entry_refs", "exit_refs"):
+        refs = flow.get(field)
+        if not isinstance(refs, list):
+            errors.append({"id": "CW_FLOW_REFERENCE_SHAPE", "message": f"Flow {flow_id} {field} must be an array", "flow": flow_id, "field": field})
+            continue
+        for ref in refs:
+            if ref not in local_step_ids and ref not in ids:
+                errors.append({"id": "CW_FLOW_UNRESOLVED_REFERENCE", "message": f"Flow {flow_id} has unresolved {field}: {ref}", "flow": flow_id, "field": field})
+
+    for step in steps:
+        if not isinstance(step, dict):
+            errors.append({"id": "CW_FLOW_STEP_SHAPE", "message": f"Flow {flow_id} contains a non-object step", "flow": flow_id})
+            continue
+        step_id = str(step.get("id") or "")
+        if not step_id:
+            errors.append({"id": "CW_FLOW_STEP_MISSING_ID", "message": f"Flow {flow_id} contains a step without id", "flow": flow_id})
+            continue
+        for field in ("actor_ref", "action_ref", "data_ref", "target_ref", "cause_ref", "condition_ref", "payload_ref"):
+            ref = step.get(field)
+            if ref is not None and ref not in ids:
+                errors.append({"id": "CW_FLOW_STEP_UNRESOLVED_REFERENCE", "message": f"Step {step_id} has unresolved {field}: {ref}", "flow": flow_id, "step": step_id, "field": field})
+        for field in ("result_refs", "error_refs"):
+            refs = step.get(field)
+            if not isinstance(refs, list):
+                errors.append({"id": "CW_FLOW_STEP_REFERENCE_SHAPE", "message": f"Step {step_id} {field} must be an array", "flow": flow_id, "step": step_id, "field": field})
+                continue
+            for ref in refs:
+                if ref not in ids:
+                    errors.append({"id": "CW_FLOW_STEP_UNRESOLVED_REFERENCE", "message": f"Step {step_id} has unresolved {field}: {ref}", "flow": flow_id, "step": step_id, "field": field})
+        next_refs = step.get("next_step_refs")
+        if not isinstance(next_refs, list):
+            errors.append({"id": "CW_FLOW_STEP_REFERENCE_SHAPE", "message": f"Step {step_id} next_step_refs must be an array", "flow": flow_id, "step": step_id})
+        else:
+            for ref in next_refs:
+                if ref not in local_step_ids:
+                    errors.append({"id": "CW_FLOW_UNRESOLVED_NEXT_STEP", "message": f"Step {step_id} has unresolved next_step_ref: {ref}", "flow": flow_id, "step": step_id})
+        subflow_refs = step.get("subflow_refs")
+        if not isinstance(subflow_refs, list):
+            errors.append({"id": "CW_FLOW_STEP_REFERENCE_SHAPE", "message": f"Step {step_id} subflow_refs must be an array", "flow": flow_id, "step": step_id})
+        else:
+            for ref in subflow_refs:
+                if ref not in flow_ids:
+                    errors.append({"id": "CW_FLOW_UNRESOLVED_SUBFLOW", "message": f"Step {step_id} has unresolved subflow_ref: {ref}", "flow": flow_id, "step": step_id})
+        resume_ref = step.get("resume_ref")
+        if resume_ref is not None and resume_ref not in global_step_ids:
+            errors.append({"id": "CW_FLOW_UNRESOLVED_RESUME", "message": f"Step {step_id} has unresolved resume_ref: {resume_ref}", "flow": flow_id, "step": step_id})
+
+
 def validate_tree(tree: dict[str, Any]) -> list[dict[str, Any]]:
     errors: list[dict[str, Any]] = []
     if tree.get("format") != FORMAT:
@@ -121,11 +213,14 @@ def validate_tree(tree: dict[str, Any]) -> list[dict[str, Any]]:
 
     entries = tree.get("entries")
     links = tree.get("links")
+    topics = tree.get("topics", [])
     flows = tree.get("flows")
     if not isinstance(entries, list):
         return errors + [{"id": "SP_TREE_ENTRIES", "message": "entries must be an array"}]
     if not isinstance(links, list):
         return errors + [{"id": "SP_TREE_LINKS", "message": "links must be an array"}]
+    if not isinstance(topics, list):
+        return errors + [{"id": "SP_TREE_TOPICS", "message": "topics must be an array"}]
     if not isinstance(flows, list):
         return errors + [{"id": "SP_TREE_FLOWS", "message": "flows must be an array"}]
 
@@ -152,8 +247,22 @@ def validate_tree(tree: dict[str, Any]) -> list[dict[str, Any]]:
         if target_id not in ids:
             errors.append({"id": "SP_TREE_LINK_TARGET", "message": f"Unresolved link target: {target_id}"})
 
+    topic_ids: set[str] = set()
+    for topic in topics:
+        topic_id = topic.get("id") if isinstance(topic, dict) else None
+        if not isinstance(topic_id, str) or not topic_id:
+            errors.append({"id": "SP_TREE_TOPIC_ID", "message": "Every Topic requires a non-empty id"})
+            continue
+        if topic_id in topic_ids:
+            errors.append({"id": "SP_TREE_DUPLICATE_TOPIC_ID", "message": f"Duplicate StructureTree Topic: {topic_id}"})
+        topic_ids.add(topic_id)
+
     flow_ids: set[str] = set()
+    global_step_ids: set[str] = set()
     for flow in flows:
+        if not isinstance(flow, dict):
+            errors.append({"id": "CW_FLOW_SHAPE", "message": "Every flow must be an object"})
+            continue
         flow_id = flow.get("id")
         if not isinstance(flow_id, str) or not flow_id:
             errors.append({"id": "CW_FLOW_MISSING_ID", "message": "Every flow requires a non-empty id"})
@@ -161,30 +270,27 @@ def validate_tree(tree: dict[str, Any]) -> list[dict[str, Any]]:
         if flow_id in flow_ids:
             errors.append({"id": "CW_FLOW_DUPLICATE_ID", "message": f"Duplicate flow id: {flow_id}"})
         flow_ids.add(flow_id)
-        for field, error_id in (
-            ("actor_ref", "CW_FLOW_UNRESOLVED_ACTOR"),
-            ("action_ref", "CW_FLOW_UNRESOLVED_ACTION"),
-            ("target_ref", "CW_FLOW_UNRESOLVED_TARGET"),
-            ("cause_ref", "CW_FLOW_UNRESOLVED_CAUSE"),
-        ):
-            ref = flow.get(field)
-            if not isinstance(ref, str) or ref not in ids:
-                errors.append({"id": error_id, "message": f"Flow {flow_id} has unresolved {field}: {ref}", "flow": flow_id, "field": field})
-        data_ref = flow.get("data_ref")
-        if data_ref is not None and data_ref not in ids:
-            errors.append({"id": "CW_FLOW_HIDDEN_REFERENCE", "message": f"Flow {flow_id} has unresolved data_ref: {data_ref}", "flow": flow_id})
-        result_refs = flow.get("result_refs")
-        if not isinstance(result_refs, list):
-            errors.append({"id": "CW_FLOW_RESULT_REFS_SHAPE", "message": f"Flow {flow_id} result_refs must be an array", "flow": flow_id})
+        if isinstance(flow.get("steps"), list):
+            for step in flow["steps"]:
+                if not isinstance(step, dict) or not step.get("id"):
+                    continue
+                step_id = str(step["id"])
+                if step_id in global_step_ids:
+                    errors.append({"id": "CW_FLOW_DUPLICATE_STEP_ID", "message": f"Duplicate flow step id: {step_id}"})
+                global_step_ids.add(step_id)
+
+    for flow in flows:
+        if not isinstance(flow, dict) or not flow.get("id"):
+            continue
+        if "steps" in flow:
+            _validate_flow_container(flow, ids, flow_ids, global_step_ids, errors)
         else:
-            for ref in result_refs:
-                if ref not in ids:
-                    errors.append({"id": "CW_FLOW_UNRESOLVED_RESULT", "message": f"Flow {flow_id} has unresolved result_ref: {ref}", "flow": flow_id})
+            _validate_flat_flow(flow, ids, errors)
     return errors
 
 
 def tree_to_graph(tree: dict[str, Any]) -> dict[str, Any]:
-    """Compatibility adapter for projection engines; preserves explicit flows separately."""
+    """Compatibility adapter for projection engines; preserves Topics and flows separately."""
     nodes = []
     for entry in tree.get("entries", []):
         nodes.append({
@@ -209,7 +315,7 @@ def tree_to_graph(tree: dict[str, Any]) -> dict[str, Any]:
             "raw": deepcopy(link),
         })
 
-    existing = {(e["source"], e["target"], e["dimension"]) for e in edges}
+    existing = {(edge["source"], edge["target"], edge["dimension"]) for edge in edges}
     for entry in tree.get("entries", []):
         parent_id = entry.get("parent_id")
         if parent_id is None:
@@ -225,4 +331,10 @@ def tree_to_graph(tree: dict[str, Any]) -> dict[str, Any]:
             "type": "contains",
             "raw": {"source": "StructureTree.parent_id"},
         })
-    return {"nodes": nodes, "edges": edges, "flows": deepcopy(tree.get("flows", []))}
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "topics": deepcopy(tree.get("topics", [])),
+        "flows": deepcopy(tree.get("flows", [])),
+        "outsiders": deepcopy(tree.get("outsiders", {})),
+    }
