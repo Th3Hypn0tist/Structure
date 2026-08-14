@@ -143,7 +143,7 @@
         if(key==='visual_style'){
           inst.projection_style=inst.visual_style;
           const dims=visualFor(inst)?.dimensions||['2d'];
-          inst.projection_dimension=preferredDimension(inst.visual_style,dims);
+          if(!dims.includes(inst.projection_dimension))inst.projection_dimension=preferredDimension(inst.visual_style,dims);
         }
         normalize(inst);
         renderInstances();
