@@ -6,14 +6,18 @@ from typing import Any, Callable
 from event_projection import build_event_projection
 from event_trace import build_event_surface, event_catalog
 from input_modules.canonical import read as read_canonical
-from scene_composer import compose_projection_instances
-from semantic_projection_styles import (
-    PROJECTION_STYLES,
-    STRUCTURAL_DIMENSION_STYLES,
-    projection_style_catalog,
-    structural_dimension_graph,
+from projection_model import (
+    PROJECTION_BASES,
+    apply_scope_style,
+    compatible_projection_styles,
+    normalize_projection_base,
+    normalize_scope_style,
+    projection_base_catalog,
+    resolve_projection_style,
+    scope_style_catalog,
 )
-from semantic_visual_projections import resolve_visual_style, style_catalog
+from scene_composer import compose_projection_instances
+from semantic_projection_styles import structural_dimension_graph
 from source_selection import load_source
 from structure_tree import tree_to_graph
 from topic_index import topic_all_graph, topic_heading_catalog, topic_scope_graph
@@ -83,7 +87,6 @@ def _scope_catalog(tree: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
                 "label": "all",
                 "entry_count": len(headings),
                 "heading_count": len(headings),
-                "canonical_topic": False,
                 "scope_semantics": "all_topic_headings_only",
             }
         ] + [
@@ -91,8 +94,8 @@ def _scope_catalog(tree: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
                 "id": str(item["id"]),
                 "label": str(item.get("label") or item["id"]),
                 "entry_count": int(item.get("entry_count") or 0),
-                "canonical_topic": bool(item.get("defined")),
                 "topic_heading": True,
+                "defined": bool(item.get("defined")),
                 "unresolved": bool(item.get("unresolved")),
                 "direct_topic_refs": deepcopy(item.get("direct_topic_refs", [])),
                 "resolved_topic_refs": deepcopy(item.get("resolved_topic_refs", [])),
@@ -100,8 +103,14 @@ def _scope_catalog(tree: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
             for item in headings
         ],
         "events": event_catalog(tree),
-        "flows": [{"id": str(flow["id"]), "name": str(flow.get("name") or flow["id"]), "owner_ref": flow.get("owner_ref")} for flow in flows],
-        "identities": [{"id": str(entry["id"]), "name": str(entry.get("name") or entry["id"]), "kind": entry.get("kind"), "type": entry.get("type")} for entry in entries],
+        "flows": [
+            {"id": str(flow["id"]), "name": str(flow.get("name") or flow["id"]), "owner_ref": flow.get("owner_ref")}
+            for flow in flows
+        ],
+        "identities": [
+            {"id": str(entry["id"]), "name": str(entry.get("name") or entry["id"]), "kind": entry.get("kind"), "type": entry.get("type")}
+            for entry in entries
+        ],
     }
 
 
@@ -127,14 +136,31 @@ def master_catalog(master: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _projection_style_catalog() -> list[dict[str, Any]]:
+    by_style: dict[str, dict[str, Any]] = {}
+    for base_id in PROJECTION_BASES:
+        for style in compatible_projection_styles(base_id):
+            item = by_style.setdefault(style["id"], {**style, "projection_bases": []})
+            item["projection_bases"].append(base_id)
+    return sorted(by_style.values(), key=lambda item: str(item.get("label") or item["id"]).lower())
+
+
 def session_catalog(masters: dict[str, dict[str, Any]]) -> dict[str, Any]:
     return {
-        "projection_styles": projection_style_catalog(),
-        "visual_styles": style_catalog(),
+        "projection_bases": projection_base_catalog(),
+        "projection_styles": _projection_style_catalog(),
+        "projection_styles_by_base": {
+            base_id: compatible_projection_styles(base_id)
+            for base_id in PROJECTION_BASES
+        },
+        "scope_styles": scope_style_catalog(),
         "dimensions": ["2d", "3d"],
         "defaults": {
-            "semantic_projection_style": "topic",
-            "visual_style": "atlas",
+            "projection_base": "map",
+            "projection_style": PROJECTION_BASES["map"]["default_style"],
+            "scope_type": "all",
+            "scope_ref": "all",
+            "scope_style": "semantic_roles",
             "projection_dimension": "3d",
             "relation_depth": 0,
         },
@@ -142,33 +168,55 @@ def session_catalog(masters: dict[str, dict[str, Any]]) -> dict[str, Any]:
         "rules": {
             "master": "a projection references exactly one source/master; one master may feed multiple projections",
             "structure_tree": "reusable semantic topology and lookup indexes are resolved once at source import",
-            "projection_style": "semantic question asked of the already-resolved StructureTree",
-            "topic_all": "all shows only pre-resolved Topic headings; details remain collapsed until a heading is selected",
-            "visual_style": "geometry only; it consumes the semantic projection graph and never changes semantic membership",
-            "visual_dimension": "every visual style has native 2D and 3D generators",
-            "event_projection": "Event impact includes Event identity, payload, owner, explicit Topic/Flow context, actual causal bindings, and explicit missing-binding gaps",
+            "projection_base": "selects which already-resolved StructureTree semantic model is projected",
+            "projection_style": "selects a geometry compatible with the projection base; it never changes semantic membership",
+            "scope": "selects a subset of the projection base",
+            "scope_style": "color/highlight only; it never changes nodes, edges, scope or causality",
+            "topic_all": "map/all shows only pre-resolved Topic headings; details remain collapsed until a heading is selected",
+            "dimension": "2D/3D is independent of projection base, projection style and scope style",
             "cross_master_binding": "explicit only; never inferred by matching display names",
         },
     }
 
 
-def _default_scope(master: dict[str, Any], semantic_style: str) -> tuple[str, str]:
+def _default_scope(master: dict[str, Any], projection_base: str) -> tuple[str, str]:
     scopes = _scope_catalog(master["tree"])
-    if semantic_style == "impact":
+    base = PROJECTION_BASES[projection_base]
+    if projection_base == "map":
+        return "all", "all"
+    if projection_base == "event":
         events = scopes["events"]
         return "event", str(events[0]["id"]) if events else ""
-    if semantic_style in STRUCTURAL_DIMENSION_STYLES:
+    if "topic" in base["scope_types"]:
         topics = [item for item in scopes["topics"] if item.get("topic_heading")]
         if topics:
             return "topic", str(topics[0]["id"])
-        identities = scopes["identities"]
-        return "identity", str(identities[0]["id"]) if identities else ""
-    return "all", "all"
+    identities = scopes["identities"]
+    return "identity", str(identities[0]["id"]) if identities else ""
 
 
-def _resolve_visual_projection(visual_input: str, dimension_input: Any) -> tuple[str, str, str]:
-    requested_dimension = str(dimension_input).lower().strip() if dimension_input is not None else "3d"
-    return resolve_visual_style(visual_input, requested_dimension)
+def _legacy_projection_base(spec: dict[str, Any]) -> str:
+    if spec.get("projection_base") is not None:
+        return normalize_projection_base(spec.get("projection_base"))
+    old = spec.get("semantic_projection_style") or spec.get("projection_type")
+    if old is not None:
+        return normalize_projection_base(old)
+    # Pre-migration projection_style held semantic style when visual_style was present.
+    if spec.get("visual_style") is not None and spec.get("projection_style") is not None:
+        return normalize_projection_base(spec.get("projection_style"))
+    return "map"
+
+
+def _legacy_projection_style(spec: dict[str, Any], projection_base: str) -> str:
+    if spec.get("projection_base") is not None:
+        return str(spec.get("projection_style") or PROJECTION_BASES[projection_base]["default_style"]).strip()
+    if spec.get("visual_style") is not None:
+        return str(spec.get("visual_style") or PROJECTION_BASES[projection_base]["default_style"]).strip()
+    # New field is projection_style. If an old semantic value lands here, use base default.
+    candidate = str(spec.get("projection_style") or "").strip()
+    if candidate in PROJECTION_BASES:
+        return str(PROJECTION_BASES[projection_base]["default_style"])
+    return candidate or str(PROJECTION_BASES[projection_base]["default_style"])
 
 
 def normalize_projection_instance(spec: dict[str, Any], index: int, masters: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -179,30 +227,20 @@ def normalize_projection_instance(spec: dict[str, Any], index: int, masters: dic
     if master_ref not in masters:
         raise KeyError(f"Unknown projection master/source: {master_ref}")
 
-    semantic_input = str(spec.get("semantic_projection_style") or spec.get("projection_type") or spec.get("projection_style") or "topic").strip()
-    if semantic_input in PROJECTION_STYLES:
-        semantic_style = semantic_input
-        visual_input = str(spec.get("visual_style") or "atlas").strip()
-    else:
-        semantic_style = "topic"
-        visual_input = str(spec.get("visual_style") or semantic_input or "atlas").strip()
+    projection_base = _legacy_projection_base(spec)
+    base_spec = PROJECTION_BASES[projection_base]
+    projection_style_input = _legacy_projection_style(spec, projection_base)
+    dimension_input = spec.get("projection_dimension") or spec.get("dimension") or "3d"
+    projection_style, dimension, generator = resolve_projection_style(projection_base, projection_style_input, dimension_input)
+    scope_style = normalize_scope_style(spec.get("scope_style"))
 
-    semantic_spec = PROJECTION_STYLES.get(semantic_style)
-    if semantic_spec is None:
-        raise KeyError(f"Unknown semantic projection style: {semantic_style}")
-    if not semantic_spec.get("implemented"):
-        raise ValueError(f"Projection style is specified but not implemented yet: {semantic_style}")
-
-    dimension_input = spec.get("projection_dimension") or spec.get("dimension")
-    visual_style, dimension, generator = _resolve_visual_projection(visual_input, dimension_input)
-
-    default_scope_type, default_scope_ref = _default_scope(masters[master_ref], semantic_style)
+    default_scope_type, default_scope_ref = _default_scope(masters[master_ref], projection_base)
     scope_type = str(spec.get("scope_type") or ("topic" if spec.get("root_topic") else default_scope_type)).strip()
     scope_ref = str(spec.get("scope_ref") or spec.get("root_topic") or default_scope_ref).strip()
-    if scope_type not in semantic_spec.get("scope_types", []):
-        raise ValueError(f"Projection style {semantic_style} does not accept scope type {scope_type}")
+    if scope_type not in base_spec["scope_types"]:
+        raise ValueError(f"Projection base {projection_base} does not accept scope type {scope_type}")
     if not scope_ref:
-        raise ValueError(f"Projection style {semantic_style} requires a scope_ref")
+        raise ValueError(f"Projection base {projection_base} requires a scope_ref")
 
     relation_depth = max(0, min(32, int(spec.get("relation_depth", spec.get("dependency_depth", 0)))))
     impact_depth = max(0, min(64, int(spec.get("impact_depth", 32))))
@@ -210,10 +248,11 @@ def normalize_projection_instance(spec: dict[str, Any], index: int, masters: dic
         "id": instance_id,
         "name": str(spec.get("name") or instance_id),
         "master_ref": master_ref,
-        "projection_style": semantic_style,
+        "projection_base": projection_base,
+        "projection_style": projection_style,
         "scope_type": scope_type,
         "scope_ref": scope_ref,
-        "visual_style": visual_style,
+        "scope_style": scope_style,
         "projection_dimension": dimension,
         "projection_generator": generator,
         "relation_depth": relation_depth,
@@ -222,37 +261,43 @@ def normalize_projection_instance(spec: dict[str, Any], index: int, masters: dic
     }
 
 
-def _topic_projection(master: dict[str, Any], instance: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, int | None]]:
+def _map_projection(master: dict[str, Any], instance: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, int | None]]:
     tree, graph = master["tree"], master["graph"]
     if instance["scope_type"] == "all" or instance["scope_ref"] == "all":
         return topic_all_graph(tree)
-    return topic_scope_graph(
-        tree,
-        graph,
-        instance["scope_ref"],
-        relation_depth=instance["relation_depth"],
-    )
+    return topic_scope_graph(tree, graph, instance["scope_ref"], relation_depth=instance["relation_depth"])
 
 
-def _impact_projection(master: dict[str, Any], instance: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, int | None]]:
-    return build_event_projection(
-        master["tree"],
-        master["graph"],
-        instance["scope_ref"],
-        max_depth=instance["impact_depth"],
-    )
+def _event_projection(master: dict[str, Any], instance: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, int | None]]:
+    return build_event_projection(master["tree"], master["graph"], instance["scope_ref"], max_depth=instance["impact_depth"])
 
 
 def _structural_projection(master: dict[str, Any], instance: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, int | None]]:
     projected, metadata, hierarchy_depths = structural_dimension_graph(
         master["tree"],
         master["graph"],
-        projection_style=instance["projection_style"],
+        projection_style=instance["projection_base"],
         scope_type=instance["scope_type"],
         scope_ref=instance["scope_ref"],
         max_depth=instance["relation_depth"],
     )
+    metadata["projection_base"] = instance["projection_base"]
     return projected, metadata, hierarchy_depths
+
+
+def _base_projection(master: dict[str, Any], instance: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, int | None]]:
+    engine = PROJECTION_BASES[instance["projection_base"]]["engine"]
+    if engine == "topic":
+        projected, metadata, depths = _map_projection(master, instance)
+    elif engine == "event":
+        projected, metadata, depths = _event_projection(master, instance)
+    elif engine == "structural":
+        projected, metadata, depths = _structural_projection(master, instance)
+    else:
+        raise ValueError(f"Unsupported projection base engine: {engine}")
+    metadata["projection_base"] = instance["projection_base"]
+    metadata["scope_style"] = instance["scope_style"]
+    return apply_scope_style(projected, instance["scope_style"]), metadata, depths
 
 
 def build_session_scene(
@@ -270,19 +315,13 @@ def build_session_scene(
     by_master: dict[str, list[dict[str, Any]]] = {}
     for instance in instances:
         master = masters[instance["master_ref"]]
-        if instance["projection_style"] == "impact":
-            semantic_graph, metadata, hierarchy_depths = _impact_projection(master, instance)
-        elif instance["projection_style"] in STRUCTURAL_DIMENSION_STYLES:
-            semantic_graph, metadata, hierarchy_depths = _structural_projection(master, instance)
-        else:
-            semantic_graph, metadata, hierarchy_depths = _topic_projection(master, instance)
+        semantic_graph, metadata, hierarchy_depths = _base_projection(master, instance)
         visual_projection = visual_builder(semantic_graph, instance["projection_generator"])
         by_master.setdefault(instance["master_ref"], []).append({
             "instance": {
                 **instance,
                 "root_topic": instance["scope_ref"],
                 "dependency_depth": instance["relation_depth"],
-                "projection_style": instance["visual_style"],
             },
             "projection": visual_projection,
             "hierarchy_depths": hierarchy_depths,
@@ -292,20 +331,17 @@ def build_session_scene(
     scenes: list[tuple[str, dict[str, Any]]] = []
     for master_ref, items in by_master.items():
         master = masters[master_ref]
-        scene = compose_projection_instances(
-            items,
-            master["tree"],
-            include_cross_projection_connections=True,
-        )
+        scene = compose_projection_instances(items, master["tree"], include_cross_projection_connections=True)
         for obj in scene.get("objects", []):
             obj["master_ref"] = master_ref
             instance_id = str(obj.get("instance_id") or "")
             instance = next((item for item in instances if item["id"] == instance_id), None)
             if instance:
-                obj["semantic_projection_style"] = instance["projection_style"]
+                obj["projection_base"] = instance["projection_base"]
+                obj["projection_style"] = instance["projection_style"]
                 obj["scope_type"] = instance["scope_type"]
                 obj["scope_ref"] = instance["scope_ref"]
-                obj["visual_style"] = instance["visual_style"]
+                obj["scope_style"] = instance["scope_style"]
         scene["event_surface"] = build_event_surface(master["tree"])
         scenes.append((master_ref, scene))
 
@@ -329,6 +365,7 @@ def build_session_scene(
         "master_refs": list(masters),
         "projection_master_rule": "each projection references one master; masters may feed many projections",
         "structure_tree_indexes": "resolved_once_at_import",
+        "projection_contract": "projection_base + projection_style + scope + scope_style + dimension",
         "cross_master_binding": "none unless explicitly provided by a future comparison/binding source",
         "cross_master_inference": False,
     }
