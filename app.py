@@ -16,7 +16,8 @@ from projection_instances import filter_for_instance, normalize_instance_spec, p
 from raw_json_projection import build_raw_json_space_3d
 from scene_composer import compose_projection_instances, compose_scene
 from scene_contract import projection_to_scene, validate_scene
-from source_adapter import list_branches, load_snapshot
+from source_adapter import list_branches
+from source_selection import load_source, source_spec_from_query, normalize_source_spec
 from structure_reveal_projections import PROJECTIONS as STRUCTURE_REVEAL_PROJECTIONS, build_projection as build_structure_reveal_projection
 from structure_tree import tree_to_graph
 from structureprojector import (
@@ -199,8 +200,19 @@ def _compose_projection_instance_result(snapshot, specs: list[dict]) -> dict:
     return result
 
 
+def _post_source(body: dict) -> dict:
+    source = body.get('source')
+    if isinstance(source, dict):
+        return normalize_source_spec(source)
+    return normalize_source_spec({
+        'type': 'github',
+        'repo': body.get('repo') or SOURCE_REPO,
+        'branch': body.get('branch') or 'main',
+    })
+
+
 class Handler(BaseHandler):
-    server_version = 'Structure/0.23.2'
+    server_version = 'Structure/0.24.0'
 
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode('utf-8')
@@ -258,6 +270,7 @@ class Handler(BaseHandler):
                     'scene_model': 'Scene/1.1',
                     'projection_instances': True,
                     'projection_style_dimension_split': True,
+                    'selectable_sources': ['github', 'directory'],
                     'relation_expansion': 'all_explicit_documented_links',
                     'renderer': 'webgl2_projection_instances_v4_cards',
                     'effects': 'none',
@@ -265,13 +278,13 @@ class Handler(BaseHandler):
             if path == '/api/primitives':
                 return self._write_json(load_registry())
             if path == '/api/branches':
-                return self._write_json({'branches': list_branches(SOURCE_REPO)})
+                repo = (query.get('repo') or [SOURCE_REPO])[0]
+                return self._write_json({'repository': repo, 'branches': list_branches(repo)})
             if path == '/api/nanocms':
                 page = query.get('page', ['canonical'])[0]
                 return self._write_json(projection(page))
             if path == '/api/projection-catalog':
-                branch = query.get('branch', ['main'])[0]
-                snapshot = load_snapshot(branch=branch, repo=SOURCE_REPO)
+                snapshot = load_source(source_spec_from_query(query))
                 tree = read_canonical(snapshot)
                 return self._write_json({
                     'styles': style_catalog(),
@@ -279,6 +292,7 @@ class Handler(BaseHandler):
                     'topics': [{'id': 'all', 'label': 'all', 'entry_count': len(tree.get('entries', []))}] + topic_catalog(tree),
                     'relation_depth': {'min': 0, 'max': 32, 'default': 1},
                     'wire_compatibility': {'dependency_depth': 'relation_depth'},
+                    'source': tree.get('source', {}),
                     'defaults': {
                         'projection_style': 'atlas',
                         'projection_dimension': '3d',
@@ -289,7 +303,6 @@ class Handler(BaseHandler):
                     },
                 })
             if path == '/api/scene':
-                branch = query.get('branch', ['main'])[0]
                 page = query.get('page', ['canonical'])[0]
                 views_arg = query.get('views', [''])[0]
                 views = [part for part in views_arg.split(',') if part]
@@ -297,28 +310,25 @@ class Handler(BaseHandler):
                     selected_page = resolve_page(page)
                     placements = selected_page.get('placements', [])
                     views = [item['id'] for item in placements[:2]]
-                snapshot = load_snapshot(branch=branch, repo=SOURCE_REPO)
+                snapshot = load_source(source_spec_from_query(query))
                 result = _compose_scene_result(snapshot, page, views)
                 return self._write_json(result, 200 if result.get('projectable') else 422)
             if path == '/api/project':
-                branch = query.get('branch', ['main'])[0]
                 page = query.get('page', ['canonical'])[0]
                 view = query.get('view', [None])[0]
-                snapshot = load_snapshot(branch=branch, repo=SOURCE_REPO)
+                snapshot = load_source(source_spec_from_query(query))
                 result = _build_result(snapshot, page, view)
                 return self._write_json(result, 200 if result.get('projectable') else 422)
             if path == '/api/binding-tree':
-                branch = query.get('branch', ['main'])[0]
                 root = query.get('root', [None])[0]
                 depth = int(query.get('depth', ['1'])[0])
                 budget = int(query.get('budget', ['1500'])[0])
-                snapshot = load_snapshot(branch=branch, repo=SOURCE_REPO)
+                snapshot = load_source(source_spec_from_query(query))
                 tree = read_canonical(snapshot)
                 return self._write_json(binding_tree(tree_to_graph(tree), root=root, depth=depth, budget=budget))
             if path == '/api/binding-children':
-                branch = query.get('branch', ['main'])[0]
                 node_id = query.get('node', [None])[0]
-                snapshot = load_snapshot(branch=branch, repo=SOURCE_REPO)
+                snapshot = load_source(source_spec_from_query(query))
                 tree = read_canonical(snapshot)
                 return self._write_json(binding_children(tree_to_graph(tree), node_id=node_id))
             return super().do_GET()
@@ -332,13 +342,12 @@ class Handler(BaseHandler):
             if path != '/api/scene':
                 return self._write_json({'ok': False, 'error': {'id': 'SP_NOT_FOUND', 'message': path}}, 404)
             body = self._read_json_body()
-            branch = str(body.get('branch') or 'main')
             specs = body.get('instances')
             if not isinstance(specs, list) or not specs:
                 raise ValueError('POST /api/scene requires a non-empty instances array')
             if not all(isinstance(item, dict) for item in specs):
                 raise ValueError('Every projection instance must be an object')
-            snapshot = load_snapshot(branch=branch, repo=SOURCE_REPO)
+            snapshot = load_source(_post_source(body))
             result = _compose_projection_instance_result(snapshot, specs)
             return self._write_json(result, 200 if result.get('projectable') else 422)
         except (ProjectorError, ViewRuleError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
