@@ -13,11 +13,10 @@ from input_modules.canonical import read as read_canonical
 from input_modules.raw_json import read as read_raw_json
 from nanocms import projection, resolve_page, resolve_view
 from primitive_registry import load_registry
-from projection_instances import topic_catalog
 from raw_json_projection import build_raw_json_space_3d
 from scene_composer import compose_scene
 from scene_contract import projection_to_scene, validate_scene
-from semantic_visual_projections import PROJECTIONS as SEMANTIC_VISUAL_PROJECTIONS, build_visual_projection, style_catalog
+from semantic_visual_projections import PROJECTIONS as SEMANTIC_VISUAL_PROJECTIONS, build_visual_projection
 from session_engine import build_session_scene, load_masters, normalize_sources, session_catalog
 from source_adapter import list_branches
 from source_selection import browse_directories, load_source, source_spec_from_query
@@ -49,13 +48,6 @@ def _file_payload(path: str) -> bytes:
 
 
 def _viewer_js_payload() -> bytes:
-    """Keep the base renderer as a renderer only: Structure starts empty.
-
-    This is the last compatibility shim left in the frontend bootstrap. The
-    checked-in renderer still contains its pre-session auto-init block; serving
-    it through this function replaces only the final startup call. No HTML or
-    source-selection behavior is patched at runtime anymore.
-    """
     text = _file_payload(SCENE_VIEWER_JS).decode('utf-8')
     empty_bootstrap = '''(function initEmptyStructure(){
   try {
@@ -179,7 +171,7 @@ def _session_result(body: dict) -> dict:
 
 
 class Handler(BaseHandler):
-    server_version = 'Structure/0.29.0'
+    server_version = 'Structure/0.30.0'
 
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode('utf-8')
@@ -245,10 +237,11 @@ class Handler(BaseHandler):
                     'first_selected_source_becomes_first_master': True,
                     'multi_master': True,
                     'projection_master_cardinality': 'source 1:N projection',
-                    'semantic_projection_styles': True,
-                    'implemented_semantic_styles': ['topic', 'impact', 'dependency', 'authority', 'ownership', 'containment', 'relation'],
-                    'visual_style_separate': True,
-                    'visual_styles_semantic_neutral': True,
+                    'projection_contract': ['projection_base', 'projection_style', 'scope_type', 'scope_ref', 'scope_style', 'projection_dimension'],
+                    'projection_bases': ['map', 'event', 'dependency', 'relation', 'authority', 'ownership', 'containment'],
+                    'projection_styles_are_base_compatible': True,
+                    'scope_style_is_color_only': True,
+                    'structure_tree_indexes': 'resolved_once_at_import',
                     'visual_dimensions': ['2d', '3d'],
                     'selectable_sources': ['github', 'directory'],
                     'directory_browser': True,
@@ -280,15 +273,7 @@ class Handler(BaseHandler):
                     }
                 }
                 catalog = session_catalog(masters)
-                catalog['styles'] = style_catalog()
-                catalog['topics'] = [{'id': 'all', 'label': 'all', 'entry_count': len(tree.get('entries', []))}] + topic_catalog(tree)
                 catalog['relation_depth'] = {'min': 0, 'max': 32, 'default': 0}
-                catalog['defaults'] = {
-                    'semantic_projection_style': 'topic',
-                    'visual_style': 'atlas',
-                    'projection_dimension': '3d',
-                    'relation_depth': 0,
-                }
                 return self._write_json(catalog)
             if path == '/api/scene':
                 page = query.get('page', ['canonical'])[0]
