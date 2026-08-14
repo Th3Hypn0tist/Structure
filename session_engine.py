@@ -17,8 +17,8 @@ from projection_model import (
     scope_style_catalog,
 )
 from scene_composer import compose_projection_instances
-from semantic_projection_styles import structural_dimension_graph
 from source_selection import load_source
+from structural_projection import structural_base_graph
 from structure_tree import tree_to_graph
 from topic_index import topic_all_graph, topic_heading_catalog, topic_scope_graph
 
@@ -201,7 +201,6 @@ def _legacy_projection_base(spec: dict[str, Any]) -> str:
     old = spec.get("semantic_projection_style") or spec.get("projection_type")
     if old is not None:
         return normalize_projection_base(old)
-    # Pre-migration projection_style held semantic style when visual_style was present.
     if spec.get("visual_style") is not None and spec.get("projection_style") is not None:
         return normalize_projection_base(spec.get("projection_style"))
     return "map"
@@ -212,7 +211,6 @@ def _legacy_projection_style(spec: dict[str, Any], projection_base: str) -> str:
         return str(spec.get("projection_style") or PROJECTION_BASES[projection_base]["default_style"]).strip()
     if spec.get("visual_style") is not None:
         return str(spec.get("visual_style") or PROJECTION_BASES[projection_base]["default_style"]).strip()
-    # New field is projection_style. If an old semantic value lands here, use base default.
     candidate = str(spec.get("projection_style") or "").strip()
     if candidate in PROJECTION_BASES:
         return str(PROJECTION_BASES[projection_base]["default_style"])
@@ -273,16 +271,14 @@ def _event_projection(master: dict[str, Any], instance: dict[str, Any]) -> tuple
 
 
 def _structural_projection(master: dict[str, Any], instance: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, int | None]]:
-    projected, metadata, hierarchy_depths = structural_dimension_graph(
+    return structural_base_graph(
         master["tree"],
         master["graph"],
-        projection_style=instance["projection_base"],
+        projection_base=instance["projection_base"],
         scope_type=instance["scope_type"],
         scope_ref=instance["scope_ref"],
         max_depth=instance["relation_depth"],
     )
-    metadata["projection_base"] = instance["projection_base"]
-    return projected, metadata, hierarchy_depths
 
 
 def _base_projection(master: dict[str, Any], instance: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, int | None]]:
