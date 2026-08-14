@@ -176,14 +176,29 @@ def _session_result(body: dict) -> dict:
     valid = projectable = True
     for master in masters.values():
         tree = master['tree']
-        errors.extend(tree.get('errors', [])); warnings.extend(tree.get('warnings', []))
-        valid = valid and bool(tree.get('valid')); projectable = projectable and bool(tree.get('projectable'))
-    result.update({'valid': valid and not errors, 'projectable': projectable and not errors, 'errors': errors, 'warnings': warnings, 'ruleset': 'structure_session'})
+        errors.extend(tree.get('errors', []))
+        warnings.extend(tree.get('warnings', []))
+        valid = valid and bool(tree.get('valid'))
+        projectable = projectable and bool(tree.get('projectable'))
+
+    # Canonical findings describe the projected master; they are not a reason
+    # to suppress the projection. Structure must render degraded/incomplete
+    # sources so gaps, ambiguities and unresolved references can be inspected.
+    result.update({
+        'valid': valid and not errors,
+        'projectable': projectable,
+        'degraded': bool(errors or warnings or not valid),
+        'finding_count': len(errors) + len(warnings),
+        'errors': errors,
+        'warnings': warnings,
+        'ruleset': 'structure_session',
+        'projection_policy': 'canonical_findings_are_visible_not_blocking',
+    })
     return result
 
 
 class Handler(BaseHandler):
-    server_version = 'Structure/0.27.5'
+    server_version = 'Structure/0.27.6'
 
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode('utf-8')
