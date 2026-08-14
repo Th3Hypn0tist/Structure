@@ -44,5 +44,121 @@ ensureLocalState=function(i,o){const s=SP_memoryEnsureLocalState(i,o);spProjecti
 function spResetInstanceTransform(id){const s=S.objectState[id];if(s)s.transform=objectTransformDefaults()}
 renderInstances=function(){SP_memoryRenderInstances();$('#instances').querySelectorAll('[data-proj]').forEach(el=>{el.oninput=()=>{const i=S.instances.find(x=>x.id===el.dataset.proj);if(!i)return;const o=(S.scene?.objects||[]).find(x=>x.instance_id===i.id),s=ensureLocalState(i,o);let v=Number(el.value);if(!Number.isFinite(v))return;const k=el.dataset.projKey;if(k==='node_scale'||k.startsWith('spread_'))v=Math.max(.05,v);if(k==='edge_opacity')v=Math.max(0,Math.min(1,v));s.projection[k]=v;s.projection_memory[spProjectionMemoryKey(i)]=s.projection;rebuildRenderer()}});$('#instances').querySelectorAll('[data-reset]').forEach(b=>{b.onclick=()=>{const i=S.instances.find(x=>x.id===b.dataset.reset);if(!i)return;spResetInstanceTransform(i.id);renderInstances();rebuildRenderer()}})};
 </script>
+<script>
+'use strict';
+(function installSourcePicker(){
+  const DEFAULT_REPO='Th3Hypn0tist/AIGMos_docs';
+  S.sourceSpec ||= {type:'github',repo:DEFAULT_REPO,branch:$('#branch')?.value||'main'};
+
+  function sourceQuery(spec){
+    const q=new URLSearchParams();
+    if(spec.type==='directory'){
+      q.set('source_type','directory');q.set('source_path',spec.path||'');
+    }else{
+      q.set('source_type','github');q.set('repo',spec.repo||DEFAULT_REPO);q.set('branch',spec.branch||'main');
+    }
+    return q.toString();
+  }
+  function sourceLabel(spec){
+    if(spec.type==='directory'){
+      const parts=String(spec.path||'').replace(/\\/g,'/').split('/').filter(Boolean);
+      return `Source · ${parts.at(-1)||'Directory'}`;
+    }
+    return `Source · ${spec.branch||'main'}`;
+  }
+  function ensureSourceUI(){
+    if($('#sourcePickerButton'))return;
+    const branch=$('#branch'),branchLabel=branch?.closest('label');if(branchLabel)branchLabel.style.display='none';
+    const button=document.createElement('button');button.id='sourcePickerButton';button.textContent=sourceLabel(S.sourceSpec);
+    const reload=$('#reload');reload?.parentElement?.insertBefore(button,reload||null);
+
+    const style=document.createElement('style');style.id='sourcePickerStyle';style.textContent=`
+      .source-backdrop{position:fixed;inset:0;z-index:200;background:#0009;display:grid;place-items:center;padding:20px}
+      .source-popup{width:min(520px,calc(100vw - 40px));background:#080b10;border:1px solid var(--line);border-radius:12px;box-shadow:0 24px 80px #000;padding:16px}
+      .source-popup h2{margin:0 0 14px;font-size:15px}.source-popup .source-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}.source-popup .source-error{min-height:18px;color:var(--red);font-size:11px;margin-top:6px}.source-popup .source-note{color:var(--muted);font-size:10px;margin-top:-3px;margin-bottom:9px}
+    `;document.head.appendChild(style);
+    button.onclick=openSourcePopup;
+  }
+  function sourceFields(popup){
+    const type=popup.querySelector('[data-source-type]').value;
+    popup.querySelector('[data-source-github]').style.display=type==='github'?'block':'none';
+    popup.querySelector('[data-source-directory]').style.display=type==='directory'?'block':'none';
+  }
+  async function refreshPopupBranches(popup){
+    const repo=popup.querySelector('[data-source-repo]').value.trim()||DEFAULT_REPO;
+    const select=popup.querySelector('[data-source-branch]');
+    const previous=select.value||S.sourceSpec.branch||'main';
+    select.innerHTML='<option>loading…</option>';select.disabled=true;
+    try{
+      const data=await getJSON(`/api/branches?repo=${encodeURIComponent(repo)}`);
+      select.innerHTML=(data.branches||[]).map(b=>`<option value="${esc(b.name)}">${esc(b.name)}</option>`).join('');
+      select.value=(data.branches||[]).some(b=>b.name===previous)?previous:((data.branches||[]).some(b=>b.name==='main')?'main':data.branches?.[0]?.name||'main');
+    }catch(e){select.innerHTML=`<option value="${esc(previous)}">${esc(previous)}</option>`;popup.querySelector('.source-error').textContent=e.message||String(e)}
+    finally{select.disabled=false}
+  }
+  function openSourcePopup(){
+    const spec=S.sourceSpec||{type:'github',repo:DEFAULT_REPO,branch:'main'};
+    const overlay=document.createElement('div');overlay.className='source-backdrop';overlay.innerHTML=`<div class="source-popup">
+      <h2>Source</h2>
+      <div class="field"><label>Source type</label><select data-source-type><option value="github" ${spec.type==='github'?'selected':''}>GitHub repository</option><option value="directory" ${spec.type==='directory'?'selected':''}>Local directory</option></select></div>
+      <div data-source-github>
+        <div class="field"><label>Repository</label><input data-source-repo value="${esc(spec.repo||DEFAULT_REPO)}" placeholder="owner/repository"></div>
+        <div class="field"><label>Branch</label><select data-source-branch><option value="${esc(spec.branch||'main')}">${esc(spec.branch||'main')}</option></select></div>
+      </div>
+      <div data-source-directory>
+        <div class="field"><label>Directory path</label><input data-source-path value="${esc(spec.path||'')}" placeholder="C:\\path\\to\\project or /path/to/project"></div>
+        <div class="source-note">Path is read by the Structure server. On localhost this is a directory on this computer.</div>
+      </div>
+      <div class="source-error"></div>
+      <div class="source-actions"><button data-source-cancel>Cancel</button><button data-source-use>Use source</button></div>
+    </div>`;
+    document.body.appendChild(overlay);const popup=overlay.querySelector('.source-popup');sourceFields(popup);
+    popup.querySelector('[data-source-type]').onchange=()=>sourceFields(popup);
+    popup.querySelector('[data-source-repo]').onchange=()=>refreshPopupBranches(popup);
+    popup.querySelector('[data-source-cancel]').onclick=()=>overlay.remove();overlay.onclick=e=>{if(e.target===overlay)overlay.remove()};
+    popup.querySelector('[data-source-use]').onclick=async()=>{
+      const type=popup.querySelector('[data-source-type]').value;
+      const candidate=type==='directory'?{type:'directory',path:popup.querySelector('[data-source-path]').value.trim()}:{type:'github',repo:popup.querySelector('[data-source-repo]').value.trim()||DEFAULT_REPO,branch:popup.querySelector('[data-source-branch]').value||'main'};
+      const error=popup.querySelector('.source-error');error.textContent='';popup.querySelector('[data-source-use]').disabled=true;
+      try{await activateSource(candidate);overlay.remove()}catch(e){error.textContent=e.message||String(e);popup.querySelector('[data-source-use]').disabled=false}
+    };
+    if(spec.type==='github')refreshPopupBranches(popup);
+  }
+  async function catalogFor(spec){return getJSON(`/api/projection-catalog?${sourceQuery(spec)}`)}
+  function normalizeInstancesForCatalog(){
+    const styles=S.catalog?.styles||[],topics=S.catalog?.topics||[];
+    for(const inst of S.instances){
+      if(!styles.some(x=>x.id===inst.projection_style)){const s=styles.find(x=>x.id==='atlas')||styles[0];inst.projection_style=s?.id||'atlas';inst.projection_dimension=s?.dimensions?.includes('3d')?'3d':s?.dimensions?.[0]||'2d'}
+      if(!topics.some(x=>x.id===inst.root_topic))inst.root_topic=topics.find(x=>x.id!=='all')?.id||'all';
+    }
+  }
+  async function activateSource(candidate){
+    setStatus('source');
+    const catalog=await catalogFor(candidate);
+    S.sourceSpec=candidate;S.catalog=catalog;S.scene=null;S.objectState={};S.objectStyle={};
+    const hiddenBranch=$('#branch');if(hiddenBranch&&candidate.type==='github')hiddenBranch.value=candidate.branch;
+    normalizeInstancesForCatalog();
+    if(!S.instances.length)S.instances=[newInstance()];
+    $('#sourcePickerButton').textContent=sourceLabel(candidate);renderInstances();await loadScene();
+  }
+
+  loadScene=async function(){
+    spApplyPrimaryDefaults();
+    if(!S.instances.length)return;
+    setStatus('loading');$('#error').textContent='None.';
+    try{
+      const data=await postJSON('/api/scene',{source:S.sourceSpec,instances:instancePayload()});
+      S.scene=data.scene;S.source=data.source||{};$('#revision').textContent=(S.source.revision||'').slice(0,12);
+      for(const inst of S.instances)ensureLocalState(inst,(S.scene.objects||[]).find(o=>o.instance_id===inst.id));
+      syncChannels();renderInstances();renderChannels();rebuildRenderer(false);fit(false);renderSceneInfo();draw();setStatus(`${S.scene?.composition?.node_instance_count||0} nodes`);
+    }catch(e){showError(e)}
+  };
+
+  setTimeout(()=>{
+    const initialBranch=$('#branch')?.value||'main';S.sourceSpec={type:'github',repo:DEFAULT_REPO,branch:initialBranch};ensureSourceUI();
+    const branch=$('#branch');if(branch)branch.onchange=null;
+  },0);
+})();
+</script>
 </body>
 </html>
