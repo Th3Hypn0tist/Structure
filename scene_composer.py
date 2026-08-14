@@ -7,13 +7,6 @@ from primitive_registry import resolve_primitive
 from scene_contract import new_scene, projection_connections, projection_to_object, validate_scene
 
 
-CORE_STACK_Y = {
-    "IAM": 360.0,
-    "AccessCore": 0.0,
-    "DWH": -360.0,
-}
-
-
 def _default_offset(index: int, spacing: float = 1800.0) -> dict[str, Any]:
     return {
         "position": {"x": index * spacing, "y": 0.0, "z": 0.0},
@@ -23,19 +16,7 @@ def _default_offset(index: int, spacing: float = 1800.0) -> dict[str, Any]:
 
 
 def _default_instance_offset(instance: dict[str, Any], index: int) -> dict[str, Any]:
-    """Keep the default IAM -> AccessCore -> DWH view as one compact stack.
-
-    This is presentation-only default placement based on the projection's
-    explicit root_topic. An explicit instance transform always takes precedence.
-    Other roots retain the generic left-to-right fallback layout.
-    """
-    root_topic = str(instance.get("root_topic") or "")
-    if root_topic in CORE_STACK_Y:
-        return {
-            "position": {"x": 0.0, "y": CORE_STACK_Y[root_topic], "z": 0.0},
-            "rotation": {"x": 0.0, "y": 0.0, "z": 0.0},
-            "scale": {"x": 1.0, "y": 1.0, "z": 1.0},
-        }
+    """Generic presentation-only placement with no semantic name hardbindings."""
     return _default_offset(index)
 
 
@@ -167,7 +148,7 @@ def compose_projection_instances(
     include_internal_connections: bool = True,
     include_cross_projection_connections: bool = True,
 ) -> dict[str, Any]:
-    """Compose named projection instances with independent style/root identity."""
+    """Compose named projection instances with independent semantic and visual identity."""
     scene = new_scene(source_tree=source_tree)
     nodes_by_object: dict[str, set[str]] = {}
     connection_primitive_ref, _definition = resolve_primitive(connection_primitive, connection=True)
@@ -194,9 +175,9 @@ def compose_projection_instances(
         obj["projection_style"] = instance["projection_style"]
         obj["projection_dimension"] = instance["projection_dimension"]
         obj["projection_generator"] = instance["projection_generator"]
-        obj["root_topic"] = instance["root_topic"]
-        obj["dependency_depth"] = instance["dependency_depth"]
-        obj["relation_depth"] = instance["dependency_depth"]
+        obj["root_topic"] = instance.get("root_topic")
+        obj["dependency_depth"] = instance.get("dependency_depth", 0)
+        obj["relation_depth"] = instance.get("relation_depth", instance.get("dependency_depth", 0))
         obj["filter"] = filter_metadata
         obj["local_origin"] = deepcopy(projection.get("local_origin", {}))
         obj["style_defaults"] = {
