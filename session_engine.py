@@ -7,7 +7,13 @@ from event_trace import build_event_surface, event_catalog
 from input_modules.canonical import read as read_canonical
 from projection_instances import filter_for_instance, resolve_projection_style, style_catalog, topic_catalog
 from scene_composer import compose_projection_instances
-from semantic_projection_styles import PROJECTION_STYLES, impact_graph, projection_style_catalog
+from semantic_projection_styles import (
+    PROJECTION_STYLES,
+    STRUCTURAL_DIMENSION_STYLES,
+    impact_graph,
+    projection_style_catalog,
+    structural_dimension_graph,
+)
 from source_selection import load_source
 from structure_tree import tree_to_graph
 
@@ -23,7 +29,6 @@ def _source_identity(spec: dict[str, Any], index: int) -> str:
 
 
 def normalize_sources(body: dict[str, Any]) -> list[dict[str, Any]]:
-    """Normalize legacy single-source and new multi-master request forms."""
     raw_sources = body.get("sources")
     if isinstance(raw_sources, list):
         if not raw_sources or not all(isinstance(item, dict) for item in raw_sources):
@@ -110,6 +115,12 @@ def _default_scope(master: dict[str, Any], semantic_style: str) -> tuple[str, st
     if semantic_style == "impact":
         events = scopes["events"]
         return "event", str(events[0]["id"]) if events else ""
+    if semantic_style in STRUCTURAL_DIMENSION_STYLES:
+        topics = [item for item in scopes["topics"] if item.get("canonical_topic")]
+        if topics:
+            return "topic", str(topics[0]["id"])
+        identities = scopes["identities"]
+        return "identity", str(identities[0]["id"]) if identities else ""
     topics = [item for item in scopes["topics"] if item.get("canonical_topic")]
     if topics:
         return "topic", str(topics[0]["id"])
@@ -129,7 +140,6 @@ def normalize_projection_instance(spec: dict[str, Any], index: int, masters: dic
         semantic_style = semantic_input
         visual_input = str(spec.get("visual_style") or "atlas").strip()
     else:
-        # Wire compatibility: old projection_style values were visual layouts.
         semantic_style = "topic"
         visual_input = str(spec.get("visual_style") or semantic_input or "atlas").strip()
 
@@ -199,6 +209,18 @@ def _impact_projection(master: dict[str, Any], instance: dict[str, Any]) -> tupl
     return projected, metadata, hierarchy_depths
 
 
+def _structural_projection(master: dict[str, Any], instance: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, int | None]]:
+    projected, metadata, hierarchy_depths = structural_dimension_graph(
+        master["tree"],
+        master["graph"],
+        projection_style=instance["projection_style"],
+        scope_type=instance["scope_type"],
+        scope_ref=instance["scope_ref"],
+        max_depth=instance["relation_depth"],
+    )
+    return projected, metadata, hierarchy_depths
+
+
 def build_session_scene(
     masters: dict[str, dict[str, Any]],
     raw_instances: list[dict[str, Any]],
@@ -216,13 +238,14 @@ def build_session_scene(
         master = masters[instance["master_ref"]]
         if instance["projection_style"] == "impact":
             semantic_graph, metadata, hierarchy_depths = _impact_projection(master, instance)
+        elif instance["projection_style"] in STRUCTURAL_DIMENSION_STYLES:
+            semantic_graph, metadata, hierarchy_depths = _structural_projection(master, instance)
         else:
             semantic_graph, metadata, hierarchy_depths = _topic_projection(master, instance)
         visual_projection = visual_builder(semantic_graph, instance["projection_generator"])
         by_master.setdefault(instance["master_ref"], []).append({
             "instance": {
                 **instance,
-                # Scene composer wire fields. They are presentation metadata only.
                 "root_topic": instance["scope_ref"],
                 "dependency_depth": instance["relation_depth"],
                 "projection_style": instance["visual_style"],
@@ -265,7 +288,6 @@ def build_session_scene(
             merged["connection_channels"].setdefault(key, deepcopy(value))
         merged["event_surfaces"][master_ref] = deepcopy(scene.get("event_surface", {}))
 
-    # Legacy single event surface remains for viewers that have one active master.
     merged["event_surface"] = deepcopy(merged["event_surfaces"].get(base_master_ref, {}))
     merged["composition"] = {
         "master_count": len(masters),
