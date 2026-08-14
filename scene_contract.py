@@ -124,7 +124,7 @@ def projection_to_object(
                 "scale": {"x": 1.0, "y": 1.0, "z": 1.0},
             },
             "geometry_parameters": _node_geometry_parameters(projected),
-            "style": {},
+            "style": {"color": projected.get("scope_color")},
             "properties": {
                 "name": entry.get("name", projected.get("name")),
                 "type": entry.get("type", projected.get("type")),
@@ -137,6 +137,9 @@ def projection_to_object(
                 "projection_generation": projected.get("projection_generation"),
                 "projection_parent_id": projected.get("projection_parent_id"),
                 "relation_depth": projected.get("relation_depth"),
+                "scope_style": projected.get("scope_style"),
+                "scope_role": projected.get("scope_role"),
+                "scope_color": projected.get("scope_color"),
             },
             "bindings": [],
         })
