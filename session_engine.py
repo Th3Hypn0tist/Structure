@@ -5,7 +5,7 @@ from typing import Any, Callable
 
 from event_trace import build_event_surface, event_catalog
 from input_modules.canonical import read as read_canonical
-from projection_instances import filter_for_instance, resolve_projection_style, style_catalog, topic_catalog
+from projection_instances import filter_for_instance, topic_catalog
 from scene_composer import compose_projection_instances
 from semantic_projection_styles import (
     PROJECTION_STYLES,
@@ -14,6 +14,7 @@ from semantic_projection_styles import (
     projection_style_catalog,
     structural_dimension_graph,
 )
+from semantic_visual_projections import resolve_visual_style, style_catalog
 from source_selection import load_source
 from structure_tree import tree_to_graph
 
@@ -110,8 +111,8 @@ def session_catalog(masters: dict[str, dict[str, Any]]) -> dict[str, Any]:
         "rules": {
             "master": "a projection references exactly one source/master; one master may feed multiple projections",
             "projection_style": "semantic question asked of the master",
-            "visual_style": "presentation/layout only",
-            "visual_dimension": "dimension is constrained by the selected visual style; unsupported stale combinations normalize to a supported variant",
+            "visual_style": "geometry only; it consumes the semantic projection graph and never changes semantic membership",
+            "visual_dimension": "every visual style has native 2D and 3D generators",
             "cross_master_binding": "explicit only; never inferred by matching display names",
         },
     }
@@ -135,35 +136,8 @@ def _default_scope(master: dict[str, Any], semantic_style: str) -> tuple[str, st
 
 
 def _resolve_visual_projection(visual_input: str, dimension_input: Any) -> tuple[str, str, str]:
-    """Resolve every visual/dimension combination to a valid generator.
-
-    Atlas defaults to 3D. Explicit valid dimensions are preserved. If a stale UI
-    payload pairs a 3D-only style with 2D (or vice versa), normalize to that
-    style's supported dimension instead of rejecting the whole projection.
-    Unknown visual styles still fail explicitly.
-    """
-    requested_dimension = str(dimension_input).lower().strip() if dimension_input is not None else None
-    if requested_dimension not in {None, "2d", "3d"}:
-        raise KeyError(f"Unsupported projection dimension: {requested_dimension}")
-
-    if requested_dimension is None:
-        if visual_input == "atlas":
-            return resolve_projection_style(visual_input, "3d")
-        return resolve_projection_style(visual_input, None)
-
-    try:
-        return resolve_projection_style(visual_input, requested_dimension)
-    except KeyError:
-        # Resolve once without the incompatible requested dimension. This still
-        # throws for an unknown style/generator, so only dimension mismatch is
-        # normalized away.
-        family, native_dimension, _generator = resolve_projection_style(visual_input, None)
-        catalog = {item["id"]: item for item in style_catalog()}
-        dimensions = list(catalog.get(family, {}).get("dimensions", []))
-        if not dimensions:
-            return resolve_projection_style(family, native_dimension)
-        preferred = "3d" if "3d" in dimensions else dimensions[0]
-        return resolve_projection_style(family, preferred)
+    requested_dimension = str(dimension_input).lower().strip() if dimension_input is not None else "3d"
+    return resolve_visual_style(visual_input, requested_dimension)
 
 
 def normalize_projection_instance(spec: dict[str, Any], index: int, masters: dict[str, dict[str, Any]]) -> dict[str, Any]:
