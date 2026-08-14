@@ -29,15 +29,18 @@ from view_rules import ViewRuleError, binding_children, binding_tree
 BASE_DIR = os.path.dirname(__file__)
 SCENE_VIEWER_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v4.html')
 SCENE_VIEWER_JS = os.path.join(BASE_DIR, 'static', 'scene_viewer_v4.js')
-SCENE_VIEWER_CARDS_JS = os.path.join(BASE_DIR, 'static', 'scene_viewer_v4_cards.js')
 SOURCE_SELECT_UI_JS = os.path.join(BASE_DIR, 'static', 'source_select_ui.js')
 SOURCE_PICKER_BROWSE_JS = os.path.join(BASE_DIR, 'static', 'source_picker_browse.js')
 EVENT_TRACE_VIEWER_JS = os.path.join(BASE_DIR, 'static', 'event_trace_viewer.js')
 SESSION_UI_JS = os.path.join(BASE_DIR, 'static', 'session_ui.js')
 DIAGNOSTICS_UI_JS = os.path.join(BASE_DIR, 'static', 'diagnostics_ui.js')
-LEGACY_INDEX_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v31.html')
 
-ALL_CANONICAL_PROJECTIONS = {**CORE_PROJECTIONS, **EXTRA_PROJECTIONS, **STRUCTURE_REVEAL_PROJECTIONS, **SEMANTIC_VISUAL_PROJECTIONS}
+ALL_CANONICAL_PROJECTIONS = {
+    **CORE_PROJECTIONS,
+    **EXTRA_PROJECTIONS,
+    **STRUCTURE_REVEAL_PROJECTIONS,
+    **SEMANTIC_VISUAL_PROJECTIONS,
+}
 
 
 def _file_payload(path: str) -> bytes:
@@ -45,42 +48,14 @@ def _file_payload(path: str) -> bytes:
         return handle.read()
 
 
-def _strip_legacy_source_picker(text: str) -> str:
-    marker = "<script>\n'use strict';\n(function installSourcePicker(){"
-    start = text.find(marker)
-    if start < 0:
-        return text
-    end_marker = "})();\n</script>"
-    end = text.find(end_marker, start)
-    if end < 0:
-        raise RuntimeError('legacy source picker end marker not found')
-    return text[:start] + text[end + len(end_marker):]
-
-
-def _viewer_html_payload() -> bytes:
-    text = _file_payload(SCENE_VIEWER_HTML).decode('utf-8')
-    text = _strip_legacy_source_picker(text)
-    text = text.replace('<title>StructureProjector</title>', '<title>Structure</title>')
-    text = text.replace('<header><strong>StructureProjector</strong>', '<header><strong>Structure</strong>')
-    text = text.replace('even = blue, odd = silver', 'odd = blue, even = silver')
-    text = text.replace(
-        '<label>Branch <select id="branch"></select></label><button id="reload">Reload</button>',
-        '<button id="sourcePickerButton" type="button" onclick="window.structureOpenSourcePicker&&window.structureOpenSourcePicker()">Select source</button><label style="display:none">Branch <select id="branch"></select></label><button id="reload">Reload</button>',
-    )
-    scripts = (
-        '/static/source_select_ui.js',
-        '/static/source_picker_browse.js',
-        '/static/event_trace_viewer.js',
-        '/static/session_ui.js',
-        '/static/diagnostics_ui.js',
-    )
-    for script in scripts:
-        if f'<script src="{script}"></script>' not in text:
-            text = text.replace('</body>', f'<script src="{script}"></script>\n</body>')
-    return text.encode('utf-8')
-
-
 def _viewer_js_payload() -> bytes:
+    """Keep the base renderer as a renderer only: Structure starts empty.
+
+    This is the last compatibility shim left in the frontend bootstrap. The
+    checked-in renderer still contains its pre-session auto-init block; serving
+    it through this function replaces only the final startup call. No HTML or
+    source-selection behavior is patched at runtime anymore.
+    """
     text = _file_payload(SCENE_VIEWER_JS).decode('utf-8')
     empty_bootstrap = '''(function initEmptyStructure(){
   try {
@@ -105,14 +80,10 @@ def _viewer_js_payload() -> bytes:
 })();'''
     stripped = text.rstrip()
     if stripped.endswith('init();'):
-        text = stripped[:-len('init();')] + empty_bootstrap + '\n'
-    elif 'initEmptyStructure' not in text:
-        raise RuntimeError('scene_viewer_v4.js startup call not found')
-    return text.encode('utf-8')
-
-
-def _viewer_cards_payload() -> bytes:
-    return _file_payload(SCENE_VIEWER_CARDS_JS)
+        return (stripped[:-len('init();')] + empty_bootstrap + '\n').encode('utf-8')
+    if 'initEmptyStructure' in text:
+        return text.encode('utf-8')
+    raise RuntimeError('scene_viewer_v4.js startup call not found')
 
 
 def _build_canonical_projection(graph: dict, projection_id: str) -> dict:
@@ -130,7 +101,16 @@ def _build_canonical_projection(graph: dict, projection_id: str) -> dict:
 def _result_from_tree(tree: dict, ruleset: str) -> dict:
     tree_validation = list(tree.get('validation_errors', []))
     errors = list(tree.get('errors', [])) + tree_validation
-    return {'valid': bool(tree.get('valid')), 'projectable': bool(tree.get('projectable')), 'ruleset': ruleset, 'source': tree.get('source', {}), 'structure_tree': tree, 'graph': tree_to_graph(tree), 'errors': errors, 'warnings': list(tree.get('warnings', []))}
+    return {
+        'valid': bool(tree.get('valid')),
+        'projectable': bool(tree.get('projectable')),
+        'ruleset': ruleset,
+        'source': tree.get('source', {}),
+        'structure_tree': tree,
+        'graph': tree_to_graph(tree),
+        'errors': errors,
+        'warnings': list(tree.get('warnings', [])),
+    }
 
 
 def _attach_scene(result: dict, base_projection: dict) -> None:
@@ -174,6 +154,7 @@ def _session_result(body: dict) -> dict:
     instances = body.get('instances')
     if not isinstance(instances, list) or not instances or not all(isinstance(item, dict) for item in instances):
         raise ValueError('POST /api/scene requires a non-empty instances array of objects')
+
     result = build_session_scene(masters, instances, _build_canonical_projection)
     errors, warnings = [], []
     valid = projectable = True
@@ -198,74 +179,161 @@ def _session_result(body: dict) -> dict:
 
 
 class Handler(BaseHandler):
-    server_version = 'Structure/0.28.0'
+    server_version = 'Structure/0.29.0'
 
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode('utf-8')
-        self.send_response(status); self.send_header('Content-Type', 'application/json; charset=utf-8'); self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _write_body(self, body: bytes, content_type: str) -> None:
-        self.send_response(200); self.send_header('Content-Type', content_type); self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
+        self.send_response(200)
+        self.send_header('Content-Type', content_type)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _write_file(self, path: str, content_type: str) -> None:
         self._write_body(_file_payload(path), content_type)
 
     def _read_json_body(self) -> dict:
         length = int(self.headers.get('Content-Length', '0') or 0)
-        if length <= 0: return {}
+        if length <= 0:
+            return {}
         data = json.loads(self.rfile.read(length).decode('utf-8'))
-        if not isinstance(data, dict): raise ValueError('JSON request body must be an object')
+        if not isinstance(data, dict):
+            raise ValueError('JSON request body must be an object')
         return data
 
     def _error(self, exc: Exception) -> None:
-        payload = exc.as_dict() if isinstance(exc, ProjectorError) else {'id': 'SP_REQUEST_FAILED', 'message': str(exc), 'type': type(exc).__name__}
+        payload = exc.as_dict() if isinstance(exc, ProjectorError) else {
+            'id': 'SP_REQUEST_FAILED',
+            'message': str(exc),
+            'type': type(exc).__name__,
+        }
         self._write_json({'ok': False, 'error': payload}, 400)
 
     def do_GET(self) -> None:
-        parsed = urllib.parse.urlparse(self.path); path = parsed.path; query = urllib.parse.parse_qs(parsed.query)
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        query = urllib.parse.parse_qs(parsed.query)
         try:
-            if path == '/': return self._write_body(_viewer_html_payload(), 'text/html; charset=utf-8')
-            if path == '/static/scene_viewer_v4.js': return self._write_body(_viewer_js_payload(), 'application/javascript; charset=utf-8')
-            if path == '/static/scene_viewer_v4_cards.js': return self._write_body(_viewer_cards_payload(), 'application/javascript; charset=utf-8')
-            if path == '/static/source_select_ui.js': return self._write_file(SOURCE_SELECT_UI_JS, 'application/javascript; charset=utf-8')
-            if path == '/static/source_picker_browse.js': return self._write_file(SOURCE_PICKER_BROWSE_JS, 'application/javascript; charset=utf-8')
-            if path == '/static/event_trace_viewer.js': return self._write_file(EVENT_TRACE_VIEWER_JS, 'application/javascript; charset=utf-8')
-            if path == '/static/session_ui.js': return self._write_file(SESSION_UI_JS, 'application/javascript; charset=utf-8')
-            if path == '/static/diagnostics_ui.js': return self._write_file(DIAGNOSTICS_UI_JS, 'application/javascript; charset=utf-8')
-            if path == '/legacy': return self._write_file(LEGACY_INDEX_HTML, 'text/html; charset=utf-8')
-            if path == '/api/health': return self._write_json({'ok': True, 'server': self.server_version, 'startup': 'empty', 'automatic_source_read': False, 'automatic_projection': False, 'first_selected_source_becomes_first_master': True, 'multi_master': True, 'projection_master_cardinality': 'source 1:N projection', 'semantic_projection_styles': True, 'implemented_semantic_styles': ['topic', 'impact', 'dependency', 'authority', 'ownership', 'containment', 'relation'], 'visual_style_separate': True, 'visual_styles_semantic_neutral': True, 'visual_dimensions': ['2d', '3d'], 'selectable_sources': ['github', 'directory'], 'directory_browser': True, 'event_trace_causality': 'explicit_only', 'cross_master_inference': False, 'diagnostics': 'structured'})
-            if path == '/api/primitives': return self._write_json(load_registry())
+            if path == '/':
+                return self._write_file(SCENE_VIEWER_HTML, 'text/html; charset=utf-8')
+            if path == '/static/scene_viewer_v4.js':
+                return self._write_body(_viewer_js_payload(), 'application/javascript; charset=utf-8')
+            if path == '/static/source_select_ui.js':
+                return self._write_file(SOURCE_SELECT_UI_JS, 'application/javascript; charset=utf-8')
+            if path == '/static/source_picker_browse.js':
+                return self._write_file(SOURCE_PICKER_BROWSE_JS, 'application/javascript; charset=utf-8')
+            if path == '/static/event_trace_viewer.js':
+                return self._write_file(EVENT_TRACE_VIEWER_JS, 'application/javascript; charset=utf-8')
+            if path == '/static/session_ui.js':
+                return self._write_file(SESSION_UI_JS, 'application/javascript; charset=utf-8')
+            if path == '/static/diagnostics_ui.js':
+                return self._write_file(DIAGNOSTICS_UI_JS, 'application/javascript; charset=utf-8')
+            if path == '/api/health':
+                return self._write_json({
+                    'ok': True,
+                    'server': self.server_version,
+                    'startup': 'empty',
+                    'automatic_source_read': False,
+                    'automatic_projection': False,
+                    'first_selected_source_becomes_first_master': True,
+                    'multi_master': True,
+                    'projection_master_cardinality': 'source 1:N projection',
+                    'semantic_projection_styles': True,
+                    'implemented_semantic_styles': ['topic', 'impact', 'dependency', 'authority', 'ownership', 'containment', 'relation'],
+                    'visual_style_separate': True,
+                    'visual_styles_semantic_neutral': True,
+                    'visual_dimensions': ['2d', '3d'],
+                    'selectable_sources': ['github', 'directory'],
+                    'directory_browser': True,
+                    'event_trace_causality': 'explicit_only',
+                    'cross_master_inference': False,
+                    'diagnostics': 'structured',
+                    'legacy_frontend_overlays': False,
+                })
+            if path == '/api/primitives':
+                return self._write_json(load_registry())
             if path == '/api/branches':
-                repo = (query.get('repo') or [SOURCE_REPO])[0]; return self._write_json({'repository': repo, 'branches': list_branches(repo)})
-            if path == '/api/directories': return self._write_json(browse_directories((query.get('path') or [None])[0]))
-            if path == '/api/nanocms': return self._write_json(projection(query.get('page', ['canonical'])[0]))
+                repo = (query.get('repo') or [SOURCE_REPO])[0]
+                return self._write_json({'repository': repo, 'branches': list_branches(repo)})
+            if path == '/api/directories':
+                return self._write_json(browse_directories((query.get('path') or [None])[0]))
+            if path == '/api/nanocms':
+                return self._write_json(projection(query.get('page', ['canonical'])[0]))
             if path == '/api/projection-catalog':
-                snapshot = load_source(source_spec_from_query(query)); tree = read_canonical(snapshot)
-                masters = {'master-1': {'id': 'master-1', 'name': 'master-1', 'source_spec': {}, 'snapshot': snapshot, 'tree': tree, 'graph': tree_to_graph(tree)}}
-                catalog = session_catalog(masters); catalog['styles'] = style_catalog(); catalog['topics'] = [{'id': 'all', 'label': 'all', 'entry_count': len(tree.get('entries', []))}] + topic_catalog(tree); catalog['relation_depth'] = {'min': 0, 'max': 32, 'default': 0}; catalog['defaults'] = {'semantic_projection_style': 'topic', 'visual_style': 'atlas', 'projection_dimension': '3d', 'relation_depth': 0}
+                snapshot = load_source(source_spec_from_query(query))
+                tree = read_canonical(snapshot)
+                masters = {
+                    'master-1': {
+                        'id': 'master-1',
+                        'name': 'master-1',
+                        'source_spec': {},
+                        'snapshot': snapshot,
+                        'tree': tree,
+                        'graph': tree_to_graph(tree),
+                    }
+                }
+                catalog = session_catalog(masters)
+                catalog['styles'] = style_catalog()
+                catalog['topics'] = [{'id': 'all', 'label': 'all', 'entry_count': len(tree.get('entries', []))}] + topic_catalog(tree)
+                catalog['relation_depth'] = {'min': 0, 'max': 32, 'default': 0}
+                catalog['defaults'] = {
+                    'semantic_projection_style': 'topic',
+                    'visual_style': 'atlas',
+                    'projection_dimension': '3d',
+                    'relation_depth': 0,
+                }
                 return self._write_json(catalog)
             if path == '/api/scene':
-                page = query.get('page', ['canonical'])[0]; views = [part for part in query.get('views', [''])[0].split(',') if part]
-                if not views: views = [item['id'] for item in resolve_page(page).get('placements', [])[:2]]
-                result = _compose_scene_result(load_source(source_spec_from_query(query)), page, views); return self._write_json(result, 200 if result.get('projectable') else 422)
+                page = query.get('page', ['canonical'])[0]
+                views = [part for part in query.get('views', [''])[0].split(',') if part]
+                if not views:
+                    views = [item['id'] for item in resolve_page(page).get('placements', [])[:2]]
+                result = _compose_scene_result(load_source(source_spec_from_query(query)), page, views)
+                return self._write_json(result, 200 if result.get('projectable') else 422)
             if path == '/api/project':
-                result = _build_result(load_source(source_spec_from_query(query)), query.get('page', ['canonical'])[0], query.get('view', [None])[0]); return self._write_json(result, 200 if result.get('projectable') else 422)
+                result = _build_result(
+                    load_source(source_spec_from_query(query)),
+                    query.get('page', ['canonical'])[0],
+                    query.get('view', [None])[0],
+                )
+                return self._write_json(result, 200 if result.get('projectable') else 422)
             if path == '/api/binding-tree':
-                tree = read_canonical(load_source(source_spec_from_query(query))); return self._write_json(binding_tree(tree_to_graph(tree), root=query.get('root', [None])[0], depth=int(query.get('depth', ['1'])[0]), budget=int(query.get('budget', ['1500'])[0])))
+                tree = read_canonical(load_source(source_spec_from_query(query)))
+                return self._write_json(binding_tree(
+                    tree_to_graph(tree),
+                    root=query.get('root', [None])[0],
+                    depth=int(query.get('depth', ['1'])[0]),
+                    budget=int(query.get('budget', ['1500'])[0]),
+                ))
             if path == '/api/binding-children':
-                tree = read_canonical(load_source(source_spec_from_query(query))); return self._write_json(binding_children(tree_to_graph(tree), node_id=query.get('node', [None])[0]))
+                tree = read_canonical(load_source(source_spec_from_query(query)))
+                return self._write_json(binding_children(tree_to_graph(tree), node_id=query.get('node', [None])[0]))
             return super().do_GET()
-        except (ProjectorError, ViewRuleError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc: return self._error(exc)
+        except (ProjectorError, ViewRuleError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            return self._error(exc)
 
     def do_POST(self) -> None:
         try:
-            if urllib.parse.urlparse(self.path).path != '/api/scene': return self._write_json({'ok': False, 'error': {'id': 'SP_NOT_FOUND', 'message': self.path}}, 404)
-            result = _session_result(self._read_json_body()); return self._write_json(result, 200 if result.get('projectable') else 422)
-        except (ProjectorError, ViewRuleError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc: return self._error(exc)
+            if urllib.parse.urlparse(self.path).path != '/api/scene':
+                return self._write_json({'ok': False, 'error': {'id': 'SP_NOT_FOUND', 'message': self.path}}, 404)
+            result = _session_result(self._read_json_body())
+            return self._write_json(result, 200 if result.get('projectable') else 422)
+        except (ProjectorError, ViewRuleError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            return self._error(exc)
 
 
 def main() -> None:
-    server = ThreadingHTTPServer((APP_HOST, APP_PORT), Handler); print(f'Structure listening on http://{APP_HOST}:{APP_PORT}'); server.serve_forever()
+    server = ThreadingHTTPServer((APP_HOST, APP_PORT), Handler)
+    print(f'Structure listening on http://{APP_HOST}:{APP_PORT}')
+    server.serve_forever()
 
 
-if __name__ == '__main__': main()
+if __name__ == '__main__':
+    main()
