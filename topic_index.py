@@ -5,7 +5,7 @@ from copy import deepcopy
 from typing import Any
 
 
-INDEX_VERSION = "1.0"
+INDEX_VERSION = "1.1"
 
 
 def _entries(tree: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -89,22 +89,17 @@ def _direct_topic_surface(tree: dict[str, Any], topic: dict[str, Any], entry_ids
 
 
 def _identifier_label(topic_id: str) -> str:
-    # Presentation only. The identity itself comes directly from the source.
     value = topic_id[6:] if topic_id.startswith("TOPIC_") else topic_id
     return value.replace("_", " ") or topic_id
 
 
 def build_topic_index(tree: dict[str, Any]) -> dict[str, Any]:
-    """Resolve a reusable Topic projection index into StructureTree.
+    """Resolve the Topic heading tree once into StructureTree.
 
-    A Topic becomes a heading when the source explicitly uses that Topic
-    identity as another Topic's parent/container, or when it is an explicit
-    root Topic. Referenced-but-undefined parent Topic identities are preserved
-    as unresolved headings instead of being guessed or discarded.
-
-    No directory names, software names, known AIGMos modules, display-name
-    matching, thresholds or hand-authored topic lists participate in this
-    resolution.
+    Headings come only from explicit Topic parent/container topology. Main
+    headings are headings with no heading parent. Subheadings keep the same
+    explicit hierarchy. No path, filename, display-name or domain inference is
+    used.
     """
     topics = _topics(tree)
     entries = _entries(tree)
@@ -115,8 +110,6 @@ def build_topic_index(tree: dict[str, Any]) -> dict[str, Any]:
         definitions[str(topic["id"])].append(topic)
     defined_ids = set(definitions)
 
-    # child -> explicit parent relations. container/child_topics remain distinct
-    # from parent_topic_refs because Topic inheritance is not containment.
     parents_by_topic: dict[str, set[str]] = defaultdict(set)
     edge_kinds: dict[tuple[str, str], set[str]] = defaultdict(set)
 
@@ -138,10 +131,7 @@ def build_topic_index(tree: dict[str, Any]) -> dict[str, Any]:
             edge_kinds[(topic_id, child_ref)].add("child_topic_ref")
 
     explicit_parent_targets = {parent for parents in parents_by_topic.values() for parent in parents}
-    explicit_roots = {
-        topic_id for topic_id in defined_ids
-        if not parents_by_topic.get(topic_id)
-    }
+    explicit_roots = {topic_id for topic_id in defined_ids if not parents_by_topic.get(topic_id)}
     heading_ids = explicit_parent_targets | explicit_roots
 
     children_by_heading: dict[str, set[str]] = defaultdict(set)
@@ -199,10 +189,7 @@ def build_topic_index(tree: dict[str, Any]) -> dict[str, Any]:
         records = definitions.get(heading_id, [])
         defined = bool(records)
         first = records[0] if records else {}
-        parent_heading_refs = sorted(
-            ref for ref in parents_by_topic.get(heading_id, set())
-            if ref in heading_ids
-        )
+        parent_heading_refs = sorted(ref for ref in parents_by_topic.get(heading_id, set()) if ref in heading_ids)
         heading_records.append({
             "id": heading_id,
             "label": str(first.get("name") or _identifier_label(heading_id)),
@@ -233,25 +220,24 @@ def build_topic_index(tree: dict[str, Any]) -> dict[str, Any]:
                 "inference": False,
             })
 
-    heading_parent_ids: set[str] = set()
-    for edge in heading_edges:
-        heading_parent_ids.add(str(edge["target"]))
-    root_heading_refs = sorted(heading_ids - heading_parent_ids)
+    heading_child_ids = {str(edge["target"]) for edge in heading_edges}
+    root_heading_refs = sorted(heading_ids - heading_child_ids)
+    root_set = set(root_heading_refs)
+    for item in heading_records:
+        item["main_heading"] = str(item["id"]) in root_set
 
     topic_to_heading_refs: dict[str, list[str]] = {}
     for topic_id in sorted(defined_ids):
         if topic_id in heading_ids:
             topic_to_heading_refs[topic_id] = [topic_id]
         else:
-            topic_to_heading_refs[topic_id] = sorted(
-                ref for ref in parents_by_topic.get(topic_id, set())
-                if ref in heading_ids
-            )
+            topic_to_heading_refs[topic_id] = sorted(ref for ref in parents_by_topic.get(topic_id, set()) if ref in heading_ids)
 
     index = {
         "version": INDEX_VERSION,
         "heading_rule": "explicit Topic parent/container target or explicit root Topic",
         "heading_count": len(heading_records),
+        "main_heading_count": len(root_heading_refs),
         "defined_heading_count": sum(1 for item in heading_records if item["defined"]),
         "unresolved_heading_count": sum(1 for item in heading_records if item["unresolved"]),
         "root_heading_refs": root_heading_refs,
@@ -264,6 +250,9 @@ def build_topic_index(tree: dict[str, Any]) -> dict[str, Any]:
             "paths_are_semantic": False,
             "display_names_create_grouping": False,
             "hardcoded_topic_names": False,
+            "main_headings_are_heading_roots": True,
+            "all_scope_contains_main_headings_only": True,
+            "subheadings_preserve_explicit_heading_hierarchy": True,
             "parent_topic_refs_preserve_inheritance_semantics": True,
             "container_topic_refs_preserve_container_semantics": True,
             "unresolved_explicit_topic_refs_are_preserved_as_gaps": True,
@@ -273,8 +262,6 @@ def build_topic_index(tree: dict[str, Any]) -> dict[str, Any]:
     }
     tree["topic_index"] = index
 
-    # Cache each resolved Topic surface on the Topic record too. Projection
-    # engines can therefore consume the normalized StructureTree directly.
     for topic in topics:
         topic_id = str(topic["id"])
         cached = topic_records.get(topic_id)
@@ -284,11 +271,6 @@ def build_topic_index(tree: dict[str, Any]) -> dict[str, Any]:
             topic["projection_base_ids"] = deepcopy(cached["projection_base_ids"])
 
     return index
-
-
-def topic_heading_catalog(tree: dict[str, Any]) -> list[dict[str, Any]]:
-    index = tree.get("topic_index") if isinstance(tree.get("topic_index"), dict) else {}
-    return [deepcopy(item) for item in index.get("headings", []) if isinstance(item, dict)]
 
 
 def _heading_depths(index: dict[str, Any]) -> dict[str, int]:
@@ -320,47 +302,102 @@ def _heading_depths(index: dict[str, Any]) -> dict[str, int]:
     return depth
 
 
-def topic_all_graph(tree: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, int]]:
+def topic_heading_catalog(tree: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return All-selectable headings in stable hierarchy order.
+
+    Main headings come first, followed recursively by their subheadings. A
+    heading with multiple explicit parents is emitted once at its shallowest
+    resolved heading depth.
+    """
     index = tree.get("topic_index") if isinstance(tree.get("topic_index"), dict) else {}
-    headings = topic_heading_catalog(tree)
+    records = {
+        str(item.get("id")): deepcopy(item)
+        for item in index.get("headings", [])
+        if isinstance(item, dict) and item.get("id")
+    }
     depths = _heading_depths(index)
+    children: dict[str, set[str]] = defaultdict(set)
+    for edge in index.get("heading_edges", []):
+        if not isinstance(edge, dict):
+            continue
+        source, target = str(edge.get("source") or ""), str(edge.get("target") or "")
+        if source in records and target in records:
+            children[source].add(target)
+
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def emit(ref: str) -> None:
+        if ref in seen or ref not in records:
+            return
+        seen.add(ref)
+        item = records[ref]
+        item["heading_depth"] = depths.get(ref, 0)
+        item["main_heading"] = ref in set(index.get("root_heading_refs", []))
+        out.append(item)
+        for child in sorted(children.get(ref, set()), key=lambda child_ref: (depths.get(child_ref, 0), str(records[child_ref].get("label") or child_ref).lower(), child_ref)):
+            emit(child)
+
+    for root in sorted((str(ref) for ref in index.get("root_heading_refs", [])), key=lambda ref: str(records.get(ref, {}).get("label") or ref).lower()):
+        emit(root)
+    for ref in sorted(records, key=lambda item_ref: (depths.get(item_ref, 0), str(records[item_ref].get("label") or item_ref).lower(), item_ref)):
+        emit(ref)
+    return out
+
+
+def topic_all_graph(tree: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, int]]:
+    """Project only main Topic headings for scope=all."""
+    index = tree.get("topic_index") if isinstance(tree.get("topic_index"), dict) else {}
+    heading_by_id = {str(item["id"]): item for item in topic_heading_catalog(tree)}
+    root_refs = [str(ref) for ref in index.get("root_heading_refs", []) if str(ref) in heading_by_id]
+    headings = [heading_by_id[ref] for ref in root_refs]
     nodes: list[dict[str, Any]] = []
     for heading in headings:
         heading_id = str(heading["id"])
-        depth = depths.get(heading_id, 0)
         nodes.append({
             "id": heading_id,
             "name": heading.get("label") or heading_id,
             "kind": "topic_heading_gap" if heading.get("unresolved") else "topic_heading",
             "type": "topic_heading",
-            "projection_depth": depth,
-            "projection_generation": depth + 1,
-            "hierarchy_depth": depth,
-            "projection_parent_id": (heading.get("parent_heading_refs") or [None])[0],
+            "projection_depth": 0,
+            "projection_generation": 1,
+            "hierarchy_depth": 0,
+            "projection_parent_id": None,
             "topic_count": len(heading.get("resolved_topic_refs", [])),
             "entry_count": heading.get("entry_count", 0),
             "unresolved": bool(heading.get("unresolved")),
             "defined": bool(heading.get("defined")),
+            "main_heading": True,
         })
+    root_set = set(root_refs)
+    edges = [
+        deepcopy(edge)
+        for edge in index.get("heading_edges", [])
+        if isinstance(edge, dict)
+        and str(edge.get("source") or "") in root_set
+        and str(edge.get("target") or "") in root_set
+    ]
+    depths = {ref: 0 for ref in root_refs}
     graph = {
         "nodes": nodes,
-        "edges": deepcopy(index.get("heading_edges", [])),
+        "edges": edges,
         "projection_root": "all",
-        "projection_root_name": "All Topic headings",
-        "projection_base_ids": [str(item["id"]) for item in headings],
+        "projection_root_name": "All",
+        "projection_base_ids": root_refs,
         "projection_relation_depth": 0,
         "projection_external_references": [],
-        "projection_semantic_kind": "topic_heading_index",
+        "projection_semantic_kind": "topic_main_heading_index",
     }
     metadata = {
         "projection_style": "topic",
         "scope_type": "all",
         "scope_ref": "all",
-        "semantic_kind": "topic_heading_index",
-        "heading_count": len(nodes),
-        "unresolved_heading_count": index.get("unresolved_heading_count", 0),
+        "semantic_kind": "topic_main_heading_index",
+        "main_heading_count": len(nodes),
+        "available_heading_count": index.get("heading_count", len(nodes)),
+        "unresolved_main_heading_count": sum(1 for item in headings if item.get("unresolved")),
         "resolved_at": "StructureTree import",
-        "source": "tree.topic_index",
+        "source": "tree.topic_index.root_heading_refs",
         "inference": False,
     }
     return graph, metadata, depths
