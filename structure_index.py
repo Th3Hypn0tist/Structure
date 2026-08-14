@@ -7,7 +7,7 @@ from typing import Any
 from topic_index import build_topic_index
 
 
-INDEX_VERSION = "1.0"
+INDEX_VERSION = "1.1"
 
 
 def _entry_index(tree: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -101,6 +101,7 @@ def _hierarchy_index(tree: dict[str, Any]) -> dict[str, Any]:
 def _behavior_index(tree: dict[str, Any]) -> dict[str, Any]:
     by_dimension: dict[str, list[str]] = defaultdict(list)
     owner_by_id: dict[str, str] = {}
+    raw_by_id: dict[str, dict[str, Any]] = {}
     for entry in tree.get("entries", []):
         if not isinstance(entry, dict) or entry.get("id") is None:
             continue
@@ -113,9 +114,13 @@ def _behavior_index(tree: dict[str, Any]) -> dict[str, Any]:
         owner = metadata.get("behavior_owner") or entry.get("parent_id")
         if owner is not None:
             owner_by_id[entry_id] = str(owner)
+        raw = metadata.get("raw")
+        if isinstance(raw, dict):
+            raw_by_id[entry_id] = deepcopy(raw)
     return {
         "by_dimension": {key: sorted(values) for key, values in sorted(by_dimension.items())},
         "owner_by_id": owner_by_id,
+        "raw_by_id": raw_by_id,
     }
 
 
@@ -165,7 +170,6 @@ def _flow_index(tree: dict[str, Any]) -> dict[str, Any]:
                 for ref in step.get(field, []):
                     if isinstance(ref, str) and ref:
                         event_refs[ref].append({"flow_id": flow_id, "step_id": step_id, "field": field})
-        flow_record["step_refs"].sort()
         flows_by_id[flow_id] = flow_record
 
     return {
@@ -183,46 +187,52 @@ def _flow_index(tree: dict[str, Any]) -> dict[str, Any]:
 def _topic_membership_index(tree: dict[str, Any]) -> dict[str, Any]:
     topics_by_identity: dict[str, list[str]] = defaultdict(list)
     topics_by_flow: dict[str, list[str]] = defaultdict(list)
+    topic_by_id: dict[str, dict[str, Any]] = {}
     for topic in tree.get("topics", []):
         if not isinstance(topic, dict) or not topic.get("id"):
             continue
         topic_id = str(topic["id"])
-        for field in ("member_refs", "operation_refs", "event_refs", "resolved_grouping_member_refs"):
-            for ref in topic.get(field, []):
-                if isinstance(ref, str):
-                    topics_by_identity[ref].append(topic_id)
         composed = topic.get("composed_trace_surface") if isinstance(topic.get("composed_trace_surface"), dict) else {}
-        for field in ("member_refs", "operation_refs", "event_refs"):
-            for ref in composed.get(field, []):
-                if isinstance(ref, str):
-                    topics_by_identity[ref].append(topic_id)
-        for ref in topic.get("flow_refs", []):
-            if isinstance(ref, str):
-                topics_by_flow[ref].append(topic_id)
-        for ref in composed.get("flow_refs", []):
-            if isinstance(ref, str):
-                topics_by_flow[ref].append(topic_id)
+        member_refs = set(str(ref) for ref in topic.get("member_refs", []) if isinstance(ref, str))
+        operation_refs = set(str(ref) for ref in topic.get("operation_refs", []) if isinstance(ref, str))
+        event_refs = set(str(ref) for ref in topic.get("event_refs", []) if isinstance(ref, str))
+        flow_refs = set(str(ref) for ref in topic.get("flow_refs", []) if isinstance(ref, str))
+        relation_refs = set(str(ref) for ref in topic.get("relation_refs", []) if isinstance(ref, str))
+        member_refs.update(str(ref) for ref in topic.get("resolved_grouping_member_refs", []) if isinstance(ref, str))
+        member_refs.update(str(ref) for ref in composed.get("member_refs", []) if isinstance(ref, str))
+        operation_refs.update(str(ref) for ref in composed.get("operation_refs", []) if isinstance(ref, str))
+        event_refs.update(str(ref) for ref in composed.get("event_refs", []) if isinstance(ref, str))
+        flow_refs.update(str(ref) for ref in composed.get("flow_refs", []) if isinstance(ref, str))
+        relation_refs.update(str(ref) for ref in composed.get("relation_refs", []) if isinstance(ref, str))
+
+        topic_by_id[topic_id] = {
+            "id": topic_id,
+            "name": str(topic.get("name") or topic_id),
+            "owner_ref": topic.get("owner_ref"),
+            "member_refs": sorted(member_refs),
+            "operation_refs": sorted(operation_refs),
+            "event_refs": sorted(event_refs),
+            "flow_refs": sorted(flow_refs),
+            "relation_refs": sorted(relation_refs),
+        }
+        for ref in member_refs | operation_refs | event_refs:
+            topics_by_identity[ref].append(topic_id)
+        for ref in flow_refs:
+            topics_by_flow[ref].append(topic_id)
     return {
+        "by_id": topic_by_id,
         "topics_by_identity": {key: sorted(set(values)) for key, values in sorted(topics_by_identity.items())},
         "topics_by_flow": {key: sorted(set(values)) for key, values in sorted(topics_by_flow.items())},
     }
 
 
 def build_structure_indexes(tree: dict[str, Any]) -> dict[str, Any]:
-    """Resolve reusable lookup/projection foundations once during import.
-
-    Projection engines are consumers of this materialized StructureTree. They
-    may apply cheap view parameters (scope, relation depth, geometry), but they
-    must not repeatedly rediscover Topic grouping, identity ownership, Flow
-    membership, hierarchy or relation adjacency from source contracts.
-    """
+    """Resolve reusable lookup/projection foundations once during import."""
     topic_index = build_topic_index(tree)
     indexes = {
         "version": INDEX_VERSION,
         "resolved_at": "StructureTree import",
-        "identity": {
-            "ids": sorted(_entry_index(tree)),
-        },
+        "identity": {"ids": sorted(_entry_index(tree))},
         "hierarchy": _hierarchy_index(tree),
         "links": _link_indexes(tree),
         "behavior": _behavior_index(tree),
@@ -235,7 +245,7 @@ def build_structure_indexes(tree: dict[str, Any]) -> dict[str, Any]:
         "rules": {
             "source_semantics_resolved_once": True,
             "projection_reanalysis_required": False,
-            "dynamic_projection_work": "scope slicing, bounded adjacency traversal, visual geometry only",
+            "dynamic_projection_work": "scope slicing, bounded cached adjacency traversal, visual geometry only",
             "hardcoded_domain_names": False,
             "path_inference": False,
             "display_name_inference": False,
