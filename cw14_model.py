@@ -14,8 +14,9 @@ FLOW_STEP_REQUIRED = (
     "subflow_refs", "resume_ref",
 )
 TOPIC_REQUIRED = (
-    "id", "name", "purpose", "member_refs", "relation_refs", "operation_refs",
-    "event_refs", "flow_refs", "child_topics", "metadata",
+    "id", "name", "purpose", "parent_topic_refs", "composed_topic_refs",
+    "member_refs", "relation_refs", "operation_refs", "event_refs", "flow_refs",
+    "child_topics", "metadata",
 )
 
 
@@ -102,11 +103,15 @@ def materialize_behavior_identities(tree: dict[str, Any], snapshot: Any) -> list
     return errors
 
 
+def _string_refs(raw: Any) -> list[str]:
+    return [str(value) for value in raw] if isinstance(raw, list) and all(isinstance(value, str) for value in raw) else []
+
+
 def _flatten_topic(
     *,
     raw: dict[str, Any],
     owner_ref: str,
-    parent_topic_ref: str | None,
+    container_topic_ref: str | None,
     path: str,
     snapshot: Any,
     out: list[dict[str, Any]],
@@ -116,6 +121,14 @@ def _flatten_topic(
     topic_id = str(raw.get("id") or "")
     if missing:
         errors.append({"id": "CF_MISSING_REQUIRED_FIELD", "message": f"Topic {topic_id or '<unknown>'} missing: {', '.join(missing)}", "contract": path})
+
+    for field in (
+        "parent_topic_refs", "composed_topic_refs", "member_refs", "relation_refs",
+        "operation_refs", "event_refs", "flow_refs", "child_topics",
+    ):
+        if field in raw and not isinstance(raw.get(field), list):
+            errors.append({"id": "CF_MISSING_REQUIRED_FIELD", "message": f"Topic {topic_id or '<unknown>'} {field} must be an array", "contract": path, "field": field})
+
     child_topics = raw.get("child_topics") if isinstance(raw.get("child_topics"), list) else []
     child_ids = [str(child.get("id")) for child in child_topics if isinstance(child, dict) and child.get("id")]
     out.append({
@@ -123,19 +136,31 @@ def _flatten_topic(
         "name": str(raw.get("name") or topic_id),
         "purpose": str(raw.get("purpose") or ""),
         "owner_ref": owner_ref,
-        "parent_topic_ref": parent_topic_ref,
-        "member_refs": [str(x) for x in raw.get("member_refs", []) if isinstance(x, str)],
-        "relation_refs": [str(x) for x in raw.get("relation_refs", []) if isinstance(x, str)],
-        "operation_refs": [str(x) for x in raw.get("operation_refs", []) if isinstance(x, str)],
-        "event_refs": [str(x) for x in raw.get("event_refs", []) if isinstance(x, str)],
-        "flow_refs": [str(x) for x in raw.get("flow_refs", []) if isinstance(x, str)],
+        "container_topic_ref": container_topic_ref,
+        "parent_topic_refs": _string_refs(raw.get("parent_topic_refs")),
+        "composed_topic_refs": _string_refs(raw.get("composed_topic_refs")),
+        "member_refs": _string_refs(raw.get("member_refs")),
+        "relation_refs": _string_refs(raw.get("relation_refs")),
+        "operation_refs": _string_refs(raw.get("operation_refs")),
+        "event_refs": _string_refs(raw.get("event_refs")),
+        "flow_refs": _string_refs(raw.get("flow_refs")),
         "child_topic_refs": child_ids,
         "metadata": deepcopy(raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}),
         "provenance": {"path": path, "repository": snapshot.repo, "branch": snapshot.branch, "revision": snapshot.revision},
     })
     for child in child_topics:
         if isinstance(child, dict):
-            _flatten_topic(raw=child, owner_ref=owner_ref, parent_topic_ref=topic_id or None, path=path, snapshot=snapshot, out=out, errors=errors)
+            _flatten_topic(
+                raw=child,
+                owner_ref=owner_ref,
+                container_topic_ref=topic_id or None,
+                path=path,
+                snapshot=snapshot,
+                out=out,
+                errors=errors,
+            )
+        else:
+            errors.append({"id": "CF_MISSING_REQUIRED_FIELD", "message": f"Topic {topic_id or '<unknown>'} child_topics contains a non-object item", "contract": path})
 
 
 def materialize_topics(tree: dict[str, Any], snapshot: Any) -> list[dict[str, Any]]:
@@ -153,7 +178,7 @@ def materialize_topics(tree: dict[str, Any], snapshot: Any) -> list[dict[str, An
             continue
         for topic in raw_topics:
             if isinstance(topic, dict):
-                _flatten_topic(raw=topic, owner_ref=owner_ref, parent_topic_ref=None, path=path, snapshot=snapshot, out=topics, errors=errors)
+                _flatten_topic(raw=topic, owner_ref=owner_ref, container_topic_ref=None, path=path, snapshot=snapshot, out=topics, errors=errors)
             else:
                 errors.append({"id": "CF_MISSING_REQUIRED_FIELD", "message": "Topic must be an object", "contract": path})
     tree["topics"] = topics
@@ -197,7 +222,7 @@ def materialize_flows(tree: dict[str, Any], snapshot: Any) -> list[dict[str, Any
                         errors.append({"id": "CF_MISSING_REQUIRED_FIELD", "message": f"Flow step {raw_step.get('id') or '<unknown>'} {field} must be an array", "contract": path, "flow": flow_id})
                         step[field] = []
                     else:
-                        step[field] = [str(x) for x in step[field]]
+                        step[field] = [str(value) for value in step[field] if isinstance(value, str)]
                 for field in ("id", "actor_ref", "action_ref", "data_ref", "target_ref", "cause_ref", "condition_ref", "payload_ref", "resume_ref"):
                     if step.get(field) is not None:
                         step[field] = str(step[field])
@@ -207,8 +232,8 @@ def materialize_flows(tree: dict[str, Any], snapshot: Any) -> list[dict[str, Any
                 "owner_ref": str(raw.get("owner_ref") or owner_id),
                 "name": str(raw.get("name") or flow_id),
                 "flow_type": str(raw.get("flow_type") or ""),
-                "entry_refs": [str(x) for x in raw.get("entry_refs", []) if isinstance(x, str)],
-                "exit_refs": [str(x) for x in raw.get("exit_refs", []) if isinstance(x, str)],
+                "entry_refs": _string_refs(raw.get("entry_refs")),
+                "exit_refs": _string_refs(raw.get("exit_refs")),
                 "steps": steps,
                 "metadata": deepcopy(raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}),
                 "provenance": {"path": path, "repository": snapshot.repo, "branch": snapshot.branch, "revision": snapshot.revision},
@@ -217,10 +242,37 @@ def materialize_flows(tree: dict[str, Any], snapshot: Any) -> list[dict[str, Any
     return errors
 
 
+def explicit_outsiders(snapshot: Any) -> dict[str, dict[str, Any]]:
+    """Read Outsider only from the identity's own structured semantics."""
+    result: dict[str, dict[str, Any]] = {}
+    for path, data in _contracts(snapshot):
+        root_id = str((data.get("identity") or {}).get("id") or "")
+        root_semantics = data.get("semantics") if isinstance(data.get("semantics"), dict) else {}
+        if root_id and ("outsider" in root_semantics or "outsider_reason" in root_semantics):
+            result[root_id] = {
+                "outsider": root_semantics.get("outsider") is True,
+                "outsider_reason": root_semantics.get("outsider_reason"),
+                "provenance": {"path": path, "field": "semantics"},
+            }
+        if data.get("source_role") == "membership_registry":
+            continue
+        for member in data.get("members", []):
+            if not isinstance(member, dict) or not member.get("id"):
+                continue
+            semantics = member.get("semantics") if isinstance(member.get("semantics"), dict) else {}
+            if "outsider" in semantics or "outsider_reason" in semantics:
+                result[str(member["id"])] = {
+                    "outsider": semantics.get("outsider") is True,
+                    "outsider_reason": semantics.get("outsider_reason"),
+                    "provenance": {"path": path, "field": f"members[{member['id']}].semantics"},
+                }
+    return result
+
+
 def bootstrap_identity_ids(snapshot: Any) -> set[str]:
     fmt = format_contract(snapshot) or {}
     order = ((fmt.get("bootstrap") or {}).get("order") or [])
-    paths = {str(x) for x in order if isinstance(x, str) and x.endswith(".json")}
+    paths = {str(value) for value in order if isinstance(value, str) and value.endswith(".json")}
     ids: set[str] = set()
     for relative in paths:
         candidates = [relative, f"canonical/json/{relative}"]
