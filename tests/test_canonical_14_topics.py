@@ -132,7 +132,9 @@ def test_projector_uses_canonical_topic_surfaces_without_profile_guessing():
     base = projection_base_ids(tree, "TOPIC_MECHANISM")
     assert "A" in base
     assert "B" in base
-    assert "C" not in base
+    # Outsider means Topic classification is unresolved; it does not hide an
+    # identity that is explicitly referenced by the mechanism's flow surface.
+    assert "C" in base
 
 
 def test_trace_uses_next_step_refs_not_result_refs():
