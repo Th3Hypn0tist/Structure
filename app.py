@@ -79,10 +79,13 @@ def _viewer_html_payload() -> bytes:
 
 
 def _viewer_js_payload() -> bytes:
+    """Replace the legacy auto-start call with an explicit empty startup.
+
+    Match the final call itself instead of depending on a trailing newline. The
+    checked-in viewer currently ends exactly with ``init();``.
+    """
     text = _file_payload(SCENE_VIEWER_JS).decode('utf-8')
-    legacy = '\ninit();\n'
-    empty_bootstrap = '''
-(function initEmptyStructure(){
+    empty_bootstrap = '''(function initEmptyStructure(){
   try {
     S.catalog = null;
     S.scene = null;
@@ -102,11 +105,13 @@ def _viewer_js_payload() -> bytes:
     syncView();
     draw();
   } catch (e) { showError(e); }
-})();
-'''
-    if legacy not in text:
-        raise RuntimeError('scene_viewer_v4.js legacy init bootstrap marker not found')
-    return text.replace(legacy, '\n' + empty_bootstrap, 1).encode('utf-8')
+})();'''
+    stripped = text.rstrip()
+    if stripped.endswith('init();'):
+        text = stripped[:-len('init();')] + empty_bootstrap + '\n'
+    elif 'initEmptyStructure' not in text:
+        raise RuntimeError('scene_viewer_v4.js startup call not found')
+    return text.encode('utf-8')
 
 
 def _viewer_cards_payload() -> bytes:
@@ -182,7 +187,7 @@ def _session_result(body: dict) -> dict:
 
 
 class Handler(BaseHandler):
-    server_version = 'Structure/0.27.3'
+    server_version = 'Structure/0.27.4'
 
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode('utf-8')
