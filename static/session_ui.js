@@ -29,12 +29,32 @@
     if(!items.some(x=>String(x.id)===String(inst.scope_ref)))inst.scope_ref=String(items[0]?.id||'');
   }
 
+  function preferredDimension(styleId,dims){
+    if(!Array.isArray(dims)||!dims.length)return'2d';
+    if(styleId==='atlas'&&dims.includes('3d'))return'3d';
+    if(dims.length===1)return dims[0];
+    return dims.includes('3d')?'3d':dims[0];
+  }
+
+  function normalizeVisualDimension(inst){
+    const visual=visualFor(inst);
+    const dims=visual?.dimensions||['2d'];
+    if(!dims.includes(inst.projection_dimension)){
+      inst.projection_dimension=preferredDimension(inst.visual_style,dims);
+    }
+    return inst;
+  }
+
   function normalize(inst){
     inst.master_ref ||= masters()[0]?.id||'master-1';
     inst.semantic_projection_style ||= 'topic';
-    inst.visual_style ||= inst.projection_style||visualStyles()[0]?.id||'atlas';
+    inst.visual_style ||= inst.projection_style||visualStyles().find(x=>x.id==='atlas')?.id||visualStyles()[0]?.id||'atlas';
     inst.projection_style=inst.visual_style;
-    inst.projection_dimension ||= visualFor(inst)?.dimensions?.includes('3d')?'3d':visualFor(inst)?.dimensions?.[0]||'2d';
+    if(!inst.projection_dimension){
+      const dims=visualFor(inst)?.dimensions||['2d'];
+      inst.projection_dimension=preferredDimension(inst.visual_style,dims);
+    }
+    normalizeVisualDimension(inst);
     inst.relation_depth=Math.max(0,Math.min(32,Number(inst.relation_depth??inst.dependency_depth??0)||0));
     inst.dependency_depth=inst.relation_depth;
     inst.scope_type ||= inst.semantic_projection_style==='impact'?'event':'topic';
@@ -52,6 +72,7 @@
     base.semantic_projection_style='topic';
     base.visual_style=visualStyles().find(x=>x.id==='atlas')?.id||visualStyles()[0]?.id||'atlas';
     base.projection_style=base.visual_style;
+    base.projection_dimension='3d';
     base.scope_type='topic';
     base.scope_ref='';
     base.relation_depth=0;
@@ -80,14 +101,13 @@
     parser.innerHTML=html.trim();
     const card=parser.content.firstElementChild,body=card.querySelector('.instance-body');
 
-    // Remove the legacy visual/root controls and depth control. Session controls
-    // below are the only semantic projection authority.
     const legacyProjection=body.querySelector('[data-key="projection_style"]')?.closest('.grid2');
     const legacyDepth=body.querySelector('[data-key="dependency_depth"]')?.closest('.field');
     if(legacyProjection)legacyProjection.remove();
     if(legacyDepth)legacyDepth.remove();
 
     const style=semanticFor(inst),scopeTypes=style?.scope_types||['topic'];
+    const visual=visualFor(inst),dims=visual?.dimensions||['2d'];
     const controls=document.createElement('div');
     controls.innerHTML=`
       <div class="grid2">
@@ -100,7 +120,7 @@
       </div>
       <div class="grid3">
         <div class="field"><label>Visual style</label><select data-session="${inst.id}" data-session-key="visual_style">${opt(visualStyles(),inst.visual_style)}</select></div>
-        <div class="field"><label>Dimension</label><select data-session="${inst.id}" data-session-key="projection_dimension">${(visualFor(inst)?.dimensions||['2d']).map(v=>`<option value="${v}" ${v===inst.projection_dimension?'selected':''}>${v.toUpperCase()}</option>`).join('')}</select></div>
+        <div class="field"><label>Dimension</label><select data-session="${inst.id}" data-session-key="projection_dimension">${dims.map(v=>`<option value="${v}" ${v===inst.projection_dimension?'selected':''}>${v.toUpperCase()}</option>`).join('')}</select></div>
         <div class="field"><label>${inst.semantic_projection_style==='impact'?'Impact depth':'Relation depth'}</label><input type="number" min="0" max="${inst.semantic_projection_style==='impact'?'64':'32'}" step="1" data-session="${inst.id}" data-session-key="${inst.semantic_projection_style==='impact'?'impact_depth':'relation_depth'}" value="${inst.semantic_projection_style==='impact'?(inst.impact_depth||32):inst.relation_depth}"></div>
       </div>`;
     const nameField=body.querySelector('.field');
@@ -123,7 +143,7 @@
         if(key==='visual_style'){
           inst.projection_style=inst.visual_style;
           const dims=visualFor(inst)?.dimensions||['2d'];
-          if(!dims.includes(inst.projection_dimension))inst.projection_dimension=dims.includes('3d')?'3d':dims[0];
+          inst.projection_dimension=preferredDimension(inst.visual_style,dims);
         }
         normalize(inst);
         renderInstances();
