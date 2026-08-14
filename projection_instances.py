@@ -7,11 +7,8 @@ from typing import Any
 from canonical_projections import PROJECTIONS as CORE_PROJECTIONS
 from canonical_projections_extra3d import PROJECTIONS as EXTRA_PROJECTIONS
 from structure_reveal_projections import PROJECTIONS as STRUCTURE_REVEAL_PROJECTIONS
-from topic_profiles import resolve_topic_profile, topic_base_ids
 
 MAX_RELATION_DEPTH = 32
-PRIMARY_ROOT_IDS = ("IAM", "AccessCore", "DWH")
-PRIMARY_PROFILE_COMPAT = {"iam": "IAM", "accesscore": "AccessCore", "dwh": "DWH"}
 
 STYLE_FAMILIES: dict[str, dict[str, Any]] = {
     "atlas": {"label": "Atlas", "variants": {"2d": "atlas_2d", "3d": "atlas_3d"}},
@@ -81,7 +78,6 @@ def resolve_projection_style(style: str, dimension: str | None = None) -> tuple[
     variants = {d: gid for d, gid in family["variants"].items() if gid in generators}
     if not variants:
         raise KeyError(f"Projection style has no available generator: {style}")
-
     if dimension is None:
         dimension = "2d" if "2d" in variants else "3d" if "3d" in variants else next(iter(variants))
     if dimension not in {"2d", "3d"}:
@@ -126,36 +122,135 @@ def _containment_subtree(root_id: str, entries: dict[str, dict[str, Any]]) -> se
     return seen
 
 
-def topic_catalog(tree: dict[str, Any]) -> list[dict[str, Any]]:
-    profile_topics = resolve_topic_profile(tree)
-    if profile_topics:
-        out: list[dict[str, Any]] = []
-        for topic in profile_topics:
-            item = deepcopy(topic)
-            profile_id = str(item["id"])
-            item["profile_id"] = profile_id
-            item["id"] = PRIMARY_PROFILE_COMPAT.get(profile_id, profile_id)
-            item["primary"] = profile_id in PRIMARY_PROFILE_COMPAT
-            out.append(item)
-        return out
+def _topics(tree: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        str(topic.get("id")): topic
+        for topic in tree.get("topics", [])
+        if isinstance(topic, dict) and topic.get("id")
+    }
 
+
+def _topic_descendants(topic_id: str, topics: dict[str, dict[str, Any]]) -> set[str]:
+    seen: set[str] = set()
+    queue = deque([topic_id])
+    while queue:
+        current = queue.popleft()
+        if current in seen or current not in topics:
+            continue
+        seen.add(current)
+        queue.extend(str(ref) for ref in topics[current].get("child_topic_refs", []))
+    return seen
+
+
+def _flow_surface_ids(tree: dict[str, Any], flow_ids: set[str]) -> set[str]:
     entries = _entries(tree)
-    ordered: list[str] = [root for root in PRIMARY_ROOT_IDS if root in entries]
-    definitions = [
-        entry_id for entry_id, entry in entries.items()
-        if str((entry.get("metadata") or {}).get("source_role") or "") == "definition"
-        and entry_id not in PRIMARY_ROOT_IDS
-    ]
-    definitions.sort(key=lambda entry_id: str(entries[entry_id].get("name") or entry_id).lower())
-    ordered.extend(definitions)
+    out: set[str] = set()
+    by_flow = {
+        str(flow.get("id")): flow
+        for flow in tree.get("flows", [])
+        if isinstance(flow, dict) and flow.get("id")
+    }
+    queue = deque(sorted(flow_ids))
+    seen_flows: set[str] = set()
+    while queue:
+        flow_id = queue.popleft()
+        if flow_id in seen_flows:
+            continue
+        seen_flows.add(flow_id)
+        flow = by_flow.get(flow_id)
+        if flow is None:
+            continue
+        owner = flow.get("owner_ref")
+        if isinstance(owner, str) and owner in entries:
+            out.add(owner)
+        for step in flow.get("steps", []):
+            if not isinstance(step, dict):
+                continue
+            for field in ("actor_ref", "action_ref", "data_ref", "target_ref", "cause_ref", "condition_ref", "payload_ref"):
+                ref = step.get(field)
+                if isinstance(ref, str) and ref in entries:
+                    out.add(ref)
+            for field in ("result_refs", "error_refs"):
+                for ref in step.get(field, []):
+                    if isinstance(ref, str) and ref in entries:
+                        out.add(ref)
+            queue.extend(str(ref) for ref in step.get("subflow_refs", []) if isinstance(ref, str))
+    return out
+
+
+def _topic_surface_ids(tree: dict[str, Any], topic_id: str) -> set[str]:
+    entries = _entries(tree)
+    topics = _topics(tree)
+    if topic_id not in topics:
+        return set()
+
+    selected_topics = _topic_descendants(topic_id, topics)
+    out: set[str] = set()
+    flow_ids: set[str] = set()
+    relation_ids: set[str] = set()
+
+    for selected_id in selected_topics:
+        topic = topics[selected_id]
+        for field in ("member_refs", "operation_refs", "event_refs", "resolved_grouping_member_refs"):
+            out.update(str(ref) for ref in topic.get(field, []) if str(ref) in entries)
+        composed = topic.get("composed_trace_surface") if isinstance(topic.get("composed_trace_surface"), dict) else {}
+        for field in ("member_refs", "operation_refs", "event_refs"):
+            out.update(str(ref) for ref in composed.get(field, []) if str(ref) in entries)
+        flow_ids.update(str(ref) for ref in topic.get("flow_refs", []))
+        flow_ids.update(str(ref) for ref in composed.get("flow_refs", []))
+        relation_ids.update(str(ref) for ref in topic.get("relation_refs", []))
+        relation_ids.update(str(ref) for ref in composed.get("relation_refs", []))
+
+    out.update(_flow_surface_ids(tree, flow_ids))
+    for link in tree.get("links", []):
+        if not isinstance(link, dict) or str(link.get("id") or "") not in relation_ids:
+            continue
+        for field in ("source_id", "target_id"):
+            ref = link.get(field)
+            if isinstance(ref, str) and ref in entries:
+                out.add(ref)
+    return out
+
+
+def topic_catalog(tree: dict[str, Any]) -> list[dict[str, Any]]:
+    topics = _topics(tree)
+    if topics:
+        out: list[dict[str, Any]] = []
+        for topic_id, topic in topics.items():
+            surface = _topic_surface_ids(tree, topic_id)
+            out.append({
+                "id": topic_id,
+                "label": str(topic.get("name") or topic_id),
+                "purpose": str(topic.get("purpose") or ""),
+                "owner_ref": topic.get("owner_ref"),
+                "container_topic_ref": topic.get("container_topic_ref"),
+                "parent_topic_refs": deepcopy(topic.get("parent_topic_refs", [])),
+                "composed_topic_refs": deepcopy(topic.get("composed_topic_refs", [])),
+                "resolved_ancestor_topic_refs": deepcopy(topic.get("resolved_ancestor_topic_refs", [])),
+                "resolved_component_topic_refs": deepcopy(topic.get("resolved_component_topic_refs", [])),
+                "child_topic_refs": deepcopy(topic.get("child_topic_refs", [])),
+                "entry_count": len(surface),
+                "projection_base_ids": sorted(surface),
+                "canonical_topic": True,
+                "semantic_authority": False,
+            })
+        return sorted(out, key=lambda item: (str(item.get("label") or "").lower(), str(item["id"])))
+
+    # Pre-1.4 compatibility is generic and uses explicit semantic roots only.
+    entries = _entries(tree)
+    roots = sorted(
+        (entry_id for entry_id, entry in entries.items() if entry.get("parent_id") is None),
+        key=lambda entry_id: str(entries[entry_id].get("name") or entry_id).lower(),
+    )
     return [
         {
             "id": entry_id,
             "label": str(entries[entry_id].get("name") or entry_id),
             "entry_count": len(_containment_subtree(entry_id, entries)),
-            "primary": entry_id in PRIMARY_ROOT_IDS,
+            "canonical_topic": False,
+            "legacy_semantic_root": True,
         }
-        for entry_id in ordered
+        for entry_id in roots
     ]
 
 
@@ -194,24 +289,20 @@ def _projection_hierarchy_depths(tree: dict[str, Any], included: set[str]) -> di
     return {entry_id: absolute.get(entry_id) for entry_id in included}
 
 
-def _profile_topic_id(root_topic: str) -> str:
-    reverse = {wire: profile for profile, wire in PRIMARY_PROFILE_COMPAT.items()}
-    return reverse.get(root_topic, root_topic)
-
-
 def projection_base_ids(tree: dict[str, Any], root_topic: str) -> set[str]:
     entries = _entries(tree)
     if root_topic == "all":
         return set(entries)
 
-    profile_id = _profile_topic_id(root_topic)
-    profile_base = topic_base_ids(tree, profile_id)
-    if profile_base is not None:
-        return profile_base
+    topics = _topics(tree)
+    if topics:
+        if root_topic not in topics:
+            raise KeyError(f"Unknown canonical Topic: {root_topic}")
+        return _topic_surface_ids(tree, root_topic)
 
     selectable = {item["id"] for item in topic_catalog(tree)}
     if root_topic not in entries:
-        raise KeyError(f"Unknown projection root topic: {root_topic}")
+        raise KeyError(f"Unknown projection root: {root_topic}")
     if root_topic not in selectable:
         raise KeyError(f"Projection root is not selectable: {root_topic}")
     return _containment_subtree(root_topic, entries)
@@ -223,8 +314,7 @@ def _topic_name(tree: dict[str, Any], root_topic: str) -> str:
     for item in topic_catalog(tree):
         if item["id"] == root_topic:
             return str(item.get("label") or root_topic)
-    entry = _entries(tree).get(root_topic)
-    return str((entry or {}).get("name") or root_topic)
+    return root_topic
 
 
 def _relation_adjacency(graph: dict[str, Any]) -> tuple[dict[str, list[tuple[str, str]]], set[str]]:
@@ -261,7 +351,6 @@ def filter_for_instance(
     included = set(base_ids)
     absolute_depths = _absolute_hierarchy_depths(tree)
     hierarchy_depths = {entry_id: absolute_depths.get(entry_id) for entry_id in base_ids}
-
     projection_generations: dict[str, int | None] = {
         entry_id: (depth + 1 if isinstance(depth, int) else None)
         for entry_id, depth in hierarchy_depths.items()
@@ -277,10 +366,7 @@ def filter_for_instance(
         projection_parent_ids[entry_id] = parent_id if parent_id in base_ids else None
 
     adjacency, available_dimensions = _relation_adjacency(graph)
-    frontier = deque(
-        (entry_id, 0, projection_generations.get(entry_id))
-        for entry_id in sorted(base_ids)
-    )
+    frontier = deque((entry_id, 0, projection_generations.get(entry_id)) for entry_id in sorted(base_ids))
     best_hops: dict[str, int] = {entry_id: 0 for entry_id in base_ids}
     reached_by_dimension: dict[str, int] = {}
     external_references: list[dict[str, Any]] = []
@@ -293,10 +379,8 @@ def filter_for_instance(
         for neighbor, relation_dimension in adjacency.get(current, []):
             next_hops = hops + 1
             next_generation = generation + 1 if isinstance(generation, int) else None
-
             if neighbor in base_ids:
                 continue
-
             if neighbor in external_visible_ids:
                 key = (current, neighbor, relation_dimension)
                 if key not in external_ref_keys:
@@ -311,11 +395,9 @@ def filter_for_instance(
                         "recursion": "stopped_at_existing_scene_identity",
                     })
                 continue
-
             previous_hops = best_hops.get(neighbor)
             if previous_hops is not None and previous_hops <= next_hops:
                 continue
-
             first_reach = neighbor not in included
             best_hops[neighbor] = next_hops
             projection_generations[neighbor] = next_generation
@@ -357,14 +439,18 @@ def filter_for_instance(
         "external_reference_count": len(external_references),
         "external_reference_ids": sorted({item["target_id"] for item in external_references}),
         "external_references": external_references,
-        "topic_rule": "replaceable topic profile when present; exact explicit canonical identity resolution only; canonical hierarchy remains authoritative",
+        "topic_rule": "Canonical Contract topics[] only when present; grouping, inheritance and composition remain non-semantic projection surfaces",
         "expansion_rule": "all explicit documented graph relations; bidirectional discovery only",
         "projection_depth_rule": "recursive parent generation; generation 1 is odd; each explicit relation hop advances one generation",
         "projection_parent_rule": "base nodes use explicit StructureTree parent_id; relation-expanded nodes use the explicit recursion predecessor as presentation parent",
         "existing_identity_rule": "relation-expanded identity already visible/reserved in another projection is referenced, not duplicated, and recursion stops there",
         "projection_depth_semantic_authority": False,
         "projection_parent_semantic_authority": False,
-        "topic_profile_semantic_authority": False,
+        "topic_semantic_authority": False,
+        "topic_inheritance_implies_structure": False,
+        "topic_composition_implies_structure": False,
+        "topic_composition_implies_causality": False,
+        "software_specific_topic_heuristics": False,
         "inference": False,
     }
     return {
@@ -390,7 +476,7 @@ def normalize_instance_spec(spec: dict[str, Any], index: int = 0) -> dict[str, A
     dimension_input = spec.get("projection_dimension")
     projection_style, projection_dimension, projection_generator = resolve_projection_style(style_input, dimension_input)
 
-    root_topic = str(spec.get("root_topic") or "IAM").strip()
+    root_topic = str(spec.get("root_topic") or "all").strip()
     dependency_depth = max(0, min(MAX_RELATION_DEPTH, int(spec.get("dependency_depth", 0))))
     return {
         "id": instance_id,
