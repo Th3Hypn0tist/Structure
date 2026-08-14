@@ -6,7 +6,6 @@ from typing import Any, Callable
 from event_projection import build_event_projection
 from event_trace import build_event_surface, event_catalog
 from input_modules.canonical import read as read_canonical
-from projection_instances import filter_for_instance, topic_catalog
 from scene_composer import compose_projection_instances
 from semantic_projection_styles import (
     PROJECTION_STYLES,
@@ -17,6 +16,7 @@ from semantic_projection_styles import (
 from semantic_visual_projections import resolve_visual_style, style_catalog
 from source_selection import load_source
 from structure_tree import tree_to_graph
+from topic_index import topic_all_graph, topic_heading_catalog, topic_scope_graph
 
 
 DEFAULT_MASTER_ID = "master-1"
@@ -75,8 +75,30 @@ def load_masters(source_specs: list[dict[str, Any]]) -> dict[str, dict[str, Any]
 def _scope_catalog(tree: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     entries = [entry for entry in tree.get("entries", []) if isinstance(entry, dict) and entry.get("id") is not None]
     flows = [flow for flow in tree.get("flows", []) if isinstance(flow, dict) and flow.get("id")]
+    headings = topic_heading_catalog(tree)
     return {
-        "topics": [{"id": "all", "label": "all", "entry_count": len(entries), "canonical_topic": False}] + topic_catalog(tree),
+        "topics": [
+            {
+                "id": "all",
+                "label": "all",
+                "entry_count": len(headings),
+                "heading_count": len(headings),
+                "canonical_topic": False,
+                "scope_semantics": "all_topic_headings_only",
+            }
+        ] + [
+            {
+                "id": str(item["id"]),
+                "label": str(item.get("label") or item["id"]),
+                "entry_count": int(item.get("entry_count") or 0),
+                "canonical_topic": bool(item.get("defined")),
+                "topic_heading": True,
+                "unresolved": bool(item.get("unresolved")),
+                "direct_topic_refs": deepcopy(item.get("direct_topic_refs", [])),
+                "resolved_topic_refs": deepcopy(item.get("resolved_topic_refs", [])),
+            }
+            for item in headings
+        ],
         "events": event_catalog(tree),
         "flows": [{"id": str(flow["id"]), "name": str(flow.get("name") or flow["id"]), "owner_ref": flow.get("owner_ref")} for flow in flows],
         "identities": [{"id": str(entry["id"]), "name": str(entry.get("name") or entry["id"]), "kind": entry.get("kind"), "type": entry.get("type")} for entry in entries],
@@ -85,6 +107,8 @@ def _scope_catalog(tree: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
 
 def master_catalog(master: dict[str, Any]) -> dict[str, Any]:
     tree = master["tree"]
+    indexes = tree.get("indexes") if isinstance(tree.get("indexes"), dict) else {}
+    topic_index = tree.get("topic_index") if isinstance(tree.get("topic_index"), dict) else {}
     return {
         "id": master["id"],
         "name": master["name"],
@@ -93,6 +117,13 @@ def master_catalog(master: dict[str, Any]) -> dict[str, Any]:
         "projectable": bool(tree.get("projectable")),
         "errors": deepcopy(tree.get("errors", [])),
         "scopes": _scope_catalog(tree),
+        "structure_tree_index": {
+            "version": indexes.get("version"),
+            "resolved_at": indexes.get("resolved_at"),
+            "topic_heading_count": topic_index.get("heading_count", 0),
+            "topic_unresolved_heading_count": topic_index.get("unresolved_heading_count", 0),
+            "projection_reanalysis_required": False,
+        },
     }
 
 
@@ -110,7 +141,9 @@ def session_catalog(masters: dict[str, dict[str, Any]]) -> dict[str, Any]:
         "masters": [master_catalog(master) for master in masters.values()],
         "rules": {
             "master": "a projection references exactly one source/master; one master may feed multiple projections",
-            "projection_style": "semantic question asked of the master",
+            "structure_tree": "reusable semantic topology and lookup indexes are resolved once at source import",
+            "projection_style": "semantic question asked of the already-resolved StructureTree",
+            "topic_all": "all shows only pre-resolved Topic headings; details remain collapsed until a heading is selected",
             "visual_style": "geometry only; it consumes the semantic projection graph and never changes semantic membership",
             "visual_dimension": "every visual style has native 2D and 3D generators",
             "event_projection": "Event impact includes Event identity, payload, owner, explicit Topic/Flow context, actual causal bindings, and explicit missing-binding gaps",
@@ -125,14 +158,11 @@ def _default_scope(master: dict[str, Any], semantic_style: str) -> tuple[str, st
         events = scopes["events"]
         return "event", str(events[0]["id"]) if events else ""
     if semantic_style in STRUCTURAL_DIMENSION_STYLES:
-        topics = [item for item in scopes["topics"] if item.get("canonical_topic")]
+        topics = [item for item in scopes["topics"] if item.get("topic_heading")]
         if topics:
             return "topic", str(topics[0]["id"])
         identities = scopes["identities"]
         return "identity", str(identities[0]["id"]) if identities else ""
-    topics = [item for item in scopes["topics"] if item.get("canonical_topic")]
-    if topics:
-        return "topic", str(topics[0]["id"])
     return "all", "all"
 
 
@@ -194,18 +224,14 @@ def normalize_projection_instance(spec: dict[str, Any], index: int, masters: dic
 
 def _topic_projection(master: dict[str, Any], instance: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, int | None]]:
     tree, graph = master["tree"], master["graph"]
-    root = instance["scope_ref"] if instance["scope_type"] == "topic" else "all"
-    filtered, hierarchy_depths, metadata = filter_for_instance(
+    if instance["scope_type"] == "all" or instance["scope_ref"] == "all":
+        return topic_all_graph(tree)
+    return topic_scope_graph(
         tree,
         graph,
-        root_topic=root,
-        dependency_depth=instance["relation_depth"],
-        external_visible_ids=set(),
+        instance["scope_ref"],
+        relation_depth=instance["relation_depth"],
     )
-    metadata["projection_style"] = "topic"
-    metadata["scope_type"] = instance["scope_type"]
-    metadata["scope_ref"] = instance["scope_ref"]
-    return filtered, metadata, hierarchy_depths
 
 
 def _impact_projection(master: dict[str, Any], instance: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, int | None]]:
@@ -302,6 +328,7 @@ def build_session_scene(
         "projection_count": len(instances),
         "master_refs": list(masters),
         "projection_master_rule": "each projection references one master; masters may feed many projections",
+        "structure_tree_indexes": "resolved_once_at_import",
         "cross_master_binding": "none unless explicitly provided by a future comparison/binding source",
         "cross_master_inference": False,
     }
