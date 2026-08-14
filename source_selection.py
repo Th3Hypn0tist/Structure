@@ -4,6 +4,7 @@ import hashlib
 import os
 import re
 import string
+import subprocess
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -34,19 +35,46 @@ def _is_wsl() -> bool:
         return False
 
 
-def _windows_to_wsl_path(value: str) -> str | None:
-    """Translate a Windows drive path to WSL's conventional /mnt/<drive> mount.
-
-    This is deliberately a transport/path compatibility conversion only. It
-    does not change source semantics and is used only when the server itself is
-    running on Linux/WSL.
-    """
-    if os.name == "nt":
-        return None
+def _strip_wrapping_quotes(value: str) -> str:
     path = str(value or "").strip()
+    if len(path) >= 2 and path[0] == path[-1] and path[0] in {"'", '"'}:
+        return path[1:-1].strip()
+    return path
+
+
+def _decode_file_url(value: str) -> str:
+    path = _strip_wrapping_quotes(value)
+    if not path.lower().startswith("file://"):
+        return path
+
+    parsed = urlparse(path)
+    decoded = unquote(parsed.path or "")
+
+    # file:///C:/Users/... -> C:/Users/... on every platform so the Windows
+    # identity survives long enough for the WSL conversion layer to see it.
+    if _WINDOWS_FILE_URL_PATH.match(decoded.replace("\\", "/")):
+        return decoded[1:]
+
+    # file://C:/Users/... is parsed with C: in netloc by urlparse.
+    if parsed.netloc and re.fullmatch(r"[A-Za-z]:", parsed.netloc):
+        return f"{parsed.netloc}{decoded}"
+
+    if os.name == "nt" and parsed.netloc and parsed.netloc.lower() not in {"", "localhost"}:
+        return f"//{parsed.netloc}{decoded}"
+    return decoded
+
+
+def _clean_directory_path(value: str) -> str:
+    path = _decode_file_url(value)
+    path = os.path.expandvars(os.path.expanduser(path))
+    return os.path.normpath(path) if path else path
+
+
+def _manual_windows_to_wsl_path(value: str) -> str | None:
+    path = _decode_file_url(value).replace("\\", "/")
     match = _WINDOWS_DRIVE_PATH.match(path)
     if not match:
-        match = _WINDOWS_FILE_URL_PATH.match(path.replace("\\", "/"))
+        match = _WINDOWS_FILE_URL_PATH.match(path)
     if not match:
         return None
     drive, tail = match.groups()
@@ -54,35 +82,48 @@ def _windows_to_wsl_path(value: str) -> str | None:
     return os.path.normpath(f"/mnt/{drive.lower()}/{tail}")
 
 
-def _clean_directory_path(value: str) -> str:
-    path = str(value or "").strip()
-    if len(path) >= 2 and path[0] == path[-1] and path[0] in {"'", '"'}:
-        path = path[1:-1].strip()
-    if path.lower().startswith("file://"):
-        parsed = urlparse(path)
-        decoded = unquote(parsed.path or "")
-        if os.name == "nt":
-            if parsed.netloc and parsed.netloc.lower() not in {"", "localhost"}:
-                decoded = f"//{parsed.netloc}{decoded}"
-            elif len(decoded) >= 3 and decoded[0] == "/" and decoded[2] == ":":
-                decoded = decoded[1:]
-        path = decoded
-    path = os.path.expandvars(os.path.expanduser(path))
-    return os.path.normpath(path) if path else path
+def _windows_to_wsl_path(value: str) -> str | None:
+    """Translate Windows paths when the server is running under WSL.
+
+    Prefer WSL's own `wslpath` conversion because it respects the active WSL
+    mount configuration. Fall back to the conventional /mnt/<drive> mapping.
+    """
+    if os.name == "nt":
+        return None
+
+    raw = _decode_file_url(value)
+    if not _WINDOWS_DRIVE_PATH.match(raw.replace("\\", "/")):
+        return None
+
+    if _is_wsl():
+        try:
+            result = subprocess.run(
+                ["wslpath", "-u", raw],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            converted = result.stdout.strip()
+            if converted:
+                return os.path.normpath(converted)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    return _manual_windows_to_wsl_path(raw)
 
 
 def _directory_candidates(path: str) -> list[str]:
-    """Return native path first and WSL-converted Windows path as fallback."""
-    cleaned = _clean_directory_path(path)
-    candidates: list[str] = []
-    if cleaned:
-        candidates.append(cleaned)
+    """Return WSL-converted Windows path first, then native Linux path."""
+    raw = _strip_wrapping_quotes(path)
+    cleaned = _clean_directory_path(raw)
+    converted = _windows_to_wsl_path(raw)
 
-    converted = _windows_to_wsl_path(path)
-    if converted is None:
-        converted = _windows_to_wsl_path(cleaned)
-    if converted and converted not in candidates:
+    candidates: list[str] = []
+    if converted:
         candidates.append(converted)
+    if cleaned and cleaned not in candidates:
+        candidates.append(cleaned)
     return candidates
 
 
@@ -96,7 +137,8 @@ def normalize_source_spec(spec: dict[str, Any] | None) -> dict[str, str]:
             "branch": str(raw.get("branch") or "main").strip(),
         }
     if source_type == SOURCE_DIRECTORY:
-        path = _clean_directory_path(str(raw.get("path") or ""))
+        # Preserve Windows syntax here. Resolution owns platform conversion.
+        path = _strip_wrapping_quotes(str(raw.get("path") or ""))
         if not path:
             raise ProjectorError("SP_SOURCE_DIRECTORY_REQUIRED", "Local directory source requires a path")
         return {"type": SOURCE_DIRECTORY, "path": path}
@@ -104,8 +146,9 @@ def normalize_source_spec(spec: dict[str, Any] | None) -> dict[str, str]:
 
 
 def _resolve_directory(path: str) -> Path:
+    candidates = _directory_candidates(path)
     errors: list[Exception] = []
-    for candidate in _directory_candidates(path):
+    for candidate in candidates:
         try:
             root = Path(candidate).resolve(strict=True)
         except (OSError, RuntimeError) as exc:
@@ -115,11 +158,9 @@ def _resolve_directory(path: str) -> Path:
             return root
         errors.append(NotADirectoryError(candidate))
 
-    detail = ""
-    converted = _windows_to_wsl_path(path)
-    if converted:
-        detail = f" (WSL fallback: {converted!r})"
-    message = f"Unable to resolve local directory: {path!r}{detail}"
+    message = f"Unable to resolve local directory: {path!r}"
+    if candidates:
+        message += f"; tried: {', '.join(repr(item) for item in candidates)}"
     raise ProjectorError("SP_SOURCE_DIRECTORY_INVALID", message) from (errors[-1] if errors else None)
 
 
