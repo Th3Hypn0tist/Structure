@@ -16,7 +16,6 @@ def _default_offset(index: int, spacing: float = 1800.0) -> dict[str, Any]:
 
 
 def _default_instance_offset(instance: dict[str, Any], index: int) -> dict[str, Any]:
-    """Generic presentation-only placement with no semantic name hardbindings."""
     return _default_offset(index)
 
 
@@ -112,30 +111,14 @@ def compose_scene(
         projection_id = str(projection.get("id") or f"projection-{index}")
         object_id = f"projection:{projection_id}"
         transform = transforms.get(object_id) or transforms.get(projection_id) or _default_offset(index)
-        obj = projection_to_object(
-            projection,
-            source_tree,
-            object_id=object_id,
-            transform=transform,
-            primitive=primitive,
-        )
+        obj = projection_to_object(projection, source_tree, object_id=object_id, transform=transform, primitive=primitive)
         scene["objects"].append(obj)
         nodes_by_object[object_id] = {str(node.get("id")) for node in obj.get("nodes", [])}
         if include_internal_connections:
-            scene["connections"].extend(projection_connections(
-                projection,
-                source_tree,
-                object_id=object_id,
-                connection_primitive=connection_primitive_ref,
-            ))
+            scene["connections"].extend(projection_connections(projection, source_tree, object_id=object_id, connection_primitive=connection_primitive_ref))
 
     if include_cross_projection_connections:
-        _append_cross_projection_connections(
-            scene,
-            source_tree,
-            nodes_by_object,
-            connection_primitive_ref=connection_primitive_ref,
-        )
+        _append_cross_projection_connections(scene, source_tree, nodes_by_object, connection_primitive_ref=connection_primitive_ref)
     return _finish_scene(scene)
 
 
@@ -148,7 +131,7 @@ def compose_projection_instances(
     include_internal_connections: bool = True,
     include_cross_projection_connections: bool = True,
 ) -> dict[str, Any]:
-    """Compose named projection instances with independent semantic and visual identity."""
+    """Compose canonical projection instances without re-resolving semantics."""
     scene = new_scene(source_tree=source_tree)
     nodes_by_object: dict[str, set[str]] = {}
     connection_primitive_ref, _definition = resolve_primitive(connection_primitive, connection=True)
@@ -162,52 +145,42 @@ def compose_projection_instances(
         object_id = f"projection-instance:{instance_id}"
         transform = deepcopy(instance.get("transform") or _default_instance_offset(instance, index))
 
-        obj = projection_to_object(
-            projection,
-            source_tree,
-            object_id=object_id,
-            transform=transform,
-            primitive=primitive,
-        )
-        obj["name"] = instance["name"]
-        obj["title"] = instance["name"]
-        obj["instance_id"] = instance_id
-        obj["projection_style"] = instance["projection_style"]
-        obj["projection_dimension"] = instance["projection_dimension"]
-        obj["projection_generator"] = instance["projection_generator"]
-        obj["root_topic"] = instance.get("root_topic")
-        obj["dependency_depth"] = instance.get("dependency_depth", 0)
-        obj["relation_depth"] = instance.get("relation_depth", instance.get("dependency_depth", 0))
-        obj["filter"] = filter_metadata
-        obj["local_origin"] = deepcopy(projection.get("local_origin", {}))
-        obj["style_defaults"] = {
-            "even": "#087CFF",
-            "odd": "#AAB2C2",
-            "title": "#0B356B",
-            "label_text": "#FFFFFF",
-            "root_label_text": "#FFFFFF",
-        }
+        obj = projection_to_object(projection, source_tree, object_id=object_id, transform=transform, primitive=primitive)
+        obj.update({
+            "name": instance["name"],
+            "title": instance["name"],
+            "instance_id": instance_id,
+            "projection_base": instance["projection_base"],
+            "projection_style": instance["projection_style"],
+            "projection_dimension": instance["projection_dimension"],
+            "projection_generator": instance["projection_generator"],
+            "scope_type": instance["scope_type"],
+            "scope_ref": instance["scope_ref"],
+            "scope_style": instance["scope_style"],
+            "relation_depth": instance.get("relation_depth", 0),
+            "impact_depth": instance.get("impact_depth", 32),
+            "filter": filter_metadata,
+            "local_origin": deepcopy(projection.get("local_origin", {})),
+            "style_defaults": {
+                "base": "#087CFF",
+                "related": "#AAB2C2",
+                "causal": "#FFD83D",
+                "gap": "#FF176B",
+                "label_text": "#FFFFFF",
+            },
+        })
 
         for node in obj.get("nodes", []):
             node_id = str(node.get("source_ref") or node.get("id"))
-            node.setdefault("properties", {})["hierarchy_depth"] = hierarchy_depths.get(node_id)
+            projected_depth = hierarchy_depths.get(node_id)
+            if projected_depth is not None:
+                node.setdefault("properties", {})["hierarchy_depth"] = projected_depth
 
         scene["objects"].append(obj)
         nodes_by_object[object_id] = {str(node.get("id")) for node in obj.get("nodes", [])}
-
         if include_internal_connections:
-            scene["connections"].extend(projection_connections(
-                projection,
-                source_tree,
-                object_id=object_id,
-                connection_primitive=connection_primitive_ref,
-            ))
+            scene["connections"].extend(projection_connections(projection, source_tree, object_id=object_id, connection_primitive=connection_primitive_ref))
 
     if include_cross_projection_connections:
-        _append_cross_projection_connections(
-            scene,
-            source_tree,
-            nodes_by_object,
-            connection_primitive_ref=connection_primitive_ref,
-        )
+        _append_cross_projection_connections(scene, source_tree, nodes_by_object, connection_primitive_ref=connection_primitive_ref)
     return _finish_scene(scene)
