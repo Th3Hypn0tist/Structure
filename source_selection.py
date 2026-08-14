@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import os
+import string
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 from source_adapter import load_snapshot
 from structureprojector import ProjectorError, SOURCE_REPO, SourceSnapshot
@@ -17,6 +19,23 @@ SOURCE_GITHUB = "github"
 SOURCE_DIRECTORY = "directory"
 
 
+def _clean_directory_path(value: str) -> str:
+    path = str(value or "").strip()
+    if len(path) >= 2 and path[0] == path[-1] and path[0] in {"'", '"'}:
+        path = path[1:-1].strip()
+    if path.lower().startswith("file://"):
+        parsed = urlparse(path)
+        decoded = unquote(parsed.path or "")
+        if os.name == "nt":
+            if parsed.netloc and parsed.netloc.lower() not in {"", "localhost"}:
+                decoded = f"//{parsed.netloc}{decoded}"
+            elif len(decoded) >= 3 and decoded[0] == "/" and decoded[2] == ":":
+                decoded = decoded[1:]
+        path = decoded
+    path = os.path.expandvars(os.path.expanduser(path))
+    return os.path.normpath(path) if path else path
+
+
 def normalize_source_spec(spec: dict[str, Any] | None) -> dict[str, str]:
     raw = spec if isinstance(spec, dict) else {}
     source_type = str(raw.get("type") or SOURCE_GITHUB).strip().lower()
@@ -27,21 +46,53 @@ def normalize_source_spec(spec: dict[str, Any] | None) -> dict[str, str]:
             "branch": str(raw.get("branch") or "main").strip(),
         }
     if source_type == SOURCE_DIRECTORY:
-        path = str(raw.get("path") or "").strip()
+        path = _clean_directory_path(str(raw.get("path") or ""))
         if not path:
             raise ProjectorError("SP_SOURCE_DIRECTORY_REQUIRED", "Local directory source requires a path")
         return {"type": SOURCE_DIRECTORY, "path": path}
     raise ProjectorError("SP_SOURCE_TYPE", f"Unsupported source type: {source_type!r}")
 
 
-def load_directory_snapshot(path: str) -> SourceSnapshot:
-    root = Path(path).expanduser()
+def _resolve_directory(path: str) -> Path:
+    cleaned = _clean_directory_path(path)
     try:
-        root = root.resolve(strict=True)
+        root = Path(cleaned).resolve(strict=True)
     except (OSError, RuntimeError) as exc:
         raise ProjectorError("SP_SOURCE_DIRECTORY_INVALID", f"Unable to resolve local directory: {path!r}") from exc
     if not root.is_dir():
         raise ProjectorError("SP_SOURCE_DIRECTORY_INVALID", f"Local source is not a directory: {str(root)!r}")
+    return root
+
+
+def directory_roots() -> list[str]:
+    if os.name == "nt":
+        return [f"{letter}:\\" for letter in string.ascii_uppercase if os.path.isdir(f"{letter}:\\")]
+    return [os.path.sep]
+
+
+def browse_directories(path: str | None = None) -> dict[str, Any]:
+    """List directories as seen by the Structure server, never by path guessing in the browser."""
+    root = _resolve_directory(path) if path else Path.cwd().resolve()
+    try:
+        directories = [
+            {"name": item.name, "path": str(item)}
+            for item in sorted(root.iterdir(), key=lambda item: item.name.lower())
+            if item.is_dir() and not item.is_symlink() and item.name != ".git"
+        ]
+    except (OSError, PermissionError) as exc:
+        raise ProjectorError("SP_SOURCE_DIRECTORY_BROWSE", f"Unable to browse local directory: {str(root)!r}") from exc
+
+    parent = root.parent if root.parent != root else None
+    return {
+        "path": str(root),
+        "parent": str(parent) if parent is not None else None,
+        "roots": directory_roots(),
+        "directories": directories,
+    }
+
+
+def load_directory_snapshot(path: str) -> SourceSnapshot:
+    root = _resolve_directory(path)
 
     files: dict[str, bytes] = {}
     digest = hashlib.sha256()
