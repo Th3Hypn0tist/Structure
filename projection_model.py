@@ -80,12 +80,6 @@ SCOPE_STYLES: dict[str, dict[str, Any]] = {
 }
 
 
-LEGACY_BASE_ALIASES = {
-    "topic": "map",
-    "impact": "event",
-}
-
-
 def projection_base_catalog() -> list[dict[str, Any]]:
     return [
         {
@@ -98,30 +92,24 @@ def projection_base_catalog() -> list[dict[str, Any]]:
 
 
 def scope_style_catalog() -> list[dict[str, Any]]:
-    return [
-        {"id": style_id, **deepcopy(spec)}
-        for style_id, spec in SCOPE_STYLES.items()
-    ]
+    return [{"id": style_id, **deepcopy(spec)} for style_id, spec in SCOPE_STYLES.items()]
 
 
 def normalize_projection_base(value: Any) -> str:
     base = str(value or "map").strip()
-    base = LEGACY_BASE_ALIASES.get(base, base)
     if base not in PROJECTION_BASES:
         raise KeyError(f"Unknown projection base: {base}")
     return base
 
 
 def compatible_projection_styles(base_id: str) -> list[dict[str, Any]]:
-    base_id = normalize_projection_base(base_id)
-    return base_style_catalog(base_id)
+    return base_style_catalog(normalize_projection_base(base_id))
 
 
 def resolve_projection_style(base_id: str, style: Any, dimension: Any) -> tuple[str, str, str]:
     base_id = normalize_projection_base(base_id)
     base = PROJECTION_BASES[base_id]
-    style_id = str(style or base["default_style"]).strip()
-    return resolve_style(base_id, style_id, str(dimension or "3d"))
+    return resolve_style(base_id, str(style or base["default_style"]).strip(), str(dimension or "3d"))
 
 
 def normalize_scope_style(value: Any) -> str:
