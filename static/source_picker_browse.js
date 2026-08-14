@@ -14,13 +14,35 @@
       .directory-browser{margin-top:8px;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:#05070a}
       .directory-browser-head{display:flex;gap:6px;align-items:center;padding:7px;border-bottom:1px solid var(--line)}
       .directory-browser-path{flex:1;min-width:0;font:11px ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--muted)}
+      .directory-browser-format{font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--blue);white-space:nowrap}
       .directory-browser-roots{display:flex;gap:5px;overflow-x:auto;padding:6px 7px;border-bottom:1px solid var(--line)}
-      .directory-browser-list{max-height:260px;overflow:auto;padding:5px}
-      .directory-browser-item{display:block;width:100%;text-align:left;border:0;border-radius:5px;padding:7px 8px;background:transparent}
+      .directory-browser-list{max-height:300px;overflow:auto;padding:5px}
+      .directory-browser-item{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;width:100%;text-align:left;border:0;border-radius:5px;padding:8px;background:transparent}
       .directory-browser-item:hover{background:#0b1420}
+      .directory-browser-item .dir-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .directory-browser-item .dir-format{font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--blue)}
       .directory-path-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px}
+      .directory-browser-help{padding:6px 8px;border-top:1px solid var(--line);color:var(--muted);font-size:10px}
     `;
     document.head.appendChild(style);
+  }
+
+  function formatLabel(value){
+    if(value==='canonical_project_root')return 'Canonical project';
+    if(value==='canonical_root')return 'Canonical';
+    if(value==='canonical_json_root')return 'Canonical JSON';
+    return '';
+  }
+
+  function activateDirectory(popup,path){
+    const input=popup?.querySelector('[data-source-path]');
+    const type=popup?.querySelector('[data-source-type]');
+    const use=popup?.querySelector('[data-source-use]');
+    if(!input||!use)return;
+    if(type)type.value='directory';
+    input.value=path||'';
+    input.dispatchEvent(new Event('change',{bubbles:true}));
+    use.click();
   }
 
   async function renderBrowser(host,path){
@@ -28,29 +50,40 @@
     try{
       const data=await directoryData(path);
       host.dataset.currentPath=data.path||'';
+      const currentFormat=formatLabel(data.source_format);
       host.innerHTML=`
         <div class="directory-browser-head">
           <button type="button" data-dir-parent ${data.parent?'':'disabled'}>↑</button>
           <span class="directory-browser-path" title="${esc(data.path||'')}">${esc(data.path||'')}</span>
-          <button type="button" data-dir-select>Select this directory</button>
+          ${currentFormat?`<span class="directory-browser-format">${esc(currentFormat)}</span>`:''}
         </div>
         ${(data.roots||[]).length?`<div class="directory-browser-roots">${data.roots.map(root=>`<button type="button" data-dir-open="${esc(root)}">${esc(root)}</button>`).join('')}</div>`:''}
         <div class="directory-browser-list">
-          ${(data.directories||[]).map(item=>`<button type="button" class="directory-browser-item" data-dir-open="${esc(item.path)}">▸ ${esc(item.name)}</button>`).join('')||'<div class="muted" style="padding:8px">No subdirectories.</div>'}
-        </div>`;
+          ${(data.directories||[]).map(item=>{
+            const hint=formatLabel(item.source_format);
+            return `<button type="button" class="directory-browser-item" data-dir-open="${esc(item.path)}"><span class="dir-name">▸ ${esc(item.name)}</span>${hint?`<span class="dir-format">${esc(hint)}</span>`:''}</button>`;
+          }).join('')||'<div class="muted" style="padding:8px">No subdirectories.</div>'}
+        </div>
+        <div class="directory-browser-help">Click to open · double-click to use as source${currentFormat?' · double-click the path above to use current directory':''}</div>`;
+
       host.querySelector('[data-dir-parent]')?.addEventListener('click',()=>renderBrowser(host,data.parent));
-      host.querySelectorAll('[data-dir-open]').forEach(button=>button.addEventListener('click',()=>renderBrowser(host,button.dataset.dirOpen)));
-      host.querySelector('[data-dir-select]')?.addEventListener('click',()=>{
-        const popup=host.closest('.source-popup');
-        const input=popup?.querySelector('[data-source-path]');
-        const type=popup?.querySelector('[data-source-type]');
-        const use=popup?.querySelector('[data-source-use]');
-        if(!input||!use)return;
-        if(type)type.value='directory';
-        input.value=data.path||'';
-        input.dispatchEvent(new Event('change',{bubbles:true}));
-        use.click();
+      host.querySelectorAll('[data-dir-open]').forEach(button=>{
+        let singleClickTimer=null;
+        button.addEventListener('click',()=>{
+          clearTimeout(singleClickTimer);
+          singleClickTimer=setTimeout(()=>renderBrowser(host,button.dataset.dirOpen),220);
+        });
+        button.addEventListener('dblclick',event=>{
+          event.preventDefault();
+          clearTimeout(singleClickTimer);
+          activateDirectory(host.closest('.source-popup'),button.dataset.dirOpen);
+        });
       });
+      const pathEl=host.querySelector('.directory-browser-path');
+      if(pathEl){
+        pathEl.style.cursor='default';
+        pathEl.addEventListener('dblclick',()=>activateDirectory(host.closest('.source-popup'),data.path));
+      }
     }catch(error){
       host.innerHTML=`<div class="source-error" style="padding:9px">${esc(error.message||String(error))}</div>`;
     }
