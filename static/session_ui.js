@@ -1,6 +1,9 @@
 'use strict';
 
 (function installStructureSessionUI(){
+  let projectionBusy=false;
+  let progressHideTimer=null;
+
   function semanticStyles(){return S.catalog?.projection_styles||[]}
   function visualStyles(){return S.catalog?.visual_styles||S.catalog?.styles||[]}
   function masters(){return S.catalog?.masters||[]}
@@ -62,6 +65,103 @@
     validScopeType(inst);
     inst.root_topic=inst.scope_ref;
     return inst;
+  }
+
+  function ensureProjectionProgressUI(){
+    if(document.getElementById('projectionProgressStyle'))return;
+    const style=document.createElement('style');
+    style.id='projectionProgressStyle';
+    style.textContent=`
+      #projectionProgress{position:fixed;z-index:330;left:50%;top:58px;transform:translateX(-50%);width:min(620px,calc(100vw - 32px));padding:9px 11px;background:#080b10ee;border:1px solid var(--line);border-radius:9px;box-shadow:0 12px 40px #0008;display:none;pointer-events:none}
+      #projectionProgress.active{display:block}
+      #projectionProgress.error{border-color:var(--red)}
+      #projectionProgress .projection-progress-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:7px;font-size:10px}
+      #projectionProgress .projection-progress-label{color:#fff;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      #projectionProgress .projection-progress-stage{color:var(--muted);white-space:nowrap}
+      #projectionProgress .projection-progress-track{height:4px;background:#151b26;border-radius:999px;overflow:hidden}
+      #projectionProgress .projection-progress-bar{height:100%;width:0%;background:var(--blue);border-radius:999px;transition:width .18s ease}
+      #projectionProgress.error .projection-progress-bar{background:var(--red)}
+      #instances.projection-busy{opacity:.72}
+      #instances.projection-busy select,#instances.projection-busy input,#instances.projection-busy button{cursor:wait}
+    `;
+    document.head.appendChild(style);
+    const box=document.createElement('div');
+    box.id='projectionProgress';
+    box.innerHTML=`<div class="projection-progress-head"><span class="projection-progress-label">Projection</span><span class="projection-progress-stage">Waiting</span></div><div class="projection-progress-track"><div class="projection-progress-bar"></div></div>`;
+    document.body.appendChild(box);
+  }
+
+  function currentProjectionLabel(){
+    if(!S.instances.length)return'Projection';
+    const inst=normalize(S.instances[S.instances.length-1]);
+    const semantic=semanticFor(inst)?.label||inst.semantic_projection_style||'Projection';
+    const visual=visualFor(inst)?.label||inst.visual_style||'';
+    return `${inst.name} · ${semantic} · ${visual} ${String(inst.projection_dimension||'').toUpperCase()}`.trim();
+  }
+
+  function setProjectionProgress(percent,stage,label=null,bad=false){
+    ensureProjectionProgressUI();
+    clearTimeout(progressHideTimer);
+    const box=document.getElementById('projectionProgress');
+    box.classList.add('active');
+    box.classList.toggle('error',bad);
+    box.querySelector('.projection-progress-label').textContent=label||currentProjectionLabel();
+    box.querySelector('.projection-progress-stage').textContent=stage;
+    box.querySelector('.projection-progress-bar').style.width=`${Math.max(0,Math.min(100,Number(percent)||0))}%`;
+  }
+
+  function hideProjectionProgress(delay=260){
+    clearTimeout(progressHideTimer);
+    progressHideTimer=setTimeout(()=>{
+      const box=document.getElementById('projectionProgress');
+      if(box)box.classList.remove('active','error');
+    },delay);
+  }
+
+  function applyProjectionLock(){
+    const locked=projectionBusy;
+    const instances=document.getElementById('instances');
+    if(instances){
+      instances.classList.toggle('projection-busy',locked);
+      instances.querySelectorAll('select,input,button').forEach(el=>{el.disabled=locked;});
+    }
+    for(const id of ['addInstance','reload','sourcePickerButton']){
+      const el=document.getElementById(id);if(el)el.disabled=locked;
+    }
+  }
+
+  function beginProjectionWork(label=null){
+    if(projectionBusy)return false;
+    projectionBusy=true;
+    clearTimeout(S.reloadTimer);
+    S.reloadTimer=null;
+    setProjectionProgress(6,'Selected — preparing…',label||currentProjectionLabel());
+    applyProjectionLock();
+    return true;
+  }
+
+  function finishProjectionWork(){
+    setProjectionProgress(100,'Rendered',currentProjectionLabel());
+    projectionBusy=false;
+    applyProjectionLock();
+    hideProjectionProgress(420);
+  }
+
+  function failProjectionWork(error){
+    setProjectionProgress(100,'Failed',currentProjectionLabel(),true);
+    projectionBusy=false;
+    applyProjectionLock();
+    hideProjectionProgress(1800);
+    showError(error);
+  }
+
+  function nextAnimationFrame(){return new Promise(resolve=>requestAnimationFrame(resolve));}
+  async function waitUntilPainted(){
+    // draw() submits the frame synchronously. Two RAF boundaries guarantee that
+    // the browser has had a paint opportunity with that submitted frame before
+    // projection controls are unlocked.
+    await nextAnimationFrame();
+    await nextAnimationFrame();
   }
 
   const oldNewInstance=newInstance;
@@ -133,7 +233,8 @@
   renderInstances=function(){
     oldRenderInstances();
     $('#instances').querySelectorAll('[data-session]').forEach(el=>{
-      el.onchange=()=>{
+      el.onchange=async()=>{
+        if(projectionBusy)return;
         const inst=S.instances.find(x=>x.id===el.dataset.session);if(!inst)return;
         const key=el.dataset.sessionKey;
         if(key==='relation_depth'||key==='impact_depth')inst[key]=Math.max(0,Number(el.value)||0);else inst[key]=el.value;
@@ -147,9 +248,10 @@
         }
         normalize(inst);
         renderInstances();
-        scheduleSceneReload(0);
+        await loadScene({label:currentProjectionLabel()});
       };
     });
+    applyProjectionLock();
   };
 
   async function refreshSessionCatalog(){
@@ -165,26 +267,34 @@
     renderInstances();
   }
 
-  loadScene=async function(){
+  loadScene=async function(options={}){
     if(!S.instances.length){
       S.scene=null;
       rebuildRenderer(false);
       renderSceneInfo();
       draw();
       setStatus(S.sourceSpec?'master ready':'choose source');
-      return;
+      return true;
     }
-    if(!S.sourceSpec){showError(new Error('Projection has no selected source/master.'));return;}
+    if(!S.sourceSpec){showError(new Error('Projection has no selected source/master.'));return false;}
+    if(!beginProjectionWork(options.label))return false;
 
     setStatus('projecting');
     $('#error').textContent='None.';
     try{
+      // Let the selected-state + progress bar paint before the potentially long
+      // source read / projection calculation begins.
+      await nextAnimationFrame();
+      setProjectionProgress(18,'Calculating semantic projection…');
+
       if(!S.catalog?.projection_styles)await refreshSessionCatalog();
       const source=S.sourceSpec;
       const data=await postJSON('/api/scene',{
         sources:[{id:'master-1',name:source.type==='directory'?(source.path||'Directory'):(source.repo||'Repository'),source}],
         instances:instancePayload(),
       });
+
+      setProjectionProgress(62,'Projection calculated — building renderer…');
       S.scene=data.scene;
       S.catalog=data.catalog||S.catalog;
       S.source=data.masters?.[0]?.source||{};
@@ -193,33 +303,48 @@
       syncChannels();
       renderInstances();
       renderChannels();
+
+      setProjectionProgress(78,'Building geometry…');
       rebuildRenderer(false);
       fit(false);
       renderSceneInfo();
+
+      setProjectionProgress(92,'Rendering first frame…');
       draw();
+      await waitUntilPainted();
+
       const nodeCount=S.scene?.objects?.reduce((n,o)=>n+(o.nodes?.length||0),0)||0;
       setStatus(`${S.instances.length} projection${S.instances.length===1?'':'s'} · ${nodeCount} nodes`);
-    }catch(e){showError(e)}
+      finishProjectionWork();
+      return true;
+    }catch(e){
+      failProjectionWork(e);
+      return false;
+    }
   };
 
   function bindProjectionActions(){
     const add=$('#addInstance');
     if(add){
       add.onclick=async()=>{
+        if(projectionBusy)return;
         if(!S.sourceSpec||!masters().length){showError(new Error('Select a source first.'));return;}
         try{
           const inst=newInstance();
           S.instances.push(inst);
           renderInstances();
-          await loadScene();
+          await loadScene({label:currentProjectionLabel()});
         }catch(e){showError(e)}
       };
     }
     const reload=$('#reload');
-    if(reload)reload.onclick=()=>loadScene();
+    if(reload)reload.onclick=()=>{if(!projectionBusy)loadScene({label:currentProjectionLabel()});};
+    applyProjectionLock();
   }
 
+  ensureProjectionProgressUI();
   bindProjectionActions();
   window.spRefreshSessionCatalog=refreshSessionCatalog;
   window.spBindProjectionActions=bindProjectionActions;
+  window.spProjectionBusy=()=>projectionBusy;
 })();
