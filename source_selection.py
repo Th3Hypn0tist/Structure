@@ -17,6 +17,7 @@ if not hasattr(ProjectorError, "to_dict") and hasattr(ProjectorError, "as_dict")
 
 SOURCE_GITHUB = "github"
 SOURCE_DIRECTORY = "directory"
+CANONICAL_BOOTSTRAP = "00_Contract_Format.json"
 
 
 def _clean_directory_path(value: str) -> str:
@@ -70,12 +71,42 @@ def directory_roots() -> list[str]:
     return [os.path.sep]
 
 
+def _canonical_mount(files: dict[str, bytes]) -> tuple[dict[str, bytes], str | None]:
+    """Normalize only explicit Contract Format bootstrap locations.
+
+    This is representation mounting, not semantic path inference. The bootstrap
+    file itself declares the format; once found at one of the supported source
+    roots, the snapshot is mounted at the reader's canonical serialization root.
+    """
+    if f"canonical/json/{CANONICAL_BOOTSTRAP}" in files:
+        return files, "project_root"
+    if f"json/{CANONICAL_BOOTSTRAP}" in files:
+        return {f"canonical/{path}": payload for path, payload in files.items()}, "canonical_root"
+    if CANONICAL_BOOTSTRAP in files:
+        return {f"canonical/json/{path}": payload for path, payload in files.items()}, "canonical_json_root"
+    return files, None
+
+
+def _directory_format_hint(root: Path) -> str:
+    if (root / "canonical" / "json" / CANONICAL_BOOTSTRAP).is_file():
+        return "canonical_project_root"
+    if (root / "json" / CANONICAL_BOOTSTRAP).is_file():
+        return "canonical_root"
+    if (root / CANONICAL_BOOTSTRAP).is_file():
+        return "canonical_json_root"
+    return "directory"
+
+
 def browse_directories(path: str | None = None) -> dict[str, Any]:
-    """List directories as seen by the Structure server, never by path guessing in the browser."""
+    """List directories as seen by the Structure server."""
     root = _resolve_directory(path) if path else Path.cwd().resolve()
     try:
         directories = [
-            {"name": item.name, "path": str(item)}
+            {
+                "name": item.name,
+                "path": str(item),
+                "source_format": _directory_format_hint(item),
+            }
             for item in sorted(root.iterdir(), key=lambda item: item.name.lower())
             if item.is_dir() and not item.is_symlink() and item.name != ".git"
         ]
@@ -87,6 +118,7 @@ def browse_directories(path: str | None = None) -> dict[str, Any]:
         "path": str(root),
         "parent": str(parent) if parent is not None else None,
         "roots": directory_roots(),
+        "source_format": _directory_format_hint(root),
         "directories": directories,
     }
 
@@ -119,11 +151,12 @@ def load_directory_snapshot(path: str) -> SourceSnapshot:
     except (OSError, PermissionError) as exc:
         raise ProjectorError("SP_SOURCE_DIRECTORY_READ", f"Unable to read local directory source: {str(root)!r}") from exc
 
+    mounted_files, _ = _canonical_mount(files)
     return SourceSnapshot(
         repo=f"directory:{root}",
         branch="local",
         revision=digest.hexdigest(),
-        files=files,
+        files=mounted_files,
     )
 
 
