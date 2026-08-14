@@ -43,19 +43,16 @@ def read(snapshot, options=None):
 
     snapshot = _canonicalized_snapshot(snapshot)
     tree = _read(snapshot, options)
+
+    # Version-specific enrichment may add CW features, but explicit Topic
+    # extraction is always performed afterwards. Topic is a structured
+    # capability of the source, not a Contract Format version switch.
     if is_v14(snapshot):
         tree = enrich_v14(tree, snapshot)
-        tree["validation_errors"] = validate_tree(tree)
-        tree["valid"] = bool(tree.get("valid")) and not tree["validation_errors"]
-        tree["projectable"] = bool(tree.get("projectable")) and not tree.get("errors") and not tree["validation_errors"]
-        return tree
+    else:
+        tree = enrich(tree, snapshot)
 
-    # Topics are an explicit canonical capability, not a viewer-invented root
-    # hierarchy and not something that should disappear merely because the
-    # bootstrap version label is not exactly 1.4. Only actual topics[] data is
-    # materialized; there is deliberately no root-entry compatibility fallback.
     tree = enrich_topics(tree, snapshot)
-    tree = enrich(tree, snapshot)
     tree["validation_errors"] = validate_tree(tree)
     tree["valid"] = bool(tree.get("valid")) and not tree.get("errors") and not tree["validation_errors"]
     tree["projectable"] = bool(tree.get("projectable")) and not tree.get("errors") and not tree["validation_errors"]
