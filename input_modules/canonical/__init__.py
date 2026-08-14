@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from threading import RLock
+
 from cw14_model import is_v14
 from structure_index import build_structure_indexes
 from structure_tree import validate_tree
@@ -10,6 +14,17 @@ from .topic_enrichment import enrich_topics
 
 FORMAT_ROOT_FILENAME = "AIGMos_Canonical_Contract_Format_v1.4.0.json"
 LEGACY_BOOTSTRAP = "00_Contract_Format.json"
+_TREE_CACHE_LOCK = RLock()
+_TREE_CACHE = {}
+
+
+def _tree_cache_key(snapshot, options=None):
+    return (
+        str(getattr(snapshot, "repo", "")),
+        str(getattr(snapshot, "branch", "")),
+        str(getattr(snapshot, "revision", "")),
+        repr(options),
+    )
 
 
 def _project_candidates(snapshot):
@@ -63,6 +78,12 @@ def _canonicalized_snapshot(snapshot):
 
 
 def read(snapshot, options=None):
+    original_key = _tree_cache_key(snapshot, options)
+    with _TREE_CACHE_LOCK:
+        cached = _TREE_CACHE.get(original_key)
+        if cached is not None:
+            return cached
+
     canonical_snapshot = _canonicalized_snapshot(snapshot)
     if canonical_snapshot is None:
         tree = read_directory(snapshot, options)
@@ -71,7 +92,10 @@ def read(snapshot, options=None):
             "mode": "directory",
             "reason": f"no project-root {FORMAT_ROOT_FILENAME} bootstrap authority found",
             "legacy_bootstrap_is_authority": False,
+            "structure_tree_cache": "resolved_once_per_source_revision",
         }
+        with _TREE_CACHE_LOCK:
+            _TREE_CACHE[original_key] = tree
         return tree
 
     snapshot = canonical_snapshot
@@ -85,10 +109,9 @@ def read(snapshot, options=None):
         tree = enrich_topics(tree, snapshot)
         topic_reader = "generic_explicit"
 
-    # StructureTree is the normalized, pre-resolved model consumed by all
-    # projections. Expensive reusable topology/index work happens once here,
-    # immediately after source semantics are materialized, never independently
-    # inside each projection request.
+    # StructureTree is the pre-resolved immutable semantic model. All expensive
+    # source discovery, identity resolution, Topic resolution and reusable
+    # indexes are built once for this exact source revision.
     build_structure_indexes(tree)
 
     tree.setdefault("source_result", {})["canonical_reader"] = {
@@ -101,12 +124,9 @@ def read(snapshot, options=None):
         "topic_reader": topic_reader,
         "discovery_inference": False,
         "structure_indexes": "resolved_at_import",
+        "structure_tree_cache": "resolved_once_per_source_revision",
     }
 
-    # Validation findings describe the source; they do not make the source
-    # unprojectable. Structure must be able to project incomplete, ambiguous and
-    # internally inconsistent masters precisely so those gaps can be inspected.
-    # Only failure to materialize a usable StructureTree is projection-blocking.
     base_projectable = bool(tree.get("projectable"))
     tree["validation_errors"] = validate_tree(tree)
     tree["valid"] = bool(tree.get("valid")) and not tree.get("errors") and not tree["validation_errors"]
@@ -114,7 +134,15 @@ def read(snapshot, options=None):
     tree["degraded"] = bool(tree.get("errors") or tree["validation_errors"])
     tree["validation_finding_count"] = len(tree.get("errors", [])) + len(tree["validation_errors"])
     tree["source_result"]["canonical_reader"]["projection_policy"] = "validation_findings_do_not_block_projection"
+
+    with _TREE_CACHE_LOCK:
+        _TREE_CACHE[original_key] = tree
     return tree
 
 
-__all__ = ["read"]
+def clear_tree_cache():
+    with _TREE_CACHE_LOCK:
+        _TREE_CACHE.clear()
+
+
+__all__ = ["read", "clear_tree_cache"]
