@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import string
 import subprocess
 from pathlib import Path
+from threading import RLock
 from typing import Any
 from urllib.parse import unquote, urlparse
 
@@ -20,6 +22,8 @@ SOURCE_DIRECTORY = "directory"
 CANONICAL_BOOTSTRAP = "00_Contract_Format.json"
 _WINDOWS_DRIVE_PATH = re.compile(r"^([A-Za-z]):[\\/](.*)$")
 _WINDOWS_FILE_URL_PATH = re.compile(r"^/([A-Za-z]):/(.*)$")
+_SOURCE_LOCK = RLock()
+_SOURCE_SNAPSHOT_CACHE: dict[str, SourceSnapshot] = {}
 
 
 def _is_wsl() -> bool:
@@ -85,6 +89,10 @@ def normalize_source_spec(spec: dict[str, Any] | None) -> dict[str, str]:
     raise ProjectorError("SP_SOURCE_TYPE", f"Unsupported source type: {source_type!r}")
 
 
+def _source_cache_key(normalized: dict[str, str]) -> str:
+    return json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
 def _resolve_directory(path: str) -> Path:
     errors=[]; candidates=_directory_candidates(path)
     for candidate in candidates:
@@ -107,7 +115,6 @@ def directory_roots() -> list[str]:
 
 
 def _direct_format_hint(root: Path) -> str:
-    """Cheap O(1) hint only. Browser must never recursively scan a drive."""
     if (root / "canonical" / "json" / CANONICAL_BOOTSTRAP).is_file(): return "canonical_project_root"
     if (root / "json" / CANONICAL_BOOTSTRAP).is_file(): return "canonical_root"
     if (root / CANONICAL_BOOTSTRAP).is_file(): return "canonical_json_root"
@@ -115,16 +122,10 @@ def _direct_format_hint(root: Path) -> str:
 
 
 def _canonical_mount(files: dict[str, bytes]) -> tuple[dict[str, bytes], str | None]:
-    """Mount canonical content when its explicit bootstrap is present.
-
-    If the selected directory contains exactly one canonical subtree, scope to
-    that subtree. Multiple canonical trees are intentionally ambiguous.
-    """
     direct=(f"canonical/json/{CANONICAL_BOOTSTRAP}", f"json/{CANONICAL_BOOTSTRAP}", CANONICAL_BOOTSTRAP)
     if direct[0] in files: return files, "project_root"
     if direct[1] in files: return {f"canonical/{p}":v for p,v in files.items()}, "canonical_root"
     if direct[2] in files: return {f"canonical/json/{p}":v for p,v in files.items()}, "canonical_json_root"
-
     roots=[]
     for path in files:
         p=path.replace("\\","/")
@@ -148,8 +149,7 @@ def browse_directories(path: str | None = None) -> dict[str, Any]:
             for item in scan:
                 try:
                     if item.name==".git" or item.is_symlink() or not item.is_dir(follow_symlinks=False): continue
-                    p=Path(item.path)
-                    directories.append({"name":item.name,"path":str(p),"source_format":_direct_format_hint(p)})
+                    p=Path(item.path); directories.append({"name":item.name,"path":str(p),"source_format":_direct_format_hint(p)})
                 except OSError: continue
         directories.sort(key=lambda x:x["name"].lower())
     except (OSError,PermissionError) as exc:
@@ -174,9 +174,24 @@ def load_directory_snapshot(path: str) -> SourceSnapshot:
     return SourceSnapshot(repo=f"directory:{root}",branch="local",revision=digest.hexdigest(),files=mounted_files)
 
 
-def load_source(spec: dict[str, Any] | None) -> SourceSnapshot:
-    normalized=normalize_source_spec(spec)
-    return load_directory_snapshot(normalized["path"]) if normalized["type"]==SOURCE_DIRECTORY else load_snapshot(branch=normalized["branch"],repo=normalized["repo"])
+def load_source(spec: dict[str, Any] | None, *, refresh: bool = False) -> SourceSnapshot:
+    """Load a source once and reuse the immutable snapshot until explicit refresh."""
+    normalized=normalize_source_spec(spec); key=_source_cache_key(normalized)
+    with _SOURCE_LOCK:
+        if not refresh and key in _SOURCE_SNAPSHOT_CACHE:
+            return _SOURCE_SNAPSHOT_CACHE[key]
+    snapshot=load_directory_snapshot(normalized["path"]) if normalized["type"]==SOURCE_DIRECTORY else load_snapshot(branch=normalized["branch"],repo=normalized["repo"])
+    with _SOURCE_LOCK:
+        _SOURCE_SNAPSHOT_CACHE[key]=snapshot
+    return snapshot
+
+
+def clear_source_snapshot_cache(spec: dict[str, Any] | None = None) -> None:
+    with _SOURCE_LOCK:
+        if spec is None:
+            _SOURCE_SNAPSHOT_CACHE.clear()
+        else:
+            _SOURCE_SNAPSHOT_CACHE.pop(_source_cache_key(normalize_source_spec(spec)),None)
 
 
 def source_spec_from_query(query: dict[str,list[str]]) -> dict[str,str]:
