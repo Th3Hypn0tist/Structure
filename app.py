@@ -29,6 +29,7 @@ BASE_DIR = os.path.dirname(__file__)
 SCENE_VIEWER_HTML = os.path.join(BASE_DIR, 'static', 'scene_viewer_v4.html')
 SCENE_VIEWER_JS = os.path.join(BASE_DIR, 'static', 'scene_viewer_v4.js')
 SCENE_VIEWER_CARDS_JS = os.path.join(BASE_DIR, 'static', 'scene_viewer_v4_cards.js')
+SOURCE_SELECT_UI_JS = os.path.join(BASE_DIR, 'static', 'source_select_ui.js')
 SOURCE_PICKER_BROWSE_JS = os.path.join(BASE_DIR, 'static', 'source_picker_browse.js')
 EVENT_TRACE_VIEWER_JS = os.path.join(BASE_DIR, 'static', 'event_trace_viewer.js')
 SESSION_UI_JS = os.path.join(BASE_DIR, 'static', 'session_ui.js')
@@ -47,49 +48,19 @@ def _viewer_html_payload() -> bytes:
     text = text.replace('<title>StructureProjector</title>', '<title>Structure</title>')
     text = text.replace('<header><strong>StructureProjector</strong>', '<header><strong>Structure</strong>')
     text = text.replace('even = blue, odd = silver', 'odd = blue, even = silver')
-
-    # Empty startup still needs an explicit entry point for choosing the first
-    # source/master. Keep the legacy hidden branch control only as a GitHub
-    # picker implementation detail.
     text = text.replace(
         '<label>Branch <select id="branch"></select></label><button id="reload">Reload</button>',
         '<button id="sourcePickerButton">Select source</button><label style="display:none">Branch <select id="branch"></select></label><button id="reload">Reload</button>',
     )
-    text = text.replace(
-        "  S.sourceSpec ||= {type:'github',repo:DEFAULT_REPO,branch:$('#branch')?.value||'main'};",
-        "  S.sourceSpec ??= null;",
-    )
-    text = text.replace(
-        "  function ensureSourceUI(){\n    if($('#sourcePickerButton'))return;\n    const branch=$('#branch'),branchLabel=branch?.closest('label');if(branchLabel)branchLabel.style.display='none';\n    const button=document.createElement('button');button.id='sourcePickerButton';button.textContent=sourceLabel(S.sourceSpec);\n    const reload=$('#reload');reload?.parentElement?.insertBefore(button,reload||null);",
-        "  function ensureSourceUI(){\n    const branch=$('#branch'),branchLabel=branch?.closest('label');if(branchLabel)branchLabel.style.display='none';\n    let button=$('#sourcePickerButton');\n    if(!button){button=document.createElement('button');button.id='sourcePickerButton';const reload=$('#reload');reload?.parentElement?.insertBefore(button,reload||null);}\n    button.textContent=S.sourceSpec?sourceLabel(S.sourceSpec):'Select source';",
-    )
-    text = text.replace(
-        "    const previous=select.value||S.sourceSpec.branch||'main';",
-        "    const previous=select.value||S.sourceSpec?.branch||'main';",
-    )
-    text = text.replace(
-        "    normalizeInstancesForCatalog();\n    if(!S.instances.length)S.instances=[newInstance()];\n    $('#sourcePickerButton').textContent=sourceLabel(candidate);renderInstances();await loadScene();",
-        "    normalizeInstancesForCatalog();\n    $('#sourcePickerButton').textContent=sourceLabel(candidate);\n    renderInstances();\n    renderChannels();\n    $('#sceneInfo').textContent='Source loaded as master. Add a projection instance to project it.';\n    setStatus('source ready');",
-    )
-    text = text.replace(
-        "    const initialBranch=$('#branch')?.value||'main';S.sourceSpec={type:'github',repo:DEFAULT_REPO,branch:initialBranch};ensureSourceUI();",
-        "    S.sourceSpec=null;ensureSourceUI();",
-    )
-
-    for script in ('/static/source_picker_browse.js', '/static/event_trace_viewer.js', '/static/session_ui.js'):
+    # Load the explicit selector after legacy inline scripts so it owns the
+    # button handler and resets any legacy default source to null.
+    for script in ('/static/source_select_ui.js', '/static/source_picker_browse.js', '/static/event_trace_viewer.js', '/static/session_ui.js'):
         if script not in text:
             text = text.replace('</body>', f'<script src="{script}"></script>\n</body>')
     return text.encode('utf-8')
 
 
 def _viewer_js_payload() -> bytes:
-    """Serve the renderer without the legacy auto-load bootstrap.
-
-    Structure opens with no source, no master and no projection. The renderer and
-    UI controls are initialized locally only. Source selection is the first
-    operation that may read semantic data; the first selected source becomes the
-    first master, and projections are created explicitly afterwards.
-    """
     text = _file_payload(SCENE_VIEWER_JS).decode('utf-8')
     legacy = '\ninit();\n'
     empty_bootstrap = '''
@@ -117,8 +88,7 @@ def _viewer_js_payload() -> bytes:
 '''
     if legacy not in text:
         raise RuntimeError('scene_viewer_v4.js legacy init bootstrap marker not found')
-    text = text.replace(legacy, '\n' + empty_bootstrap, 1)
-    return text.encode('utf-8')
+    return text.replace(legacy, '\n' + empty_bootstrap, 1).encode('utf-8')
 
 
 def _viewer_cards_payload() -> bytes:
@@ -194,7 +164,7 @@ def _session_result(body: dict) -> dict:
 
 
 class Handler(BaseHandler):
-    server_version = 'Structure/0.27.1'
+    server_version = 'Structure/0.27.2'
 
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode('utf-8')
@@ -222,6 +192,7 @@ class Handler(BaseHandler):
             if path == '/': return self._write_body(_viewer_html_payload(), 'text/html; charset=utf-8')
             if path == '/static/scene_viewer_v4.js': return self._write_body(_viewer_js_payload(), 'application/javascript; charset=utf-8')
             if path == '/static/scene_viewer_v4_cards.js': return self._write_body(_viewer_cards_payload(), 'application/javascript; charset=utf-8')
+            if path == '/static/source_select_ui.js': return self._write_file(SOURCE_SELECT_UI_JS, 'application/javascript; charset=utf-8')
             if path == '/static/source_picker_browse.js': return self._write_file(SOURCE_PICKER_BROWSE_JS, 'application/javascript; charset=utf-8')
             if path == '/static/event_trace_viewer.js': return self._write_file(EVENT_TRACE_VIEWER_JS, 'application/javascript; charset=utf-8')
             if path == '/static/session_ui.js': return self._write_file(SESSION_UI_JS, 'application/javascript; charset=utf-8')
