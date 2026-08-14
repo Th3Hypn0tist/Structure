@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Callable
 
+from event_projection import build_event_projection
 from event_trace import build_event_surface, event_catalog
 from input_modules.canonical import read as read_canonical
 from projection_instances import filter_for_instance, topic_catalog
@@ -10,7 +11,6 @@ from scene_composer import compose_projection_instances
 from semantic_projection_styles import (
     PROJECTION_STYLES,
     STRUCTURAL_DIMENSION_STYLES,
-    impact_graph,
     projection_style_catalog,
     structural_dimension_graph,
 )
@@ -113,6 +113,7 @@ def session_catalog(masters: dict[str, dict[str, Any]]) -> dict[str, Any]:
             "projection_style": "semantic question asked of the master",
             "visual_style": "geometry only; it consumes the semantic projection graph and never changes semantic membership",
             "visual_dimension": "every visual style has native 2D and 3D generators",
+            "event_projection": "Event impact includes Event identity, payload, owner, explicit Topic/Flow context, actual causal bindings, and explicit missing-binding gaps",
             "cross_master_binding": "explicit only; never inferred by matching display names",
         },
     }
@@ -208,18 +209,12 @@ def _topic_projection(master: dict[str, Any], instance: dict[str, Any]) -> tuple
 
 
 def _impact_projection(master: dict[str, Any], instance: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, int | None]]:
-    projected, metadata = impact_graph(
+    return build_event_projection(
         master["tree"],
         master["graph"],
         instance["scope_ref"],
         max_depth=instance["impact_depth"],
     )
-    hierarchy_depths = {
-        str(node.get("id")): int(node.get("impact_wave") or 0)
-        for node in projected.get("nodes", [])
-        if node.get("id") is not None
-    }
-    return projected, metadata, hierarchy_depths
 
 
 def _structural_projection(master: dict[str, Any], instance: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, int | None]]:
