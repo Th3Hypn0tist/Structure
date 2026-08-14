@@ -17,48 +17,18 @@ from view_rules import ViewRuleError, binding_children, binding_tree
 
 
 BASE_DIR = os.path.dirname(__file__)
-SCENE_VIEWER_HTML = os.path.join(BASE_DIR, "static", "scene_viewer_v4.html")
-SCENE_VIEWER_JS = os.path.join(BASE_DIR, "static", "scene_viewer_v4.js")
+STRUCTURE_HTML = os.path.join(BASE_DIR, "static", "structure.html")
+RENDERER_JS = os.path.join(BASE_DIR, "static", "renderer.js")
 SOURCE_SELECT_UI_JS = os.path.join(BASE_DIR, "static", "source_select_ui.js")
 SOURCE_PICKER_BROWSE_JS = os.path.join(BASE_DIR, "static", "source_picker_browse.js")
 EVENT_TRACE_VIEWER_JS = os.path.join(BASE_DIR, "static", "event_trace_viewer.js")
 SESSION_UI_JS = os.path.join(BASE_DIR, "static", "session_ui.js")
-SCOPE_STYLE_RENDERER_JS = os.path.join(BASE_DIR, "static", "scope_style_renderer.js")
 DIAGNOSTICS_UI_JS = os.path.join(BASE_DIR, "static", "diagnostics_ui.js")
 
 
 def _file_payload(path: str) -> bytes:
     with open(path, "rb") as handle:
         return handle.read()
-
-
-def _viewer_js_payload() -> bytes:
-    text = _file_payload(SCENE_VIEWER_JS).decode("utf-8")
-    empty_bootstrap = """(function initEmptyStructure(){
-  try {
-    S.catalog = null;
-    S.scene = null;
-    S.source = null;
-    S.instances = [];
-    S.objectState = {};
-    S.objectStyle = {};
-    S.channelState = {};
-    S.renderer = new Renderer($('#gl'));
-    bindStatic();
-    renderInstances();
-    renderChannels();
-    $('#revision').textContent = '';
-    $('#sceneInfo').textContent = 'Choose a source. The first selected source becomes the first master.';
-    $('#error').textContent = 'None.';
-    setStatus('choose source');
-    syncView();
-    draw();
-  } catch (e) { showError(e); }
-})();"""
-    stripped = text.rstrip()
-    if not stripped.endswith("init();"):
-        raise RuntimeError("scene_viewer_v4.js startup call not found")
-    return (stripped[:-len("init();")] + empty_bootstrap + "\n").encode("utf-8")
 
 
 def _session_result(body: dict) -> dict:
@@ -98,7 +68,7 @@ def _query_master(query: dict[str, list[str]]) -> dict:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "Structure/0.33.0"
+    server_version = "Structure/0.34.0"
 
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
@@ -113,6 +83,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 
@@ -130,7 +101,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _error(self, exc: Exception) -> None:
         payload = exc.as_dict() if isinstance(exc, StructureError) else {
-            "id": "SP_REQUEST_FAILED",
+            "id": "STRUCTURE_REQUEST_FAILED",
             "message": str(exc),
             "type": type(exc).__name__,
         }
@@ -142,17 +113,15 @@ class Handler(BaseHTTPRequestHandler):
         query = urllib.parse.parse_qs(parsed.query)
         try:
             if path == "/":
-                return self._write_file(SCENE_VIEWER_HTML, "text/html; charset=utf-8")
+                return self._write_file(STRUCTURE_HTML, "text/html; charset=utf-8")
             static_routes = {
+                "/static/renderer.js": RENDERER_JS,
                 "/static/source_select_ui.js": SOURCE_SELECT_UI_JS,
                 "/static/source_picker_browse.js": SOURCE_PICKER_BROWSE_JS,
                 "/static/event_trace_viewer.js": EVENT_TRACE_VIEWER_JS,
                 "/static/session_ui.js": SESSION_UI_JS,
-                "/static/scope_style_renderer.js": SCOPE_STYLE_RENDERER_JS,
                 "/static/diagnostics_ui.js": DIAGNOSTICS_UI_JS,
             }
-            if path == "/static/scene_viewer_v4.js":
-                return self._write_body(_viewer_js_payload(), "application/javascript; charset=utf-8")
             if path in static_routes:
                 return self._write_file(static_routes[path], "application/javascript; charset=utf-8")
             if path == "/api/health":
@@ -195,14 +164,14 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/binding-children":
                 master = _query_master(query)
                 return self._write_json(binding_children(master["graph"], node_id=query.get("node", [None])[0]))
-            return self._write_json({"ok": False, "error": {"id": "SP_NOT_FOUND", "message": path}}, 404)
+            return self._write_json({"ok": False, "error": {"id": "STRUCTURE_NOT_FOUND", "message": path}}, 404)
         except (StructureError, ViewRuleError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             return self._error(exc)
 
     def do_POST(self) -> None:
         try:
             if urllib.parse.urlparse(self.path).path != "/api/scene":
-                return self._write_json({"ok": False, "error": {"id": "SP_NOT_FOUND", "message": self.path}}, 404)
+                return self._write_json({"ok": False, "error": {"id": "STRUCTURE_NOT_FOUND", "message": self.path}}, 404)
             result = _session_result(self._read_json_body())
             return self._write_json(result, 200 if result.get("projectable") else 422)
         except (StructureError, ViewRuleError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
