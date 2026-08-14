@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import string
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,39 @@ if not hasattr(ProjectorError, "to_dict") and hasattr(ProjectorError, "as_dict")
 SOURCE_GITHUB = "github"
 SOURCE_DIRECTORY = "directory"
 CANONICAL_BOOTSTRAP = "00_Contract_Format.json"
+_WINDOWS_DRIVE_PATH = re.compile(r"^([A-Za-z]):[\\/](.*)$")
+_WINDOWS_FILE_URL_PATH = re.compile(r"^/([A-Za-z]):/(.*)$")
+
+
+def _is_wsl() -> bool:
+    if os.name == "nt":
+        return False
+    if os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP"):
+        return True
+    try:
+        return "microsoft" in Path("/proc/version").read_text(encoding="utf-8", errors="ignore").lower()
+    except OSError:
+        return False
+
+
+def _windows_to_wsl_path(value: str) -> str | None:
+    """Translate a Windows drive path to WSL's conventional /mnt/<drive> mount.
+
+    This is deliberately a transport/path compatibility conversion only. It
+    does not change source semantics and is used only when the server itself is
+    running on Linux/WSL.
+    """
+    if os.name == "nt":
+        return None
+    path = str(value or "").strip()
+    match = _WINDOWS_DRIVE_PATH.match(path)
+    if not match:
+        match = _WINDOWS_FILE_URL_PATH.match(path.replace("\\", "/"))
+    if not match:
+        return None
+    drive, tail = match.groups()
+    tail = tail.replace("\\", "/").lstrip("/")
+    return os.path.normpath(f"/mnt/{drive.lower()}/{tail}")
 
 
 def _clean_directory_path(value: str) -> str:
@@ -35,6 +69,21 @@ def _clean_directory_path(value: str) -> str:
         path = decoded
     path = os.path.expandvars(os.path.expanduser(path))
     return os.path.normpath(path) if path else path
+
+
+def _directory_candidates(path: str) -> list[str]:
+    """Return native path first and WSL-converted Windows path as fallback."""
+    cleaned = _clean_directory_path(path)
+    candidates: list[str] = []
+    if cleaned:
+        candidates.append(cleaned)
+
+    converted = _windows_to_wsl_path(path)
+    if converted is None:
+        converted = _windows_to_wsl_path(cleaned)
+    if converted and converted not in candidates:
+        candidates.append(converted)
+    return candidates
 
 
 def normalize_source_spec(spec: dict[str, Any] | None) -> dict[str, str]:
@@ -55,20 +104,38 @@ def normalize_source_spec(spec: dict[str, Any] | None) -> dict[str, str]:
 
 
 def _resolve_directory(path: str) -> Path:
-    cleaned = _clean_directory_path(path)
-    try:
-        root = Path(cleaned).resolve(strict=True)
-    except (OSError, RuntimeError) as exc:
-        raise ProjectorError("SP_SOURCE_DIRECTORY_INVALID", f"Unable to resolve local directory: {path!r}") from exc
-    if not root.is_dir():
-        raise ProjectorError("SP_SOURCE_DIRECTORY_INVALID", f"Local source is not a directory: {str(root)!r}")
-    return root
+    errors: list[Exception] = []
+    for candidate in _directory_candidates(path):
+        try:
+            root = Path(candidate).resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            errors.append(exc)
+            continue
+        if root.is_dir():
+            return root
+        errors.append(NotADirectoryError(candidate))
+
+    detail = ""
+    converted = _windows_to_wsl_path(path)
+    if converted:
+        detail = f" (WSL fallback: {converted!r})"
+    message = f"Unable to resolve local directory: {path!r}{detail}"
+    raise ProjectorError("SP_SOURCE_DIRECTORY_INVALID", message) from (errors[-1] if errors else None)
 
 
 def directory_roots() -> list[str]:
     if os.name == "nt":
         return [f"{letter}:\\" for letter in string.ascii_uppercase if os.path.isdir(f"{letter}:\\")]
-    return [os.path.sep]
+
+    roots = [os.path.sep]
+    if _is_wsl():
+        mount_root = Path("/mnt")
+        if mount_root.is_dir():
+            for letter in string.ascii_lowercase:
+                candidate = mount_root / letter
+                if candidate.is_dir():
+                    roots.append(str(candidate))
+    return roots
 
 
 def _canonical_mount(files: dict[str, bytes]) -> tuple[dict[str, bytes], str | None]:
