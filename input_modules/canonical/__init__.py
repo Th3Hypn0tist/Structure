@@ -1,4 +1,5 @@
 from cw14_model import is_v14
+from structure_index import build_structure_indexes
 from structure_tree import validate_tree
 
 from input_modules.directory import read as read_directory
@@ -84,6 +85,12 @@ def read(snapshot, options=None):
         tree = enrich_topics(tree, snapshot)
         topic_reader = "generic_explicit"
 
+    # StructureTree is the normalized, pre-resolved model consumed by all
+    # projections. Expensive reusable topology/index work happens once here,
+    # immediately after source semantics are materialized, never independently
+    # inside each projection request.
+    build_structure_indexes(tree)
+
     tree.setdefault("source_result", {})["canonical_reader"] = {
         "enabled": True,
         "mode": "canonical",
@@ -93,6 +100,7 @@ def read(snapshot, options=None):
         "legacy_bootstrap_is_authority": False,
         "topic_reader": topic_reader,
         "discovery_inference": False,
+        "structure_indexes": "resolved_at_import",
     }
 
     # Validation findings describe the source; they do not make the source
