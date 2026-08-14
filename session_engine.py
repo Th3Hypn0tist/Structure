@@ -25,7 +25,7 @@ DEFAULT_MASTER_ID = "master-1"
 
 
 def _source_identity(spec: dict[str, Any], index: int) -> str:
-    value = str(spec.get("id") or spec.get("master_id") or f"master-{index + 1}").strip()
+    value = str(spec.get("id") or f"master-{index + 1}").strip()
     if not value:
         raise ValueError("Source/master id must not be empty")
     return value
@@ -33,33 +33,26 @@ def _source_identity(spec: dict[str, Any], index: int) -> str:
 
 def normalize_sources(body: dict[str, Any]) -> list[dict[str, Any]]:
     raw_sources = body.get("sources")
-    if isinstance(raw_sources, list):
-        if not raw_sources or not all(isinstance(item, dict) for item in raw_sources):
-            raise ValueError("sources must be a non-empty array of objects")
-        out = []
-        for index, item in enumerate(raw_sources):
-            master_id = _source_identity(item, index)
-            source_spec = item.get("source") if isinstance(item.get("source"), dict) else {
-                key: value for key, value in item.items() if key not in {"id", "master_id", "name"}
-            }
-            out.append({"id": master_id, "name": str(item.get("name") or master_id), "source": source_spec})
-        return out
-
-    source = body.get("source")
-    if not isinstance(source, dict):
-        source = {
-            "type": "github",
-            "repo": str(body.get("repo") or "Th3Hypn0tist/AIGMos_docs"),
-            "branch": str(body.get("branch") or "main"),
-        }
-    return [{"id": DEFAULT_MASTER_ID, "name": DEFAULT_MASTER_ID, "source": source}]
+    if not isinstance(raw_sources, list) or not raw_sources or not all(isinstance(item, dict) for item in raw_sources):
+        raise ValueError("sources must be a non-empty array of source/master objects")
+    out = []
+    for index, item in enumerate(raw_sources):
+        master_id = _source_identity(item, index)
+        source_spec = item.get("source")
+        if not isinstance(source_spec, dict):
+            raise ValueError(f"Source/master {master_id} requires source object")
+        out.append({
+            "id": master_id,
+            "name": str(item.get("name") or master_id),
+            "source": deepcopy(source_spec),
+        })
+    return out
 
 
 def load_masters(source_specs: list[dict[str, Any]], *, refresh: bool = False) -> dict[str, dict[str, Any]]:
-    """Return already imported StructureTrees whenever the source is unchanged."""
     masters: dict[str, dict[str, Any]] = {}
     for item in source_specs:
-        master_id = item["id"]
+        master_id = str(item["id"])
         if master_id in masters:
             raise ValueError(f"Duplicate source/master id: {master_id}")
         masters[master_id] = load_cached_master(item, refresh=refresh)
@@ -151,18 +144,20 @@ def session_catalog(masters: dict[str, dict[str, Any]]) -> dict[str, Any]:
             "scope_style": "semantic_roles",
             "projection_dimension": "3d",
             "relation_depth": 0,
+            "impact_depth": 32,
         },
         "masters": [master_catalog(master) for master in masters.values()],
         "rules": {
             "master": "source import and StructureTree resolution happen once per unchanged source",
             "structure_tree": "reusable semantic topology and lookup indexes are resolved once at source import",
             "projection_base": "selects an already-resolved StructureTree surface",
-            "projection_style": "uses a cached geometry for the same base/scope/style/dimension combination",
+            "projection_style": "uses geometry native to the selected projection base",
             "scope": "selects a cached or cheaply sliced StructureTree surface",
             "scope_style": "color/highlight only; no server-side geometry rebuild is required",
             "topic_all": "map/all shows only pre-resolved Topic headings",
             "dimension": "2D/3D is independent of projection base and scope style",
             "cross_master_binding": "explicit only; never inferred by matching display names",
+            "compatibility_aliases": False,
         },
     }
 
@@ -187,7 +182,7 @@ def normalize_projection_instance(spec: dict[str, Any], index: int, masters: dic
     instance_id = str(spec.get("id") or f"projection-{index + 1}").strip()
     if not instance_id:
         raise ValueError("Projection instance id must not be empty")
-    master_ref = str(spec.get("master_ref") or spec.get("source_ref") or next(iter(masters), "")).strip()
+    master_ref = str(spec.get("master_ref") or next(iter(masters), "")).strip()
     if master_ref not in masters:
         raise KeyError(f"Unknown projection master/source: {master_ref}")
 
@@ -196,7 +191,7 @@ def normalize_projection_instance(spec: dict[str, Any], index: int, masters: dic
     projection_style, dimension, generator = resolve_projection_style(
         projection_base,
         spec.get("projection_style") or base_spec["default_style"],
-        spec.get("projection_dimension") or spec.get("dimension") or "3d",
+        spec.get("projection_dimension") or "3d",
     )
     scope_style = normalize_scope_style(spec.get("scope_style"))
     default_scope_type, default_scope_ref = _default_scope(masters[master_ref], projection_base)
@@ -226,12 +221,7 @@ def normalize_projection_instance(spec: dict[str, Any], index: int, masters: dic
 
 def _semantic_cache_key(instance: dict[str, Any]) -> tuple[Any, ...]:
     depth = instance["impact_depth"] if instance["projection_base"] == "event" else instance["relation_depth"]
-    return (
-        instance["projection_base"],
-        instance["scope_type"],
-        instance["scope_ref"],
-        depth,
-    )
+    return (instance["projection_base"], instance["scope_type"], instance["scope_ref"], depth)
 
 
 def _build_uncached_base(master: dict[str, Any], instance: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, int | None]]:
@@ -294,11 +284,7 @@ def build_session_scene(
             "server_relayout": not visual_hit,
         })
         by_master.setdefault(instance["master_ref"], []).append({
-            "instance": {
-                **instance,
-                "root_topic": instance["scope_ref"],
-                "dependency_depth": instance["relation_depth"],
-            },
+            "instance": instance,
             "projection": visual_projection,
             "hierarchy_depths": hierarchy_depths,
             "filter_metadata": metadata,
@@ -310,14 +296,6 @@ def build_session_scene(
         scene = compose_projection_instances(items, master["tree"], include_cross_projection_connections=True)
         for obj in scene.get("objects", []):
             obj["master_ref"] = master_ref
-            instance_id = str(obj.get("instance_id") or "")
-            instance = next((item for item in instances if item["id"] == instance_id), None)
-            if instance:
-                obj["projection_base"] = instance["projection_base"]
-                obj["projection_style"] = instance["projection_style"]
-                obj["scope_type"] = instance["scope_type"]
-                obj["scope_ref"] = instance["scope_ref"]
-                obj["scope_style"] = instance["scope_style"]
         scene["event_surface"] = build_event_surface(master["tree"])
         scenes.append((master_ref, scene))
 
@@ -341,9 +319,10 @@ def build_session_scene(
         "master_refs": list(masters),
         "projection_master_rule": "each projection references one master; masters may feed many projections",
         "structure_tree_indexes": "resolved_once_at_import",
-        "source_import_cache_hits": sum(1 for master in masters.values() if master.get("source_cache_hit")),
-        "projection_contract": "projection_base + projection_style + scope + scope_style + dimension",
-        "cross_master_binding": "none unless explicitly provided by a future comparison/binding source",
+        "projection_surfaces": "cached_after_first_materialization",
+        "projection_contract": "projection_base + projection_style + scope + scope_style + projection_dimension",
+        "compatibility_aliases": False,
+        "cross_master_binding": "none unless explicitly provided by a comparison/binding source",
         "cross_master_inference": False,
     }
     merged["validation_errors"] = []
