@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from semantic_visual_projections import STYLE_FAMILIES, resolve_visual_style
+from base_visual_projections import BASE_STYLE_SPECS, resolve_style, style_catalog as base_style_catalog
 
 
 PROJECTION_BASES: dict[str, dict[str, Any]] = {
@@ -11,7 +11,6 @@ PROJECTION_BASES: dict[str, dict[str, Any]] = {
         "label": "Map",
         "engine": "topic",
         "scope_types": ["all", "topic"],
-        "styles": ["atlas", "map", "matrix", "galaxy", "component_islands", "hierarchy_tree", "relation_shells", "structure_spine"],
         "default_style": "atlas",
         "question": "What are the resolved semantic areas and what is inside the selected area?",
     },
@@ -19,8 +18,7 @@ PROJECTION_BASES: dict[str, dict[str, Any]] = {
         "label": "Event",
         "engine": "event",
         "scope_types": ["event"],
-        "styles": ["lifecycle_lanes", "dependency_flow", "hierarchy_tree", "relation_generations", "atlas", "structure_spine"],
-        "default_style": "dependency_flow",
+        "default_style": "causal_flow",
         "question": "What explicit mechanism, evidence and causal path belongs to this Event?",
     },
     "dependency": {
@@ -28,8 +26,7 @@ PROJECTION_BASES: dict[str, dict[str, Any]] = {
         "engine": "structural",
         "edge_dimension": "dependencies",
         "scope_types": ["identity", "topic"],
-        "styles": ["dependency_flow", "dependency_tower", "hierarchy_tree", "relation_generations", "relation_shells", "structure_spine"],
-        "default_style": "dependency_flow",
+        "default_style": "directional_flow",
         "question": "What does this scope require and what explicitly depends on it?",
     },
     "relation": {
@@ -37,8 +34,7 @@ PROJECTION_BASES: dict[str, dict[str, Any]] = {
         "engine": "structural",
         "edge_dimension": "relations",
         "scope_types": ["identity", "topic"],
-        "styles": ["map", "matrix", "relation_orbits", "relation_shells", "galaxy", "component_islands"],
-        "default_style": "relation_orbits",
+        "default_style": "network",
         "question": "Which explicit typed relations connect this scope?",
     },
     "authority": {
@@ -46,8 +42,7 @@ PROJECTION_BASES: dict[str, dict[str, Any]] = {
         "engine": "structural",
         "edge_dimension": "authority",
         "scope_types": ["identity", "topic"],
-        "styles": ["authority_space", "hierarchy_tree", "relation_generations", "relation_shells"],
-        "default_style": "authority_space",
+        "default_style": "directional_flow",
         "question": "Which explicit authority paths reach this scope?",
     },
     "ownership": {
@@ -55,8 +50,7 @@ PROJECTION_BASES: dict[str, dict[str, Any]] = {
         "engine": "structural",
         "edge_dimension": "ownership",
         "scope_types": ["identity", "topic"],
-        "styles": ["role_layers", "hierarchy_tree", "component_islands", "relation_shells"],
-        "default_style": "role_layers",
+        "default_style": "tree",
         "question": "Who or what explicitly owns this scope?",
     },
     "containment": {
@@ -64,8 +58,7 @@ PROJECTION_BASES: dict[str, dict[str, Any]] = {
         "engine": "structural",
         "edge_dimension": "containment",
         "scope_types": ["identity", "topic"],
-        "styles": ["hierarchy_tree", "structure_spine", "component_islands", "atlas"],
-        "default_style": "hierarchy_tree",
+        "default_style": "tree",
         "question": "What explicitly contains what in this scope?",
     },
 }
@@ -95,7 +88,11 @@ LEGACY_BASE_ALIASES = {
 
 def projection_base_catalog() -> list[dict[str, Any]]:
     return [
-        {"id": base_id, **deepcopy(spec)}
+        {
+            "id": base_id,
+            **deepcopy(spec),
+            "styles": [item["id"] for item in compatible_projection_styles(base_id)],
+        }
         for base_id, spec in PROJECTION_BASES.items()
     ]
 
@@ -116,30 +113,15 @@ def normalize_projection_base(value: Any) -> str:
 
 
 def compatible_projection_styles(base_id: str) -> list[dict[str, Any]]:
-    base = PROJECTION_BASES[normalize_projection_base(base_id)]
-    out = []
-    for style_id in base["styles"]:
-        family = STYLE_FAMILIES.get(style_id)
-        if family is None:
-            continue
-        out.append({
-            "id": style_id,
-            "label": family["label"],
-            "dimensions": ["2d", "3d"],
-            "variants": {
-                "2d": f"semantic_{style_id}_2d",
-                "3d": f"semantic_{style_id}_3d",
-            },
-        })
-    return out
+    base_id = normalize_projection_base(base_id)
+    return base_style_catalog(base_id)
 
 
 def resolve_projection_style(base_id: str, style: Any, dimension: Any) -> tuple[str, str, str]:
-    base = PROJECTION_BASES[normalize_projection_base(base_id)]
+    base_id = normalize_projection_base(base_id)
+    base = PROJECTION_BASES[base_id]
     style_id = str(style or base["default_style"]).strip()
-    if style_id not in base["styles"]:
-        raise ValueError(f"Projection style {style_id} is not compatible with projection base {base_id}")
-    return resolve_visual_style(style_id, str(dimension or "3d"))
+    return resolve_style(base_id, style_id, str(dimension or "3d"))
 
 
 def normalize_scope_style(value: Any) -> str:
@@ -195,6 +177,7 @@ def apply_scope_style(graph: dict[str, Any], scope_style: str) -> dict[str, Any]
 __all__ = [
     "PROJECTION_BASES",
     "SCOPE_STYLES",
+    "BASE_STYLE_SPECS",
     "projection_base_catalog",
     "scope_style_catalog",
     "normalize_projection_base",
