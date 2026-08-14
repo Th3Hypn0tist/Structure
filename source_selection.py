@@ -8,6 +8,11 @@ from typing import Any
 from source_adapter import load_snapshot
 from structureprojector import ProjectorError, SOURCE_REPO, SourceSnapshot
 
+# app.py historically calls ProjectorError.to_dict(); the base class exposes
+# as_dict(). Keep both spellings compatible while source selection is active.
+if not hasattr(ProjectorError, "to_dict") and hasattr(ProjectorError, "as_dict"):
+    ProjectorError.to_dict = ProjectorError.as_dict
+
 SOURCE_GITHUB = "github"
 SOURCE_DIRECTORY = "directory"
 
