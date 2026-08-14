@@ -23,6 +23,13 @@
       .directory-browser-item .dir-format{font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--blue)}
       .directory-path-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px}
       .directory-browser-help{padding:6px 8px;border-top:1px solid var(--line);color:var(--muted);font-size:10px}
+      .source-load-progress{display:none;margin-top:10px;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:#05070a}
+      .source-load-progress.active{display:block}
+      .source-load-progress-head{display:flex;justify-content:space-between;gap:10px;margin-bottom:6px;font-size:10px;color:var(--muted)}
+      .source-load-progress-path{max-width:62%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,monospace}
+      .source-load-progress-track{position:relative;height:5px;overflow:hidden;border-radius:999px;background:#111722}
+      .source-load-progress-bar{position:absolute;top:0;bottom:0;width:36%;border-radius:999px;background:var(--blue);animation:structureSourceLoad 1.15s ease-in-out infinite}
+      @keyframes structureSourceLoad{0%{left:-38%}50%{left:42%}100%{left:102%}}
     `;
     document.head.appendChild(style);
   }
@@ -48,6 +55,40 @@
     if(!use)return;
     syncDirectoryPath(popup,path);
     use.click();
+  }
+
+  function installLoadProgress(popup){
+    if(!popup||popup.querySelector('[data-source-load-progress]'))return;
+    const error=popup.querySelector('.source-error');
+    if(!error)return;
+    const progress=document.createElement('div');
+    progress.className='source-load-progress';
+    progress.dataset.sourceLoadProgress='1';
+    progress.setAttribute('role','status');
+    progress.setAttribute('aria-live','polite');
+    progress.innerHTML=`
+      <div class="source-load-progress-head">
+        <span data-source-load-label>Reading local source and building semantic model…</span>
+        <span class="source-load-progress-path" data-source-load-path></span>
+      </div>
+      <div class="source-load-progress-track" aria-hidden="true"><div class="source-load-progress-bar"></div></div>`;
+    error.insertAdjacentElement('beforebegin',progress);
+
+    const use=popup.querySelector('[data-source-use]');
+    const type=popup.querySelector('[data-source-type]');
+    const path=popup.querySelector('[data-source-path]');
+    if(!use||!type)return;
+
+    use.addEventListener('click',()=>{
+      if(type.value!=='directory')return;
+      progress.querySelector('[data-source-load-path]').textContent=path?.value.trim()||'';
+      progress.classList.add('active');
+    },{capture:true});
+
+    const stateObserver=new MutationObserver(()=>{
+      if(error.textContent.trim()&&use.disabled===false)progress.classList.remove('active');
+    });
+    stateObserver.observe(error,{childList:true,characterData:true,subtree:true});
   }
 
   async function renderBrowser(host,path){
@@ -99,6 +140,7 @@
     if(!popup||popup.dataset.directoryBrowseEnhanced==='1')return;
     popup.dataset.directoryBrowseEnhanced='1';
     ensureBrowseStyle();
+    installLoadProgress(popup);
     const directorySection=popup.querySelector('[data-source-directory]');
     const input=popup.querySelector('[data-source-path]');
     if(!directorySection||!input)return;
