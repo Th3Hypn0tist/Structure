@@ -5,6 +5,7 @@ import os
 import urllib.parse
 from http.server import ThreadingHTTPServer
 
+from base_visual_projections import PROJECTIONS as BASE_VISUAL_PROJECTIONS, build_projection as build_base_visual_projection
 from canonical_projections import PROJECTIONS as CORE_PROJECTIONS, build_canonical_projection
 from canonical_projections_extra3d import PROJECTIONS as EXTRA_PROJECTIONS, build_projection as build_extra_projection
 from dependency_flow_projection import build_dependency_flow_3d
@@ -32,6 +33,7 @@ SOURCE_SELECT_UI_JS = os.path.join(BASE_DIR, 'static', 'source_select_ui.js')
 SOURCE_PICKER_BROWSE_JS = os.path.join(BASE_DIR, 'static', 'source_picker_browse.js')
 EVENT_TRACE_VIEWER_JS = os.path.join(BASE_DIR, 'static', 'event_trace_viewer.js')
 SESSION_UI_JS = os.path.join(BASE_DIR, 'static', 'session_ui.js')
+SCOPE_STYLE_RENDERER_JS = os.path.join(BASE_DIR, 'static', 'scope_style_renderer.js')
 DIAGNOSTICS_UI_JS = os.path.join(BASE_DIR, 'static', 'diagnostics_ui.js')
 
 ALL_CANONICAL_PROJECTIONS = {
@@ -39,6 +41,7 @@ ALL_CANONICAL_PROJECTIONS = {
     **EXTRA_PROJECTIONS,
     **STRUCTURE_REVEAL_PROJECTIONS,
     **SEMANTIC_VISUAL_PROJECTIONS,
+    **BASE_VISUAL_PROJECTIONS,
 }
 
 
@@ -79,6 +82,8 @@ def _viewer_js_payload() -> bytes:
 
 
 def _build_canonical_projection(graph: dict, projection_id: str) -> dict:
+    if projection_id in BASE_VISUAL_PROJECTIONS:
+        return build_base_visual_projection(graph, projection_id)
     if projection_id in SEMANTIC_VISUAL_PROJECTIONS:
         return build_visual_projection(graph, projection_id)
     if projection_id in STRUCTURE_REVEAL_PROJECTIONS:
@@ -171,7 +176,7 @@ def _session_result(body: dict) -> dict:
 
 
 class Handler(BaseHandler):
-    server_version = 'Structure/0.30.0'
+    server_version = 'Structure/0.31.0'
 
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode('utf-8')
@@ -225,6 +230,8 @@ class Handler(BaseHandler):
                 return self._write_file(EVENT_TRACE_VIEWER_JS, 'application/javascript; charset=utf-8')
             if path == '/static/session_ui.js':
                 return self._write_file(SESSION_UI_JS, 'application/javascript; charset=utf-8')
+            if path == '/static/scope_style_renderer.js':
+                return self._write_file(SCOPE_STYLE_RENDERER_JS, 'application/javascript; charset=utf-8')
             if path == '/static/diagnostics_ui.js':
                 return self._write_file(DIAGNOSTICS_UI_JS, 'application/javascript; charset=utf-8')
             if path == '/api/health':
@@ -239,7 +246,7 @@ class Handler(BaseHandler):
                     'projection_master_cardinality': 'source 1:N projection',
                     'projection_contract': ['projection_base', 'projection_style', 'scope_type', 'scope_ref', 'scope_style', 'projection_dimension'],
                     'projection_bases': ['map', 'event', 'dependency', 'relation', 'authority', 'ownership', 'containment'],
-                    'projection_styles_are_base_compatible': True,
+                    'projection_styles_are_base_native': True,
                     'scope_style_is_color_only': True,
                     'structure_tree_indexes': 'resolved_once_at_import',
                     'visual_dimensions': ['2d', '3d'],
