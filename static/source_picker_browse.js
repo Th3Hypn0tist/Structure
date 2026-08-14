@@ -129,3 +129,102 @@
   observer.observe(document.body,{childList:true,subtree:true});
   enhancePopup(document.querySelector('.source-popup'));
 })();
+
+(function installManualProjectionBootstrap(){
+  // A source never creates or chooses a semantic projection implicitly.
+  // The user must explicitly add the first projection after choosing a source.
+  let sourceSpecValue=S.sourceSpec||null;
+  let manualProjectionEnabled=false;
+
+  try{
+    Object.defineProperty(S,'sourceSpec',{
+      configurable:true,
+      enumerable:true,
+      get(){return sourceSpecValue},
+      set(value){
+        sourceSpecValue=value;
+        manualProjectionEnabled=false;
+        S.instances=[];
+        S.scene=null;
+        S.objectState={};
+        S.objectStyle={};
+        if(typeof renderInstances==='function')renderInstances();
+        const info=document.getElementById('sceneInfo');
+        if(info)info.textContent='Source selected. Add a projection instance.';
+      },
+    });
+  }catch(_error){}
+
+  if(typeof spApplyPrimaryDefaults==='function'){
+    spApplyPrimaryDefaults=function(){
+      if(typeof SP_defaultRootsApplied!=='undefined')SP_defaultRootsApplied=true;
+    };
+  }
+
+  // No IAM/core/other named preference. A new projection is derived only from
+  // the currently loaded source catalog and starts with zero relation expansion.
+  newInstance=function(){
+    const id=`p${S.nextId++}`;
+    const styles=S.catalog?.styles||[];
+    const topics=S.catalog?.topics||[];
+    const style=styles.find(item=>item.id==='atlas')||styles[0];
+    const canonicalTopics=topics.filter(item=>item?.canonical_topic===true);
+    const root=canonicalTopics[0]||topics.find(item=>item.id==='all')||topics[0];
+    const dimensions=style?.dimensions||['2d'];
+    const dimension=dimensions.includes('3d')?'3d':dimensions[0]||'2d';
+    return {
+      id,
+      name:`Projection ${id.slice(1)}`,
+      projection_style:style?.id||'atlas',
+      projection_dimension:dimension,
+      root_topic:root?.id||'all',
+      dependency_depth:0,
+    };
+  };
+
+  // Hide legacy pseudo-topics from the selector. `all` is a projection scope,
+  // not a semantic Topic, and remains available explicitly.
+  topicOptions=function(selected){
+    const topics=(S.catalog?.topics||[]).filter(item=>item.id==='all'||item.canonical_topic===true);
+    return topics.map(item=>`<option value="${esc(item.id)}" ${item.id===selected?'selected':''}>${esc(item.label)} (${item.entry_count})</option>`).join('');
+  };
+
+  const originalLoadScene=loadScene;
+  loadScene=async function(){
+    if(!manualProjectionEnabled){
+      S.instances=[];
+      S.scene=null;
+      S.objectState={};
+      S.objectStyle={};
+      renderInstances();
+      renderChannels();
+      const canonicalCount=(S.catalog?.topics||[]).filter(item=>item?.canonical_topic===true).length;
+      setStatus(canonicalCount?`${canonicalCount} topics · add projection`:'no canonical topics · add projection',canonicalCount===0);
+      const info=document.getElementById('sceneInfo');
+      if(info)info.textContent=canonicalCount?'Source ready. Add the first projection instance.':'Source loaded, but no Canonical Topics were exposed.';
+      return;
+    }
+    return originalLoadScene();
+  };
+
+  const add=document.getElementById('addInstance');
+  if(add){
+    add.addEventListener('click',()=>{manualProjectionEnabled=true},{capture:true});
+  }
+
+  // Suppress the original viewer bootstrap projection even if init() completes
+  // after this extension has loaded.
+  setTimeout(()=>{
+    if(!manualProjectionEnabled){
+      S.instances=[];
+      S.scene=null;
+      S.objectState={};
+      S.objectStyle={};
+      renderInstances();
+      renderChannels();
+      setStatus('choose source · add projection');
+      const info=document.getElementById('sceneInfo');
+      if(info)info.textContent='Choose a source, then add the first projection instance.';
+    }
+  },0);
+})();
