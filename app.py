@@ -43,19 +43,37 @@ def _file_payload(path: str) -> bytes:
         return handle.read()
 
 
+def _strip_legacy_source_picker(text: str) -> str:
+    """Remove the old inline source picker so only one source UI owns the button."""
+    marker = "<script>\n'use strict';\n(function installSourcePicker(){"
+    start = text.find(marker)
+    if start < 0:
+        return text
+    end_marker = "})();\n</script>"
+    end = text.find(end_marker, start)
+    if end < 0:
+        raise RuntimeError('legacy source picker end marker not found')
+    return text[:start] + text[end + len(end_marker):]
+
+
 def _viewer_html_payload() -> bytes:
     text = _file_payload(SCENE_VIEWER_HTML).decode('utf-8')
+    text = _strip_legacy_source_picker(text)
     text = text.replace('<title>StructureProjector</title>', '<title>Structure</title>')
     text = text.replace('<header><strong>StructureProjector</strong>', '<header><strong>Structure</strong>')
     text = text.replace('even = blue, odd = silver', 'odd = blue, even = silver')
     text = text.replace(
         '<label>Branch <select id="branch"></select></label><button id="reload">Reload</button>',
-        '<button id="sourcePickerButton">Select source</button><label style="display:none">Branch <select id="branch"></select></label><button id="reload">Reload</button>',
+        '<button id="sourcePickerButton" type="button" onclick="window.structureOpenSourcePicker&&window.structureOpenSourcePicker()">Select source</button><label style="display:none">Branch <select id="branch"></select></label><button id="reload">Reload</button>',
     )
-    # Load the explicit selector after legacy inline scripts so it owns the
-    # button handler and resets any legacy default source to null.
-    for script in ('/static/source_select_ui.js', '/static/source_picker_browse.js', '/static/event_trace_viewer.js', '/static/session_ui.js'):
-        if script not in text:
+    scripts = (
+        '/static/source_select_ui.js',
+        '/static/source_picker_browse.js',
+        '/static/event_trace_viewer.js',
+        '/static/session_ui.js',
+    )
+    for script in scripts:
+        if f'<script src="{script}"></script>' not in text:
             text = text.replace('</body>', f'<script src="{script}"></script>\n</body>')
     return text.encode('utf-8')
 
@@ -164,7 +182,7 @@ def _session_result(body: dict) -> dict:
 
 
 class Handler(BaseHandler):
-    server_version = 'Structure/0.27.2'
+    server_version = 'Structure/0.27.3'
 
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode('utf-8')
@@ -197,7 +215,7 @@ class Handler(BaseHandler):
             if path == '/static/event_trace_viewer.js': return self._write_file(EVENT_TRACE_VIEWER_JS, 'application/javascript; charset=utf-8')
             if path == '/static/session_ui.js': return self._write_file(SESSION_UI_JS, 'application/javascript; charset=utf-8')
             if path == '/legacy': return self._write_file(LEGACY_INDEX_HTML, 'text/html; charset=utf-8')
-            if path == '/api/health': return self._write_json({'ok': True, 'server': self.server_version, 'input_model': 'StructureTree/1.1', 'scene_model': 'Scene/1.1', 'startup': 'empty', 'automatic_source_read': False, 'automatic_projection': False, 'first_selected_source_becomes_first_master': True, 'multi_master': True, 'projection_master_cardinality': 'source 1:N projection', 'semantic_projection_styles': True, 'implemented_semantic_styles': ['topic', 'impact'], 'visual_style_separate': True, 'selectable_sources': ['github', 'directory'], 'directory_browser': True, 'event_trace_causality': 'explicit_only', 'cross_master_inference': False, 'effects': 'none'})
+            if path == '/api/health': return self._write_json({'ok': True, 'server': self.server_version, 'startup': 'empty', 'automatic_source_read': False, 'automatic_projection': False, 'first_selected_source_becomes_first_master': True, 'multi_master': True, 'projection_master_cardinality': 'source 1:N projection', 'semantic_projection_styles': True, 'implemented_semantic_styles': ['topic', 'impact'], 'visual_style_separate': True, 'selectable_sources': ['github', 'directory'], 'directory_browser': True, 'event_trace_causality': 'explicit_only', 'cross_master_inference': False})
             if path == '/api/primitives': return self._write_json(load_registry())
             if path == '/api/branches':
                 repo = (query.get('repo') or [SOURCE_REPO])[0]; return self._write_json({'repository': repo, 'branches': list_branches(repo)})
