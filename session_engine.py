@@ -1,24 +1,24 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Callable
+from typing import Any
 
-from event_projection import build_event_projection
-from event_trace import build_event_surface, event_catalog
-from projection_model import (
-    PROJECTION_BASES,
+from scene_composer import compose_projection_instances
+from session_cache import cached_semantic_surface, cached_visual_surface, load_cached_master
+from topic_index import topic_all_graph, topic_heading_catalog, topic_scope_graph
+from topic_projection import (
+    PROJECTION_BASE,
+    PROJECTIONS,
     apply_scope_style,
-    compatible_projection_styles,
+    build_topic_visual,
     normalize_projection_base,
     normalize_scope_style,
     projection_base_catalog,
+    projection_style_catalog,
+    projection_styles_by_base,
     resolve_projection_style,
     scope_style_catalog,
 )
-from scene_composer import compose_projection_instances
-from session_cache import cached_semantic_surface, cached_visual_surface, load_cached_master
-from structural_projection import structural_base_graph
-from topic_index import topic_all_graph, topic_heading_catalog, topic_scope_graph
 
 
 DEFAULT_MASTER_ID = "master-1"
@@ -59,40 +59,30 @@ def load_masters(source_specs: list[dict[str, Any]], *, refresh: bool = False) -
     return masters
 
 
-def _scope_catalog(tree: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    entries = [entry for entry in tree.get("entries", []) if isinstance(entry, dict) and entry.get("id") is not None]
-    flows = [flow for flow in tree.get("flows", []) if isinstance(flow, dict) and flow.get("id")]
+def _topic_scope_catalog(tree: dict[str, Any]) -> list[dict[str, Any]]:
+    topic_index = tree.get("topic_index") if isinstance(tree.get("topic_index"), dict) else {}
     headings = topic_heading_catalog(tree)
-    return {
-        "topics": [{
-            "id": "all",
-            "label": "all",
-            "entry_count": len(headings),
-            "heading_count": len(headings),
-            "scope_semantics": "all_topic_headings_only",
-        }] + [{
+    scopes = [{
+        "id": "all",
+        "label": "all",
+        "scope_type": "all",
+        "main_heading_count": int(topic_index.get("main_heading_count") or 0),
+        "available_heading_count": len(headings),
+    }]
+    for item in headings:
+        scopes.append({
             "id": str(item["id"]),
             "label": str(item.get("label") or item["id"]),
+            "scope_type": "topic",
+            "heading_depth": int(item.get("heading_depth") or 0),
+            "main_heading": bool(item.get("main_heading")),
             "entry_count": int(item.get("entry_count") or 0),
-            "topic_heading": True,
             "defined": bool(item.get("defined")),
             "unresolved": bool(item.get("unresolved")),
+            "parent_heading_refs": deepcopy(item.get("parent_heading_refs", [])),
             "direct_topic_refs": deepcopy(item.get("direct_topic_refs", [])),
-            "resolved_topic_refs": deepcopy(item.get("resolved_topic_refs", [])),
-        } for item in headings],
-        "events": event_catalog(tree),
-        "flows": [{
-            "id": str(flow["id"]),
-            "name": str(flow.get("name") or flow["id"]),
-            "owner_ref": flow.get("owner_ref"),
-        } for flow in flows],
-        "identities": [{
-            "id": str(entry["id"]),
-            "name": str(entry.get("name") or entry["id"]),
-            "kind": entry.get("kind"),
-            "type": entry.get("type"),
-        } for entry in entries],
-    }
+        })
+    return scopes
 
 
 def master_catalog(master: dict[str, Any]) -> dict[str, Any]:
@@ -109,98 +99,78 @@ def master_catalog(master: dict[str, Any]) -> dict[str, Any]:
         "source_cache_hit": bool(master.get("source_cache_hit")),
         "semantic_surface_cache_count": len(master.get("semantic_surfaces", {})),
         "visual_surface_cache_count": len(master.get("visual_surfaces", {})),
-        "scopes": _scope_catalog(tree),
+        "scopes": {
+            "topics": _topic_scope_catalog(tree),
+        },
         "structure_tree_index": {
             "version": indexes.get("version"),
             "resolved_at": indexes.get("resolved_at"),
+            "topic_index_version": topic_index.get("version"),
             "topic_heading_count": topic_index.get("heading_count", 0),
+            "topic_main_heading_count": topic_index.get("main_heading_count", 0),
             "topic_unresolved_heading_count": topic_index.get("unresolved_heading_count", 0),
             "projection_reanalysis_required": False,
         },
     }
 
 
-def _projection_style_catalog() -> list[dict[str, Any]]:
-    by_style: dict[str, dict[str, Any]] = {}
-    for base_id in PROJECTION_BASES:
-        for style in compatible_projection_styles(base_id):
-            item = by_style.setdefault(style["id"], {**style, "projection_bases": []})
-            item["projection_bases"].append(base_id)
-    return sorted(by_style.values(), key=lambda item: str(item.get("label") or item["id"]).lower())
-
-
 def session_catalog(masters: dict[str, dict[str, Any]]) -> dict[str, Any]:
     return {
         "projection_bases": projection_base_catalog(),
-        "projection_styles": _projection_style_catalog(),
-        "projection_styles_by_base": {base_id: compatible_projection_styles(base_id) for base_id in PROJECTION_BASES},
+        "projection_styles": projection_style_catalog(),
+        "projection_styles_by_base": projection_styles_by_base(),
         "scope_styles": scope_style_catalog(),
         "dimensions": ["2d", "3d"],
         "defaults": {
-            "projection_base": "map",
-            "projection_style": PROJECTION_BASES["map"]["default_style"],
+            "projection_base": "topic",
+            "projection_style": "atlas",
             "scope_type": "all",
             "scope_ref": "all",
             "scope_style": "semantic_roles",
             "projection_dimension": "3d",
-            "relation_depth": 0,
-            "impact_depth": 32,
         },
         "masters": [master_catalog(master) for master in masters.values()],
         "rules": {
+            "projection_types": "Topic only",
             "master": "source import and StructureTree resolution happen once per unchanged source",
-            "structure_tree": "reusable semantic topology and lookup indexes are resolved once at source import",
-            "projection_base": "selects an already-resolved StructureTree surface",
-            "projection_style": "uses geometry native to the selected projection base",
-            "scope": "selects a cached or cheaply sliced StructureTree surface",
-            "scope_style": "color/highlight only; no server-side geometry rebuild is required",
-            "topic_all": "map/all shows only pre-resolved Topic headings",
-            "dimension": "2D/3D is independent of projection base and scope style",
-            "cross_master_binding": "explicit only; never inferred by matching display names",
+            "structure_tree": "Topic topology and reusable indexes are resolved once at source import",
+            "topic_scope": "scope is all or one pre-resolved Topic heading",
+            "topic_all": "all renders only the Topic index main-heading surface",
+            "projection_style": "Atlas is the only active Topic presentation while Topic semantics are rebuilt from first principles",
+            "scope_style": "color/highlight only; it never changes Topic membership",
+            "dimension": "2D/3D changes geometry only",
             "compatibility_aliases": False,
         },
     }
 
 
-def _default_scope(master: dict[str, Any], projection_base: str) -> tuple[str, str]:
-    scopes = _scope_catalog(master["tree"])
-    base = PROJECTION_BASES[projection_base]
-    if projection_base == "map":
-        return "all", "all"
-    if projection_base == "event":
-        events = scopes["events"]
-        return "event", str(events[0]["id"]) if events else ""
-    if "topic" in base["scope_types"]:
-        topics = [item for item in scopes["topics"] if item.get("topic_heading")]
-        if topics:
-            return "topic", str(topics[0]["id"])
-    identities = scopes["identities"]
-    return "identity", str(identities[0]["id"]) if identities else ""
+def _scope_ids(master: dict[str, Any]) -> set[str]:
+    return {str(item["id"]) for item in _topic_scope_catalog(master["tree"])}
 
 
 def normalize_projection_instance(spec: dict[str, Any], index: int, masters: dict[str, dict[str, Any]]) -> dict[str, Any]:
     instance_id = str(spec.get("id") or f"projection-{index + 1}").strip()
     if not instance_id:
         raise ValueError("Projection instance id must not be empty")
+
     master_ref = str(spec.get("master_ref") or next(iter(masters), "")).strip()
     if master_ref not in masters:
         raise KeyError(f"Unknown projection master/source: {master_ref}")
 
-    projection_base = normalize_projection_base(spec.get("projection_base") or "map")
-    base_spec = PROJECTION_BASES[projection_base]
+    projection_base = normalize_projection_base(spec.get("projection_base") or "topic")
     projection_style, dimension, generator = resolve_projection_style(
-        projection_base,
-        spec.get("projection_style") or base_spec["default_style"],
+        spec.get("projection_style") or "atlas",
         spec.get("projection_dimension") or "3d",
     )
     scope_style = normalize_scope_style(spec.get("scope_style"))
-    default_scope_type, default_scope_ref = _default_scope(masters[master_ref], projection_base)
-    scope_type = str(spec.get("scope_type") or default_scope_type).strip()
-    scope_ref = str(spec.get("scope_ref") or default_scope_ref).strip()
-    if scope_type not in base_spec["scope_types"]:
-        raise ValueError(f"Projection base {projection_base} does not accept scope type {scope_type}")
-    if not scope_ref:
-        raise ValueError(f"Projection base {projection_base} requires a scope_ref")
+
+    scope_ref = str(spec.get("scope_ref") or "all").strip()
+    if scope_ref not in _scope_ids(masters[master_ref]):
+        raise KeyError(f"Unknown Topic scope: {scope_ref}")
+    scope_type = "all" if scope_ref == "all" else "topic"
+    supplied_scope_type = spec.get("scope_type")
+    if supplied_scope_type is not None and str(supplied_scope_type).strip() != scope_type:
+        raise ValueError(f"Topic scope {scope_ref} requires scope_type={scope_type}")
 
     return {
         "id": instance_id,
@@ -213,53 +183,39 @@ def normalize_projection_instance(spec: dict[str, Any], index: int, masters: dic
         "scope_style": scope_style,
         "projection_dimension": dimension,
         "projection_generator": generator,
-        "relation_depth": max(0, min(32, int(spec.get("relation_depth", 0)))),
-        "impact_depth": max(0, min(64, int(spec.get("impact_depth", 32)))),
         "transform": deepcopy(spec.get("transform")) if isinstance(spec.get("transform"), dict) else None,
     }
 
 
 def _semantic_cache_key(instance: dict[str, Any]) -> tuple[Any, ...]:
-    depth = instance["impact_depth"] if instance["projection_base"] == "event" else instance["relation_depth"]
-    return (instance["projection_base"], instance["scope_type"], instance["scope_ref"], depth)
+    return ("topic", instance["scope_ref"])
 
 
-def _build_uncached_base(master: dict[str, Any], instance: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, int | None]]:
-    tree, graph = master["tree"], master["graph"]
-    engine = PROJECTION_BASES[instance["projection_base"]]["engine"]
-    if engine == "topic":
-        if instance["scope_type"] == "all" or instance["scope_ref"] == "all":
-            return topic_all_graph(tree)
-        return topic_scope_graph(tree, graph, instance["scope_ref"], relation_depth=instance["relation_depth"])
-    if engine == "event":
-        return build_event_projection(tree, graph, instance["scope_ref"], max_depth=instance["impact_depth"])
-    if engine == "structural":
-        return structural_base_graph(
-            tree,
-            graph,
-            projection_base=instance["projection_base"],
-            scope_type=instance["scope_type"],
-            scope_ref=instance["scope_ref"],
-            max_depth=instance["relation_depth"],
-        )
-    raise ValueError(f"Unsupported projection base engine: {engine}")
+def _build_topic_surface(master: dict[str, Any], instance: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, int | None]]:
+    tree = master["tree"]
+    if instance["scope_ref"] == "all":
+        return topic_all_graph(tree)
+    return topic_scope_graph(tree, master["graph"], instance["scope_ref"], relation_depth=0)
 
 
-def _base_projection(master: dict[str, Any], instance: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, int | None], bool]:
+def _semantic_surface(master: dict[str, Any], instance: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, int | None], bool]:
     key = _semantic_cache_key(instance)
-    projected, metadata, depths, hit = cached_semantic_surface(master, key, lambda: _build_uncached_base(master, instance))
-    metadata["projection_base"] = instance["projection_base"]
-    metadata["semantic_surface_cache_hit"] = hit
+    projected, metadata, depths, hit = cached_semantic_surface(
+        master,
+        key,
+        lambda: _build_topic_surface(master, instance),
+    )
+    metadata.update({
+        "projection_base": "topic",
+        "semantic_surface_cache_hit": hit,
+    })
     return projected, metadata, depths, hit
 
 
-def build_session_scene(
-    masters: dict[str, dict[str, Any]],
-    raw_instances: list[dict[str, Any]],
-    visual_builder: Callable[[dict[str, Any], str], dict[str, Any]],
-) -> dict[str, Any]:
+def build_session_scene(masters: dict[str, dict[str, Any]], raw_instances: list[dict[str, Any]]) -> dict[str, Any]:
     if not raw_instances:
-        raise ValueError("At least one projection instance is required")
+        raise ValueError("At least one Topic projection instance is required")
+
     instances = [normalize_projection_instance(spec, index, masters) for index, spec in enumerate(raw_instances)]
     ids = [item["id"] for item in instances]
     if len(ids) != len(set(ids)):
@@ -268,20 +224,20 @@ def build_session_scene(
     by_master: dict[str, list[dict[str, Any]]] = {}
     for instance in instances:
         master = masters[instance["master_ref"]]
-        semantic_graph, metadata, hierarchy_depths, semantic_hit = _base_projection(master, instance)
+        semantic_graph, metadata, hierarchy_depths, semantic_hit = _semantic_surface(master, instance)
         semantic_key = _semantic_cache_key(instance)
         visual_key = (*semantic_key, instance["projection_generator"])
         visual_projection, visual_hit = cached_visual_surface(
             master,
             visual_key,
-            lambda: visual_builder(semantic_graph, instance["projection_generator"]),
+            lambda: build_topic_visual(semantic_graph, instance["projection_generator"]),
         )
         visual_projection = apply_scope_style(visual_projection, instance["scope_style"])
         metadata.update({
             "scope_style": instance["scope_style"],
             "visual_surface_cache_hit": visual_hit,
-            "server_reanalysis": not semantic_hit,
-            "server_relayout": not visual_hit,
+            "server_semantic_materialization": not semantic_hit,
+            "server_visual_materialization": not visual_hit,
         })
         by_master.setdefault(instance["master_ref"], []).append({
             "instance": instance,
@@ -293,10 +249,13 @@ def build_session_scene(
     scenes: list[tuple[str, dict[str, Any]]] = []
     for master_ref, items in by_master.items():
         master = masters[master_ref]
-        scene = compose_projection_instances(items, master["tree"], include_cross_projection_connections=True)
+        scene = compose_projection_instances(
+            items,
+            master["tree"],
+            include_cross_projection_connections=True,
+        )
         for obj in scene.get("objects", []):
             obj["master_ref"] = master_ref
-        scene["event_surface"] = build_event_surface(master["tree"])
         scenes.append((master_ref, scene))
 
     base_master_ref, base_scene = scenes[0]
@@ -304,28 +263,27 @@ def build_session_scene(
     merged["objects"] = []
     merged["connections"] = []
     merged["connection_channels"] = {}
-    merged["event_surfaces"] = {}
     for master_ref, scene in scenes:
         merged["objects"].extend(deepcopy(scene.get("objects", [])))
         merged["connections"].extend(deepcopy(scene.get("connections", [])))
         for key, value in scene.get("connection_channels", {}).items():
             merged["connection_channels"].setdefault(key, deepcopy(value))
-        merged["event_surfaces"][master_ref] = deepcopy(scene.get("event_surface", {}))
 
-    merged["event_surface"] = deepcopy(merged["event_surfaces"].get(base_master_ref, {}))
     merged["composition"] = {
         "master_count": len(masters),
         "projection_count": len(instances),
         "master_refs": list(masters),
-        "projection_master_rule": "each projection references one master; masters may feed many projections",
+        "projection_types": ["topic"],
+        "projection_master_rule": "each Topic projection references one master; masters may feed many Topic projections",
         "structure_tree_indexes": "resolved_once_at_import",
         "projection_surfaces": "cached_after_first_materialization",
-        "projection_contract": "projection_base + projection_style + scope + scope_style + projection_dimension",
+        "projection_contract": "topic + scope + atlas + scope_style + projection_dimension",
         "compatibility_aliases": False,
         "cross_master_binding": "none unless explicitly provided by a comparison/binding source",
         "cross_master_inference": False,
     }
     merged["validation_errors"] = []
+
     return {
         "scene": merged,
         "instances": instances,
