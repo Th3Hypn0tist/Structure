@@ -4,76 +4,93 @@
   let projectionBusy=false;
   let progressHideTimer=null;
 
-  // scene_viewer_v4_cards.js used to replace every 3D projection with its own
-  // recursive client-side layout. That made the selected backend generator
-  // irrelevant and could make Atlas 3D look like an old/fallback layout. The
-  // semantic visual kernel is now the sole geometry authority: Renderer only
-  // consumes positions returned by the server.
-  if(typeof SP_originalBuild==='function'){
-    Renderer.prototype.build=function(scene){SP_originalBuild.call(this,scene);};
-  }
-
-  function semanticStyles(){return S.catalog?.projection_styles||[]}
-  function visualStyles(){return S.catalog?.visual_styles||S.catalog?.styles||[]}
   function masters(){return S.catalog?.masters||[]}
-  function masterFor(inst){return masters().find(m=>m.id===inst.master_ref)||masters()[0]||null}
-  function semanticFor(inst){return semanticStyles().find(s=>s.id===inst.semantic_projection_style)||semanticStyles()[0]||null}
-  function visualFor(inst){return visualStyles().find(s=>s.id===inst.visual_style)||visualStyles()[0]||null}
-
-  function scopeItems(inst){
-    const m=masterFor(inst),type=inst.scope_type;
-    if(!m)return[];
-    if(type==='event')return m.scopes?.events||[];
-    if(type==='flow')return m.scopes?.flows||[];
-    if(type==='identity')return m.scopes?.identities||[];
-    if(type==='all')return[{id:'all',name:'all',label:'all'}];
-    return (m.scopes?.topics||[]).filter(x=>x.id==='all'||x.canonical_topic===true);
+  function bases(){return S.catalog?.projection_bases||[]}
+  function scopeStyles(){return S.catalog?.scope_styles||[]}
+  function baseFor(inst){return bases().find(x=>x.id===inst.projection_base)||bases()[0]||null}
+  function stylesForBase(instOrBase){
+    const baseId=typeof instOrBase==='string'?instOrBase:instOrBase?.projection_base;
+    return S.catalog?.projection_styles_by_base?.[baseId]||[];
   }
+  function styleFor(inst){return stylesForBase(inst).find(x=>x.id===inst.projection_style)||stylesForBase(inst)[0]||null}
+  function masterFor(inst){return masters().find(m=>m.id===inst.master_ref)||masters()[0]||null}
 
   function opt(items,selected,labelFn=x=>x.label||x.name||x.id){
     return(items||[]).map(x=>`<option value="${esc(x.id)}" ${String(x.id)===String(selected)?'selected':''}>${esc(labelFn(x))}</option>`).join('');
   }
 
-  function validScopeType(inst){
-    const style=semanticFor(inst),allowed=style?.scope_types||['topic'];
-    if(!allowed.includes(inst.scope_type))inst.scope_type=allowed[0]||'topic';
-    const items=scopeItems(inst);
-    if(!items.some(x=>String(x.id)===String(inst.scope_ref)))inst.scope_ref=String(items[0]?.id||'');
+  function scopeItems(inst){
+    const m=masterFor(inst),type=inst.scope_type;
+    if(!m)return[];
+    if(type==='all')return[{id:'all',label:'all'}];
+    if(type==='event')return m.scopes?.events||[];
+    if(type==='flow')return m.scopes?.flows||[];
+    if(type==='identity')return m.scopes?.identities||[];
+    if(type==='topic')return (m.scopes?.topics||[]).filter(x=>x.id!=='all'&&x.topic_heading===true);
+    return[];
   }
 
   function preferredDimension(styleId,dims){
-    if(!Array.isArray(dims)||!dims.length)return'2d';
+    if(!Array.isArray(dims)||!dims.length)return'3d';
     if(styleId==='atlas'&&dims.includes('3d'))return'3d';
-    if(dims.length===1)return dims[0];
     return dims.includes('3d')?'3d':dims[0];
   }
 
-  function normalizeVisualDimension(inst){
-    const visual=visualFor(inst);
-    const dims=visual?.dimensions||['2d'];
-    if(!dims.includes(inst.projection_dimension)){
-      inst.projection_dimension=preferredDimension(inst.visual_style,dims);
+  function defaultScopeFor(inst){
+    const base=baseFor(inst),allowed=base?.scope_types||['all'];
+    if(inst.projection_base==='map'&&allowed.includes('all'))return['all','all'];
+    if(inst.projection_base==='event'&&allowed.includes('event')){
+      const first=masterFor(inst)?.scopes?.events?.[0];return['event',String(first?.id||'')];
     }
+    if(allowed.includes('topic')){
+      const first=(masterFor(inst)?.scopes?.topics||[]).find(x=>x.topic_heading===true);
+      if(first)return['topic',String(first.id)];
+    }
+    if(allowed.includes('identity')){
+      const first=masterFor(inst)?.scopes?.identities?.[0];return['identity',String(first?.id||'')];
+    }
+    const type=allowed[0]||'all';
+    const first=scopeItems({...inst,scope_type:type})[0];
+    return[type,String(first?.id||'')];
+  }
+
+  function normalize(inst,{resetBase=false}={}){
+    inst.master_ref ||= masters()[0]?.id||'master-1';
+    inst.projection_base ||= S.catalog?.defaults?.projection_base||'map';
+    if(!bases().some(x=>x.id===inst.projection_base))inst.projection_base=bases()[0]?.id||'map';
+
+    const allowedStyles=stylesForBase(inst);
+    const base=baseFor(inst);
+    if(resetBase||!allowedStyles.some(x=>x.id===inst.projection_style)){
+      inst.projection_style=base?.default_style||allowedStyles[0]?.id||'atlas';
+    }
+    const style=styleFor(inst),dims=style?.dimensions||['2d','3d'];
+    if(!dims.includes(inst.projection_dimension))inst.projection_dimension=preferredDimension(inst.projection_style,dims);
+
+    inst.scope_style ||= S.catalog?.defaults?.scope_style||'semantic_roles';
+    if(!scopeStyles().some(x=>x.id===inst.scope_style))inst.scope_style=scopeStyles()[0]?.id||'semantic_roles';
+
+    const allowedScopes=base?.scope_types||['all'];
+    if(resetBase||!allowedScopes.includes(inst.scope_type)){
+      [inst.scope_type,inst.scope_ref]=defaultScopeFor(inst);
+    }else{
+      const items=scopeItems(inst);
+      if(!items.some(x=>String(x.id)===String(inst.scope_ref)))inst.scope_ref=String(items[0]?.id||'');
+    }
+
+    inst.relation_depth=Math.max(0,Math.min(32,Number(inst.relation_depth)||0));
+    inst.impact_depth=Math.max(0,Math.min(64,Number(inst.impact_depth)||32));
     return inst;
   }
 
-  function normalize(inst){
-    inst.master_ref ||= masters()[0]?.id||'master-1';
-    inst.semantic_projection_style ||= 'topic';
-    inst.visual_style ||= inst.projection_style||visualStyles().find(x=>x.id==='atlas')?.id||visualStyles()[0]?.id||'atlas';
-    inst.projection_style=inst.visual_style;
-    if(!inst.projection_dimension){
-      const dims=visualFor(inst)?.dimensions||['2d'];
-      inst.projection_dimension=preferredDimension(inst.visual_style,dims);
-    }
-    normalizeVisualDimension(inst);
-    inst.relation_depth=Math.max(0,Math.min(32,Number(inst.relation_depth??inst.dependency_depth??0)||0));
-    inst.dependency_depth=inst.relation_depth;
-    inst.scope_type ||= inst.semantic_projection_style==='impact'?'event':'topic';
-    inst.scope_ref ||= inst.root_topic||'';
-    validScopeType(inst);
-    inst.root_topic=inst.scope_ref;
-    return inst;
+  function schemeFor(scopeStyle){
+    if(scopeStyle==='monochrome')return{even:'#AAB2C2',odd:'#AAB2C2',title:'#AAB2C2'};
+    if(scopeStyle==='depth')return{even:'#087CFF',odd:'#AAB2C2',title:'#0B356B'};
+    return{even:'#087CFF',odd:'#AAB2C2',title:'#FFD83D'};
+  }
+
+  function applyScopeScheme(inst){
+    S.objectStyle[inst.id]={...schemeFor(inst.scope_style)};
   }
 
   function ensureProjectionProgressUI(){
@@ -82,317 +99,171 @@
     style.id='projectionProgressStyle';
     style.textContent=`
       #projectionProgress{position:fixed;z-index:330;left:50%;top:58px;transform:translateX(-50%);width:min(620px,calc(100vw - 32px));padding:9px 11px;background:#080b10ee;border:1px solid var(--line);border-radius:9px;box-shadow:0 12px 40px #0008;display:none;pointer-events:none}
-      #projectionProgress.active{display:block}
-      #projectionProgress.error{border-color:var(--red)}
+      #projectionProgress.active{display:block}#projectionProgress.error{border-color:var(--red)}
       #projectionProgress .projection-progress-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:7px;font-size:10px}
       #projectionProgress .projection-progress-label{color:#fff;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       #projectionProgress .projection-progress-stage{color:var(--muted);white-space:nowrap}
       #projectionProgress .projection-progress-track{height:4px;background:#151b26;border-radius:999px;overflow:hidden}
       #projectionProgress .projection-progress-bar{height:100%;width:0%;background:var(--blue);border-radius:999px;transition:width .18s ease}
       #projectionProgress.error .projection-progress-bar{background:var(--red)}
-      #instances.projection-busy{opacity:.72}
-      #instances.projection-busy select,#instances.projection-busy input,#instances.projection-busy button{cursor:wait}
+      #instances.projection-busy{opacity:.72}#instances.projection-busy select,#instances.projection-busy input,#instances.projection-busy button{cursor:wait}
     `;
     document.head.appendChild(style);
-    const box=document.createElement('div');
-    box.id='projectionProgress';
-    box.innerHTML=`<div class="projection-progress-head"><span class="projection-progress-label">Projection</span><span class="projection-progress-stage">Waiting</span></div><div class="projection-progress-track"><div class="projection-progress-bar"></div></div>`;
+    const box=document.createElement('div');box.id='projectionProgress';
+    box.innerHTML='<div class="projection-progress-head"><span class="projection-progress-label">Projection</span><span class="projection-progress-stage">Waiting</span></div><div class="projection-progress-track"><div class="projection-progress-bar"></div></div>';
     document.body.appendChild(box);
   }
 
   function currentProjectionLabel(){
     if(!S.instances.length)return'Projection';
     const inst=normalize(S.instances[S.instances.length-1]);
-    const semantic=semanticFor(inst)?.label||inst.semantic_projection_style||'Projection';
-    const visual=visualFor(inst)?.label||inst.visual_style||'';
-    return `${inst.name} · ${semantic} · ${visual} ${String(inst.projection_dimension||'').toUpperCase()}`.trim();
+    return `${inst.name} · ${baseFor(inst)?.label||inst.projection_base} · ${styleFor(inst)?.label||inst.projection_style} ${String(inst.projection_dimension).toUpperCase()}`;
   }
 
   function setProjectionProgress(percent,stage,label=null,bad=false){
-    ensureProjectionProgressUI();
-    clearTimeout(progressHideTimer);
-    const box=document.getElementById('projectionProgress');
-    box.classList.add('active');
-    box.classList.toggle('error',bad);
+    ensureProjectionProgressUI();clearTimeout(progressHideTimer);
+    const box=document.getElementById('projectionProgress');box.classList.add('active');box.classList.toggle('error',bad);
     box.querySelector('.projection-progress-label').textContent=label||currentProjectionLabel();
     box.querySelector('.projection-progress-stage').textContent=stage;
     box.querySelector('.projection-progress-bar').style.width=`${Math.max(0,Math.min(100,Number(percent)||0))}%`;
   }
-
-  function hideProjectionProgress(delay=260){
-    clearTimeout(progressHideTimer);
-    progressHideTimer=setTimeout(()=>{
-      const box=document.getElementById('projectionProgress');
-      if(box)box.classList.remove('active','error');
-    },delay);
-  }
-
+  function hideProjectionProgress(delay=260){clearTimeout(progressHideTimer);progressHideTimer=setTimeout(()=>document.getElementById('projectionProgress')?.classList.remove('active','error'),delay)}
   function applyProjectionLock(){
-    const locked=projectionBusy;
-    const instances=document.getElementById('instances');
-    if(instances){
-      instances.classList.toggle('projection-busy',locked);
-      instances.querySelectorAll('select,input,button').forEach(el=>{el.disabled=locked;});
-    }
-    for(const id of ['addInstance','reload','sourcePickerButton']){
-      const el=document.getElementById(id);if(el)el.disabled=locked;
-    }
+    const host=document.getElementById('instances');if(host){host.classList.toggle('projection-busy',projectionBusy);host.querySelectorAll('select,input,button').forEach(el=>el.disabled=projectionBusy)}
+    for(const id of['addInstance','reload','sourcePickerButton']){const el=document.getElementById(id);if(el)el.disabled=projectionBusy}
   }
+  function beginProjectionWork(label=null){if(projectionBusy)return false;projectionBusy=true;clearTimeout(S.reloadTimer);S.reloadTimer=null;setProjectionProgress(6,'Selected — preparing…',label||currentProjectionLabel());applyProjectionLock();return true}
+  function finishProjectionWork(){setProjectionProgress(100,'Rendered',currentProjectionLabel());projectionBusy=false;applyProjectionLock();hideProjectionProgress(420)}
+  function failProjectionWork(error){setProjectionProgress(100,'Failed',currentProjectionLabel(),true);projectionBusy=false;applyProjectionLock();hideProjectionProgress(1800);showError(error)}
+  const nextAnimationFrame=()=>new Promise(resolve=>requestAnimationFrame(resolve));
+  async function waitUntilPainted(){await nextAnimationFrame();await nextAnimationFrame()}
 
-  function beginProjectionWork(label=null){
-    if(projectionBusy)return false;
-    projectionBusy=true;
-    clearTimeout(S.reloadTimer);
-    S.reloadTimer=null;
-    setProjectionProgress(6,'Selected — preparing…',label||currentProjectionLabel());
-    applyProjectionLock();
-    return true;
-  }
-
-  function finishProjectionWork(){
-    setProjectionProgress(100,'Rendered',currentProjectionLabel());
-    projectionBusy=false;
-    applyProjectionLock();
-    hideProjectionProgress(420);
-  }
-
-  function failProjectionWork(error){
-    setProjectionProgress(100,'Failed',currentProjectionLabel(),true);
-    projectionBusy=false;
-    applyProjectionLock();
-    hideProjectionProgress(1800);
-    showError(error);
-  }
-
-  function nextAnimationFrame(){return new Promise(resolve=>requestAnimationFrame(resolve));}
-  async function waitUntilPainted(){
-    await nextAnimationFrame();
-    await nextAnimationFrame();
-  }
-
-  const oldNewInstance=newInstance;
   newInstance=function(){
     if(!S.sourceSpec||!masters().length)throw new Error('Select a source before creating a projection.');
-    const base=oldNewInstance();
-    base.master_ref=masters()[0].id;
-    base.semantic_projection_style='topic';
-    base.visual_style=visualStyles().find(x=>x.id==='atlas')?.id||visualStyles()[0]?.id||'atlas';
-    base.projection_style=base.visual_style;
-    base.projection_dimension='3d';
-    base.scope_type='topic';
-    base.scope_ref='';
-    base.relation_depth=0;
-    return normalize(base);
+    const id=`p${S.nextId++}`;
+    const inst={
+      id,name:`Projection ${id.slice(1)}`,master_ref:masters()[0].id,
+      projection_base:S.catalog?.defaults?.projection_base||'map',
+      projection_style:S.catalog?.defaults?.projection_style||'atlas',
+      projection_dimension:S.catalog?.defaults?.projection_dimension||'3d',
+      scope_type:S.catalog?.defaults?.scope_type||'all',scope_ref:S.catalog?.defaults?.scope_ref||'all',
+      scope_style:S.catalog?.defaults?.scope_style||'semantic_roles',relation_depth:0,impact_depth:32,
+    };
+    normalize(inst,{resetBase:true});applyScopeScheme(inst);return inst;
   };
 
   instancePayload=function(){return S.instances.map(raw=>{
-    const i=normalize(raw);
-    return {
-      id:i.id,
-      name:i.name,
-      master_ref:i.master_ref,
-      semantic_projection_style:i.semantic_projection_style,
-      scope_type:i.scope_type,
-      scope_ref:i.scope_ref,
-      visual_style:i.visual_style,
-      projection_dimension:i.projection_dimension,
-      relation_depth:i.relation_depth,
-      impact_depth:i.impact_depth||32,
+    const i=normalize(raw);return{
+      id:i.id,name:i.name,master_ref:i.master_ref,
+      projection_base:i.projection_base,projection_style:i.projection_style,projection_dimension:i.projection_dimension,
+      scope_type:i.scope_type,scope_ref:i.scope_ref,scope_style:i.scope_style,
+      relation_depth:i.relation_depth,impact_depth:i.impact_depth,
     };
   })};
 
-  const oldInstanceHTML=instanceHTML;
+  function transformFields(inst){
+    const state=ensureLocalState(inst,(S.scene?.objects||[]).find(o=>o.instance_id===inst.id));
+    const t=state.transform;
+    const row=(section,values,step)=>`<div class="subhead"><span>${section}</span><span>XYZ</span></div><div class="grid3">${['x','y','z'].map(axis=>`<div class="field axis ${axis}"><label>${axis.toUpperCase()}</label><input type="number" data-transform="${inst.id}" data-section="${section}" data-axis="${axis}" step="${step}" value="${Number(values[axis]).toFixed(section==='rotation'?1:2)}"></div>`).join('')}</div>`;
+    return row('position',t.position,25)+row('rotation',t.rotation,5)+row('scale',t.scale,.05);
+  }
+
   instanceHTML=function(raw){
-    const inst=normalize(raw),html=oldInstanceHTML(inst),parser=document.createElement('template');
-    parser.innerHTML=html.trim();
-    const card=parser.content.firstElementChild,body=card.querySelector('.instance-body');
-
-    const legacyProjection=body.querySelector('[data-key="projection_style"]')?.closest('.grid2');
-    const legacyDepth=body.querySelector('[data-key="dependency_depth"]')?.closest('.field');
-    const legacyChildAxis=body.querySelector('[data-child-axis]')?.closest('.grid2');
-    const legacyBaseSpread=body.querySelector('[data-base-spread]')?.closest('.field');
-    if(legacyProjection)legacyProjection.remove();
-    if(legacyDepth)legacyDepth.remove();
-    if(legacyChildAxis)legacyChildAxis.remove();
-    if(legacyBaseSpread)legacyBaseSpread.remove();
-    for(const subhead of body.querySelectorAll('.subhead')){
-      if(subhead.textContent?.includes('Projection layout'))subhead.remove();
-    }
-
-    const style=semanticFor(inst),scopeTypes=style?.scope_types||['topic'];
-    const visual=visualFor(inst),dims=visual?.dimensions||['2d'];
-    const controls=document.createElement('div');
-    controls.innerHTML=`
-      <div class="grid2">
-        <div class="field"><label>Master / source</label><select data-session="${inst.id}" data-session-key="master_ref">${opt(masters(),inst.master_ref)}</select></div>
-        <div class="field"><label>Projection style</label><select data-session="${inst.id}" data-session-key="semantic_projection_style">${opt(semanticStyles(),inst.semantic_projection_style)}</select></div>
+    const inst=normalize(raw),base=baseFor(inst),styles=stylesForBase(inst),style=styleFor(inst),dims=style?.dimensions||['2d','3d'];
+    const depthLabel=inst.projection_base==='event'?'Impact depth':'Relation depth';
+    const depthKey=inst.projection_base==='event'?'impact_depth':'relation_depth';
+    const depthMax=inst.projection_base==='event'?64:32;
+    return `<details class="instance" open data-card="${inst.id}">
+      <summary>${esc(inst.name)} · ${esc(base?.label||inst.projection_base)} · ${esc(style?.label||inst.projection_style)} ${esc(inst.projection_dimension.toUpperCase())}</summary>
+      <div class="instance-body">
+        <div class="field"><label>Instance name</label><input data-session="${inst.id}" data-session-key="name" value="${esc(inst.name)}"></div>
+        <div class="grid2">
+          <div class="field"><label>Master / source</label><select data-session="${inst.id}" data-session-key="master_ref">${opt(masters(),inst.master_ref)}</select></div>
+          <div class="field"><label>Projection base</label><select data-session="${inst.id}" data-session-key="projection_base">${opt(bases(),inst.projection_base)}</select></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label>Projection style</label><select data-session="${inst.id}" data-session-key="projection_style">${opt(styles,inst.projection_style)}</select></div>
+          <div class="field"><label>Dimension</label><select data-session="${inst.id}" data-session-key="projection_dimension">${dims.map(v=>`<option value="${v}" ${v===inst.projection_dimension?'selected':''}>${v.toUpperCase()}</option>`).join('')}</select></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label>Scope type</label><select data-session="${inst.id}" data-session-key="scope_type">${(base?.scope_types||[]).map(v=>`<option value="${esc(v)}" ${v===inst.scope_type?'selected':''}>${esc(v)}</option>`).join('')}</select></div>
+          <div class="field"><label>Scope</label><select data-session="${inst.id}" data-session-key="scope_ref">${opt(scopeItems(inst),inst.scope_ref)}</select></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label>Scope style</label><select data-session="${inst.id}" data-session-key="scope_style">${opt(scopeStyles(),inst.scope_style)}</select></div>
+          <div class="field"><label>${depthLabel}</label><input type="number" min="0" max="${depthMax}" step="1" data-session="${inst.id}" data-session-key="${depthKey}" value="${inst[depthKey]}"></div>
+        </div>
+        ${transformFields(inst)}
+        <div class="grid2"><button data-reset="${inst.id}">Reset transform</button><button class="remove" data-remove="${inst.id}">Remove projection</button></div>
       </div>
-      <div class="grid2">
-        <div class="field"><label>Scope type</label><select data-session="${inst.id}" data-session-key="scope_type">${scopeTypes.map(v=>`<option value="${esc(v)}" ${v===inst.scope_type?'selected':''}>${esc(v)}</option>`).join('')}</select></div>
-        <div class="field"><label>Scope</label><select data-session="${inst.id}" data-session-key="scope_ref">${opt(scopeItems(inst),inst.scope_ref)}</select></div>
-      </div>
-      <div class="grid3">
-        <div class="field"><label>Visual style</label><select data-session="${inst.id}" data-session-key="visual_style">${opt(visualStyles(),inst.visual_style)}</select></div>
-        <div class="field"><label>Dimension</label><select data-session="${inst.id}" data-session-key="projection_dimension">${dims.map(v=>`<option value="${v}" ${v===inst.projection_dimension?'selected':''}>${v.toUpperCase()}</option>`).join('')}</select></div>
-        <div class="field"><label>${inst.semantic_projection_style==='impact'?'Impact depth':'Relation depth'}</label><input type="number" min="0" max="${inst.semantic_projection_style==='impact'?'64':'32'}" step="1" data-session="${inst.id}" data-session-key="${inst.semantic_projection_style==='impact'?'impact_depth':'relation_depth'}" value="${inst.semantic_projection_style==='impact'?(inst.impact_depth||32):inst.relation_depth}"></div>
-      </div>`;
-    const nameField=body.querySelector('.field');
-    nameField?.insertAdjacentElement('afterend',controls);
-    card.querySelector('summary').textContent=`${inst.name} · ${style?.label||inst.semantic_projection_style} · ${visual?.label||inst.visual_style} ${inst.projection_dimension.toUpperCase()} · ${masterFor(inst)?.name||inst.master_ref}`;
-    return card.outerHTML;
+    </details>`;
   };
 
-  const oldRenderInstances=renderInstances;
   renderInstances=function(){
-    oldRenderInstances();
-    $('#instances').querySelectorAll('[data-session]').forEach(el=>{
-      el.onchange=async()=>{
-        if(projectionBusy)return;
-        const inst=S.instances.find(x=>x.id===el.dataset.session);if(!inst)return;
-        const key=el.dataset.sessionKey;
-        if(key==='relation_depth'||key==='impact_depth')inst[key]=Math.max(0,Number(el.value)||0);else inst[key]=el.value;
-        if(key==='master_ref')inst.scope_ref='';
-        if(key==='semantic_projection_style'){inst.scope_type=el.value==='impact'?'event':'topic';inst.scope_ref='';}
-        if(key==='scope_type')inst.scope_ref='';
-        if(key==='visual_style'){
-          inst.projection_style=inst.visual_style;
-          const dims=visualFor(inst)?.dimensions||['2d'];
-          if(!dims.includes(inst.projection_dimension))inst.projection_dimension=preferredDimension(inst.visual_style,dims);
-        }
-        normalize(inst);
-        renderInstances();
-        await loadScene({label:currentProjectionLabel()});
-      };
+    const host=$('#instances');host.innerHTML=S.instances.map(instanceHTML).join('');
+    host.querySelectorAll('[data-session]').forEach(el=>el.onchange=async()=>{
+      if(projectionBusy)return;
+      const inst=S.instances.find(x=>x.id===el.dataset.session);if(!inst)return;
+      const key=el.dataset.sessionKey;
+      if(key==='relation_depth'||key==='impact_depth')inst[key]=Math.max(0,Number(el.value)||0);else inst[key]=el.value;
+      if(key==='master_ref'){normalize(inst,{resetBase:true})}
+      if(key==='projection_base'){normalize(inst,{resetBase:true})}
+      else if(key==='projection_style'){
+        const dims=styleFor(inst)?.dimensions||['2d','3d'];if(!dims.includes(inst.projection_dimension))inst.projection_dimension=preferredDimension(inst.projection_style,dims);
+      }else if(key==='scope_type'){
+        const items=scopeItems(inst);inst.scope_ref=String(items[0]?.id||'');
+      }
+      normalize(inst);applyScopeScheme(inst);renderInstances();await loadScene({label:currentProjectionLabel()});
     });
+    host.querySelectorAll('[data-transform]').forEach(el=>el.oninput=()=>{
+      const state=S.objectState[el.dataset.transform];if(!state)return;let v=Number(el.value);if(!Number.isFinite(v))return;if(el.dataset.section==='scale')v=Math.max(.05,v);state.transform[el.dataset.section][el.dataset.axis]=v;rebuildRenderer();
+    });
+    host.querySelectorAll('[data-reset]').forEach(btn=>btn.onclick=()=>{const inst=S.instances.find(x=>x.id===btn.dataset.reset);if(!inst)return;delete S.objectState[inst.id];ensureLocalState(inst,(S.scene?.objects||[]).find(o=>o.instance_id===inst.id));renderInstances();rebuildRenderer()});
+    host.querySelectorAll('[data-remove]').forEach(btn=>btn.onclick=async()=>{if(projectionBusy)return;const id=btn.dataset.remove;S.instances=S.instances.filter(x=>x.id!==id);delete S.objectState[id];delete S.objectStyle[id];renderInstances();await loadScene({label:'Projection removed'})});
     applyProjectionLock();
   };
 
   async function refreshSessionCatalog(){
     if(!S.sourceSpec)throw new Error('No source/master selected.');
     const q=new URLSearchParams();
-    if(S.sourceSpec.type==='directory'){
-      q.set('source_type','directory');q.set('source_path',S.sourceSpec.path||'');
-    }else{
-      q.set('source_type','github');q.set('repo',S.sourceSpec.repo||'');q.set('branch',S.sourceSpec.branch||'main');
-    }
-    S.catalog=await getJSON(`/api/projection-catalog?${q}`);
-    S.instances.forEach(normalize);
-    renderInstances();
+    if(S.sourceSpec.type==='directory'){q.set('source_type','directory');q.set('source_path',S.sourceSpec.path||'')}
+    else{q.set('source_type','github');q.set('repo',S.sourceSpec.repo||'');q.set('branch',S.sourceSpec.branch||'main')}
+    S.catalog=await getJSON(`/api/projection-catalog?${q}`);S.instances.forEach(i=>{normalize(i);applyScopeScheme(i)});renderInstances();
   }
 
   function synchronizeResolvedInstances(data){
     if(!Array.isArray(data?.instances))return;
-    for(const resolved of data.instances){
-      const local=S.instances.find(item=>item.id===resolved.id);
-      if(!local)continue;
-      local.master_ref=resolved.master_ref;
-      local.semantic_projection_style=resolved.projection_style;
-      local.scope_type=resolved.scope_type;
-      local.scope_ref=resolved.scope_ref;
-      local.visual_style=resolved.visual_style;
-      local.projection_style=resolved.visual_style;
-      local.projection_dimension=resolved.projection_dimension;
-      local.relation_depth=resolved.relation_depth;
-      local.dependency_depth=resolved.relation_depth;
-      local.impact_depth=resolved.impact_depth;
-      local.projection_generator=resolved.projection_generator;
-      local.root_topic=resolved.scope_ref;
-    }
+    for(const resolved of data.instances){const local=S.instances.find(item=>item.id===resolved.id);if(!local)continue;Object.assign(local,resolved);normalize(local);applyScopeScheme(local)}
   }
 
   function verifyRenderedProjectionIdentity(){
-    for(const inst of S.instances){
-      const obj=(S.scene?.objects||[]).find(item=>item.instance_id===inst.id);
-      if(!obj)throw new Error(`Rendered scene is missing projection object ${inst.id}`);
-      if(String(obj.projection_dimension)!==String(inst.projection_dimension)){
-        throw new Error(`Projection dimension mismatch for ${inst.id}: requested ${inst.projection_dimension}, rendered ${obj.projection_dimension}`);
-      }
-      if(inst.projection_generator&&String(obj.projection_generator)!==String(inst.projection_generator)){
-        throw new Error(`Projection generator mismatch for ${inst.id}: resolved ${inst.projection_generator}, rendered ${obj.projection_generator}`);
-      }
-    }
+    for(const inst of S.instances){const obj=(S.scene?.objects||[]).find(item=>item.instance_id===inst.id);if(!obj)throw new Error(`Rendered scene is missing projection object ${inst.id}`);if(String(obj.projection_dimension)!==String(inst.projection_dimension))throw new Error(`Projection dimension mismatch for ${inst.id}`);if(String(obj.projection_base)!==String(inst.projection_base))throw new Error(`Projection base mismatch for ${inst.id}`);if(String(obj.projection_style)!==String(inst.projection_style))throw new Error(`Projection style mismatch for ${inst.id}`)}
   }
 
   loadScene=async function(options={}){
-    if(!S.instances.length){
-      S.scene=null;
-      rebuildRenderer(false);
-      renderSceneInfo();
-      draw();
-      setStatus(S.sourceSpec?'master ready':'choose source');
-      return true;
-    }
-    if(!S.sourceSpec){showError(new Error('Projection has no selected source/master.'));return false;}
+    if(!S.instances.length){S.scene=null;if(S.renderer){S.renderer.boxes=[];S.renderer.lines=[];S.renderer.strips=[];S.renderer.labels=[];S.renderer.upload?.()}renderSceneInfo();draw();setStatus(S.sourceSpec?'master ready':'choose source');return true}
+    if(!S.sourceSpec){showError(new Error('Projection has no selected source/master.'));return false}
     if(!beginProjectionWork(options.label))return false;
-
-    setStatus('projecting');
-    $('#error').textContent='None.';
+    setStatus('projecting');$('#error').textContent='None.';
     try{
-      await nextAnimationFrame();
-      setProjectionProgress(18,'Calculating semantic projection…');
-
-      if(!S.catalog?.projection_styles)await refreshSessionCatalog();
+      await nextAnimationFrame();setProjectionProgress(18,'Selecting StructureTree surface…');
+      if(!S.catalog?.projection_bases)await refreshSessionCatalog();
       const source=S.sourceSpec;
-      const data=await postJSON('/api/scene',{
-        sources:[{id:'master-1',name:source.type==='directory'?(source.path||'Directory'):(source.repo||'Repository'),source}],
-        instances:instancePayload(),
-      });
-
-      setProjectionProgress(62,'Projection calculated — building renderer…');
-      S.scene=data.scene;
-      S.catalog=data.catalog||S.catalog;
-      synchronizeResolvedInstances(data);
-      verifyRenderedProjectionIdentity();
-      S.source=data.masters?.[0]?.source||{};
-      $('#revision').textContent=(S.source.revision||'').slice(0,12);
-      for(const inst of S.instances)ensureLocalState(inst,(S.scene.objects||[]).find(o=>o.instance_id===inst.id));
-      syncChannels();
-      renderInstances();
-      renderChannels();
-
-      setProjectionProgress(78,'Building geometry…');
-      rebuildRenderer(false);
-      fit(false);
-      renderSceneInfo();
-
-      setProjectionProgress(92,'Rendering first frame…');
-      draw();
-      await waitUntilPainted();
-
-      const nodeCount=S.scene?.objects?.reduce((n,o)=>n+(o.nodes?.length||0),0)||0;
-      const active=S.instances[S.instances.length-1];
-      const generator=active?.projection_generator?` · ${active.projection_generator}`:'';
-      setStatus(`${S.instances.length} projection${S.instances.length===1?'':'s'} · ${nodeCount} nodes${generator}`);
-      finishProjectionWork();
-      return true;
-    }catch(e){
-      failProjectionWork(e);
-      return false;
-    }
+      const data=await postJSON('/api/scene',{sources:[{id:'master-1',name:source.type==='directory'?(source.path||'Directory'):(source.repo||'Repository'),source}],instances:instancePayload()});
+      setProjectionProgress(62,'Base resolved — applying projection style…');S.scene=data.scene;S.catalog=data.catalog||S.catalog;synchronizeResolvedInstances(data);verifyRenderedProjectionIdentity();
+      S.source=data.masters?.[0]?.source||{};$('#revision').textContent=(S.source.revision||'').slice(0,12);
+      for(const inst of S.instances){ensureLocalState(inst,(S.scene.objects||[]).find(o=>o.instance_id===inst.id));applyScopeScheme(inst)}
+      syncChannels();renderInstances();renderChannels();setProjectionProgress(78,'Building geometry…');rebuildRenderer(false);fit(false);renderSceneInfo();setProjectionProgress(92,'Rendering first frame…');draw();await waitUntilPainted();
+      const nodeCount=S.scene?.objects?.reduce((n,o)=>n+(o.nodes?.length||0),0)||0,active=S.instances[S.instances.length-1],generator=active?.projection_generator?` · ${active.projection_generator}`:'';
+      setStatus(`${S.instances.length} projection${S.instances.length===1?'':'s'} · ${nodeCount} nodes${generator}`);finishProjectionWork();return true;
+    }catch(e){failProjectionWork(e);return false}
   };
 
   function bindProjectionActions(){
-    const add=$('#addInstance');
-    if(add){
-      add.onclick=async()=>{
-        if(projectionBusy)return;
-        if(!S.sourceSpec||!masters().length){showError(new Error('Select a source first.'));return;}
-        try{
-          const inst=newInstance();
-          S.instances.push(inst);
-          renderInstances();
-          await loadScene({label:currentProjectionLabel()});
-        }catch(e){showError(e)}
-      };
-    }
-    const reload=$('#reload');
-    if(reload)reload.onclick=()=>{if(!projectionBusy)loadScene({label:currentProjectionLabel()});};
-    applyProjectionLock();
+    const add=$('#addInstance');if(add)add.onclick=async()=>{if(projectionBusy)return;if(!S.sourceSpec||!masters().length){showError(new Error('Select a source first.'));return}try{const inst=newInstance();S.instances.push(inst);renderInstances();await loadScene({label:currentProjectionLabel()})}catch(e){showError(e)}};
+    const reload=$('#reload');if(reload)reload.onclick=()=>{if(!projectionBusy)loadScene({label:currentProjectionLabel()})};applyProjectionLock();
   }
 
-  ensureProjectionProgressUI();
-  bindProjectionActions();
-  window.spRefreshSessionCatalog=refreshSessionCatalog;
-  window.spBindProjectionActions=bindProjectionActions;
-  window.spProjectionBusy=()=>projectionBusy;
+  ensureProjectionProgressUI();bindProjectionActions();
+  window.spRefreshSessionCatalog=refreshSessionCatalog;window.spBindProjectionActions=bindProjectionActions;window.spProjectionBusy=()=>projectionBusy;
 })();
