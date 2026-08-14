@@ -12,10 +12,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from source_adapter import load_snapshot
-from structureprojector import ProjectorError, SOURCE_REPO, SourceSnapshot
-
-if not hasattr(ProjectorError, "to_dict") and hasattr(ProjectorError, "as_dict"):
-    ProjectorError.to_dict = ProjectorError.as_dict
+from structure_runtime import SUGGESTED_SOURCE_REPO, SourceSnapshot, StructureError
 
 SOURCE_GITHUB = "github"
 SOURCE_DIRECTORY = "directory"
@@ -81,12 +78,12 @@ def _directory_candidates(path: str) -> list[str]:
 
 def normalize_source_spec(spec: dict[str, Any] | None) -> dict[str, str]:
     raw = spec if isinstance(spec, dict) else {}; source_type = str(raw.get("type") or SOURCE_GITHUB).strip().lower()
-    if source_type == SOURCE_GITHUB: return {"type": SOURCE_GITHUB, "repo": str(raw.get("repo") or SOURCE_REPO).strip(), "branch": str(raw.get("branch") or "main").strip()}
+    if source_type == SOURCE_GITHUB: return {"type": SOURCE_GITHUB, "repo": str(raw.get("repo") or SUGGESTED_SOURCE_REPO).strip(), "branch": str(raw.get("branch") or "main").strip()}
     if source_type == SOURCE_DIRECTORY:
         path = _strip_wrapping_quotes(str(raw.get("path") or ""))
-        if not path: raise ProjectorError("SP_SOURCE_DIRECTORY_REQUIRED", "Local directory source requires a path")
+        if not path: raise StructureError("SP_SOURCE_DIRECTORY_REQUIRED", "Local directory source requires a path")
         return {"type": SOURCE_DIRECTORY, "path": path}
-    raise ProjectorError("SP_SOURCE_TYPE", f"Unsupported source type: {source_type!r}")
+    raise StructureError("SP_SOURCE_TYPE", f"Unsupported source type: {source_type!r}")
 
 
 def _source_cache_key(normalized: dict[str, str]) -> str:
@@ -101,7 +98,7 @@ def _resolve_directory(path: str) -> Path:
         if root.is_dir(): return root
         errors.append(NotADirectoryError(candidate))
     message=f"Unable to resolve local directory: {path!r}" + (f"; tried: {', '.join(repr(x) for x in candidates)}" if candidates else "")
-    raise ProjectorError("SP_SOURCE_DIRECTORY_INVALID", message) from (errors[-1] if errors else None)
+    raise StructureError("SP_SOURCE_DIRECTORY_INVALID", message) from (errors[-1] if errors else None)
 
 
 def directory_roots() -> list[str]:
@@ -153,7 +150,7 @@ def browse_directories(path: str | None = None) -> dict[str, Any]:
                 except OSError: continue
         directories.sort(key=lambda x:x["name"].lower())
     except (OSError,PermissionError) as exc:
-        raise ProjectorError("SP_SOURCE_DIRECTORY_BROWSE",f"Unable to browse local directory: {str(root)!r}") from exc
+        raise StructureError("SP_SOURCE_DIRECTORY_BROWSE",f"Unable to browse local directory: {str(root)!r}") from exc
     parent=root.parent if root.parent!=root else None
     return {"path":str(root),"parent":str(parent) if parent else None,"roots":directory_roots(),"source_format":_direct_format_hint(root),"directories":directories}
 
@@ -169,13 +166,12 @@ def load_directory_snapshot(path: str) -> SourceSnapshot:
                 relative=absolute.relative_to(root).as_posix(); payload=absolute.read_bytes(); files[relative]=payload
                 encoded=relative.encode("utf-8"); digest.update(len(encoded).to_bytes(8,"big")); digest.update(encoded); digest.update(len(payload).to_bytes(8,"big")); digest.update(payload)
     except (OSError,PermissionError) as exc:
-        raise ProjectorError("SP_SOURCE_DIRECTORY_READ",f"Unable to read local directory source: {str(root)!r}") from exc
+        raise StructureError("SP_SOURCE_DIRECTORY_READ",f"Unable to read local directory source: {str(root)!r}") from exc
     mounted_files,_=_canonical_mount(files)
     return SourceSnapshot(repo=f"directory:{root}",branch="local",revision=digest.hexdigest(),files=mounted_files)
 
 
 def load_source(spec: dict[str, Any] | None, *, refresh: bool = False) -> SourceSnapshot:
-    """Load a source once and reuse the immutable snapshot until explicit refresh."""
     normalized=normalize_source_spec(spec); key=_source_cache_key(normalized)
     with _SOURCE_LOCK:
         if not refresh and key in _SOURCE_SNAPSHOT_CACHE:
@@ -197,7 +193,7 @@ def clear_source_snapshot_cache(spec: dict[str, Any] | None = None) -> None:
 def source_spec_from_query(query: dict[str,list[str]]) -> dict[str,str]:
     source_type=(query.get("source_type") or [SOURCE_GITHUB])[0]
     if source_type==SOURCE_DIRECTORY: return {"type":SOURCE_DIRECTORY,"path":(query.get("source_path") or [""])[0]}
-    return {"type":SOURCE_GITHUB,"repo":(query.get("repo") or [SOURCE_REPO])[0],"branch":(query.get("branch") or ["main"])[0]}
+    return {"type":SOURCE_GITHUB,"repo":(query.get("repo") or [SUGGESTED_SOURCE_REPO])[0],"branch":(query.get("branch") or ["main"])[0]}
 
 
 def source_summary(snapshot: SourceSnapshot) -> dict[str,Any]:
