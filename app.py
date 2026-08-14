@@ -18,6 +18,7 @@ from view_rules import ViewRuleError, binding_children, binding_tree
 
 BASE_DIR = os.path.dirname(__file__)
 STRUCTURE_HTML = os.path.join(BASE_DIR, "static", "structure.html")
+UI_RUNTIME_JS = os.path.join(BASE_DIR, "static", "ui_runtime.js")
 RENDERER_JS = os.path.join(BASE_DIR, "static", "renderer.js")
 SOURCE_SELECT_UI_JS = os.path.join(BASE_DIR, "static", "source_select_ui.js")
 SOURCE_PICKER_BROWSE_JS = os.path.join(BASE_DIR, "static", "source_picker_browse.js")
@@ -68,7 +69,7 @@ def _query_master(query: dict[str, list[str]]) -> dict:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "Structure/0.34.0"
+    server_version = "Structure/0.34.1"
 
     def _write_json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
@@ -115,6 +116,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/":
                 return self._write_file(STRUCTURE_HTML, "text/html; charset=utf-8")
             static_routes = {
+                "/static/ui_runtime.js": UI_RUNTIME_JS,
                 "/static/renderer.js": RENDERER_JS,
                 "/static/source_select_ui.js": SOURCE_SELECT_UI_JS,
                 "/static/source_picker_browse.js": SOURCE_PICKER_BROWSE_JS,
