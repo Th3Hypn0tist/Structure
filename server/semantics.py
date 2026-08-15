@@ -10,16 +10,41 @@ DEFAULT_COLOR_SPACES: list[dict[str, Any]] = [
     {"id": "COLORSPACE_AUTHORITY", "name": "Authority", "colors": {"base": [0.72, 0.18, 0.28], "flow": [1.0, 0.38, 0.42], "selected": [1.0, 0.72, 0.74]}},
     {"id": "COLORSPACE_CONTAINMENT", "name": "Containment", "colors": {"base": [0.22, 0.60, 0.32], "flow": [0.46, 0.92, 0.54], "selected": [0.74, 1.0, 0.78]}},
     {"id": "COLORSPACE_ARCHITECTURE", "name": "Architecture", "colors": {"base": [0.52, 0.26, 0.82], "flow": [0.76, 0.48, 1.0], "selected": [0.90, 0.76, 1.0]}},
+    {"id": "COLORSPACE_CAUSAL", "name": "Causal", "colors": {"base": [0.78, 0.20, 0.18], "flow": [1.0, 0.48, 0.30], "selected": [1.0, 0.78, 0.64]}},
+    {"id": "COLORSPACE_RELATION", "name": "Relation", "colors": {"base": [0.20, 0.62, 0.64], "flow": [0.38, 0.90, 0.92], "selected": [0.72, 1.0, 1.0]}},
 ]
 
 
+def _link_ruleset(ruleset_id: str, name: str, link_type_ref: str, parent_role: str, child_role: str, color_space_ref: str) -> dict[str, Any]:
+    return {
+        "id": ruleset_id,
+        "name": name,
+        "property_type_ref": "link",
+        "link_type_ref": link_type_ref,
+        "semantic_roles": {"parent_ref": parent_role, "child_ref": child_role},
+        "property_owner": "ruleset_defined",
+        "color_space_ref": color_space_ref,
+    }
+
+
 DEFAULT_RULESETS: list[dict[str, Any]] = [
-    {"id": "RULESET_LINK_DEPENDENCY", "name": "Dependency", "property_type_ref": "link", "link_type_ref": "dependency", "semantic_roles": {"parent_ref": "dependency", "child_ref": "dependent"}, "property_owner": "ruleset_defined", "color_space_ref": "COLORSPACE_DEPENDENCY"},
-    {"id": "RULESET_LINK_OWNERSHIP", "name": "Ownership", "property_type_ref": "link", "link_type_ref": "ownership", "semantic_roles": {"parent_ref": "owner", "child_ref": "owned"}, "property_owner": "ruleset_defined", "color_space_ref": "COLORSPACE_OWNERSHIP"},
-    {"id": "RULESET_LINK_AUTHORITY", "name": "Authority", "property_type_ref": "link", "link_type_ref": "authority", "semantic_roles": {"parent_ref": "authority", "child_ref": "governed"}, "property_owner": "ruleset_defined", "color_space_ref": "COLORSPACE_AUTHORITY"},
-    {"id": "RULESET_LINK_CONTAINMENT", "name": "Containment", "property_type_ref": "link", "link_type_ref": "containment", "semantic_roles": {"parent_ref": "container", "child_ref": "contained"}, "property_owner": "ruleset_defined", "color_space_ref": "COLORSPACE_CONTAINMENT"},
-    {"id": "RULESET_LINK_ARCHITECTURE_PARENT", "name": "Architecture Parent", "property_type_ref": "link", "link_type_ref": "architecture_parent", "semantic_roles": {"parent_ref": "architecture_parent", "child_ref": "architecture_child"}, "property_owner": "ruleset_defined", "color_space_ref": "COLORSPACE_ARCHITECTURE"},
+    _link_ruleset("RULESET_LINK_DEPENDENCY", "Dependency", "dependency", "dependency_target", "dependent", "COLORSPACE_DEPENDENCY"),
+    _link_ruleset("RULESET_LINK_OWNERSHIP", "Ownership", "ownership", "owner", "owned", "COLORSPACE_OWNERSHIP"),
+    _link_ruleset("RULESET_LINK_AUTHORITY", "Authority", "authority", "authority", "governed", "COLORSPACE_AUTHORITY"),
+    _link_ruleset("RULESET_LINK_CONTAINMENT", "Containment", "containment", "container", "contained", "COLORSPACE_CONTAINMENT"),
+    _link_ruleset("RULESET_LINK_ARCHITECTURE_PARENT", "Architecture Parent", "architecture_parent", "architecture_parent", "architecture_child", "COLORSPACE_ARCHITECTURE"),
+    _link_ruleset("RULESET_LINK_RELATION", "Relation", "relation", "relation_parent", "relation_child", "COLORSPACE_RELATION"),
+    _link_ruleset("RULESET_LINK_EVENT_READ", "Event Read", "event_read", "observed_source", "event", "COLORSPACE_CAUSAL"),
+    _link_ruleset("RULESET_LINK_EVENT_INPUT", "Event Input", "event_input", "input_source", "event", "COLORSPACE_CAUSAL"),
+    _link_ruleset("RULESET_LINK_EVENT_OUTPUT", "Event Output", "event_output", "event", "output_target", "COLORSPACE_CAUSAL"),
+    _link_ruleset("RULESET_LINK_EVENT_EFFECT", "Event Effect", "event_effect", "event", "effect", "COLORSPACE_CAUSAL"),
+    _link_ruleset("RULESET_LINK_EVENT_CAUSE", "Event Cause", "event_cause", "cause_source", "event", "COLORSPACE_CAUSAL"),
+    _link_ruleset("RULESET_LINK_EVENT_CONDITION", "Event Condition", "event_condition", "condition_source", "event", "COLORSPACE_CAUSAL"),
+    _link_ruleset("RULESET_LINK_EFFECT_TARGET", "Effect Target", "effect_target", "effect", "effect_target", "COLORSPACE_CAUSAL"),
     {"id": "RULESET_EVENT", "name": "Event", "property_type_ref": "event"},
+    {"id": "RULESET_EFFECT", "name": "Effect", "property_type_ref": "effect"},
+    {"id": "RULESET_DATA", "name": "Data", "property_type_ref": "data"},
+    {"id": "RULESET_FUNCTION", "name": "Function", "property_type_ref": "function"},
 ]
 
 
@@ -65,11 +90,16 @@ def validate_rulesets(rulesets: list[dict[str, Any]], color_spaces: dict[str, di
             color_space_ref = ruleset.get("color_space_ref")
             if color_space_ref not in color_spaces:
                 raise ValueError(f"ruleset {ruleset['id']} color_space_ref does not resolve: {color_space_ref}")
-        elif property_type_ref == "event":
+        elif property_type_ref in {"event", "effect", "data", "function"}:
             continue
         else:
             raise ValueError(f"MVP ruleset {ruleset['id']} has unsupported property_type_ref: {property_type_ref}")
     return index
+
+
+def _property_type(ref: str, property_index: dict[str, tuple[str, dict[str, Any]]]) -> str | None:
+    item = property_index.get(ref)
+    return item[1].get("property_type_ref") if item else None
 
 
 def validate_properties(entities: list[dict[str, Any]], rulesets: dict[str, dict[str, Any]]) -> None:
@@ -113,16 +143,64 @@ def validate_properties(entities: list[dict[str, Any]], rulesets: dict[str, dict
                 raise ValueError(f"property {prop_id} child_ref does not resolve: {child_ref}")
             if value.get("link_type_ref") != ruleset.get("link_type_ref"):
                 raise ValueError(f"property {prop_id} link_type_ref does not match ruleset {ruleset_ref}")
+            if value.get("target_ref") is not None or value.get("dependency_type") is not None:
+                raise ValueError(f"property {prop_id} duplicates canonical endpoint semantics")
             value.setdefault("properties", {})
             if not isinstance(value["properties"], dict):
                 raise ValueError(f"property {prop_id} value.properties must be an object")
+
+            link_type_ref = value["link_type_ref"]
+            parent_type = _property_type(parent_ref, property_index)
+            child_type = _property_type(child_ref, property_index)
+            if link_type_ref == "event_effect" and (parent_type != "event" or child_type != "effect"):
+                raise ValueError(f"property {prop_id} event_effect endpoints must be Event -> Effect")
+            if link_type_ref == "effect_target" and parent_type != "effect":
+                raise ValueError(f"property {prop_id} effect_target parent_ref must be Effect")
+            if link_type_ref in {"event_read", "event_input", "event_cause", "event_condition"} and child_type != "event":
+                raise ValueError(f"property {prop_id} {link_type_ref} child_ref must be Event")
+            if link_type_ref == "event_output" and parent_type != "event":
+                raise ValueError(f"property {prop_id} event_output parent_ref must be Event")
+
         elif property_type_ref == "event":
             event_type_ref = value.get("event_type_ref")
             if not isinstance(event_type_ref, str) or not event_type_ref:
                 raise ValueError(f"event property {prop_id} requires event_type_ref")
+            for forbidden in ("reads", "inputs", "outputs", "effects", "causes", "conditions", "targets"):
+                if forbidden in value:
+                    raise ValueError(f"event property {prop_id} embeds authoritative directed reference: {forbidden}")
             value.setdefault("properties", {})
             if not isinstance(value["properties"], dict):
                 raise ValueError(f"event property {prop_id} value.properties must be an object")
+
+        elif property_type_ref == "effect":
+            effect_type_ref = value.get("effect_type_ref")
+            if not isinstance(effect_type_ref, str) or not effect_type_ref:
+                raise ValueError(f"effect property {prop_id} requires effect_type_ref")
+            if "target_ref" in value or "targets" in value:
+                raise ValueError(f"effect property {prop_id} embeds authoritative target reference")
+            value.setdefault("properties", {})
+            if not isinstance(value["properties"], dict):
+                raise ValueError(f"effect property {prop_id} value.properties must be an object")
+
+        elif property_type_ref == "data":
+            data_type_ref = value.get("data_type_ref")
+            if not isinstance(data_type_ref, str) or not data_type_ref:
+                raise ValueError(f"data property {prop_id} requires data_type_ref")
+            value.setdefault("properties", {})
+            if not isinstance(value["properties"], dict):
+                raise ValueError(f"data property {prop_id} value.properties must be an object")
+
+        elif property_type_ref == "function":
+            function_type_ref = value.get("function_type_ref")
+            if not isinstance(function_type_ref, str) or not function_type_ref:
+                raise ValueError(f"function property {prop_id} requires function_type_ref")
+            value.setdefault("properties", {})
+            if not isinstance(value["properties"], dict):
+                raise ValueError(f"function property {prop_id} value.properties must be an object")
+            for field in ("input_refs", "output_refs"):
+                refs = value.get(field, [])
+                if not isinstance(refs, list) or any(ref not in canonical_ids for ref in refs):
+                    raise ValueError(f"function property {prop_id} {field} must resolve canonical identities")
 
         prop.setdefault("metadata", {})
         prop["metadata"].setdefault("workspace_entity_ref", owner_id)
