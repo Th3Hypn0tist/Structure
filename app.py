@@ -5,6 +5,7 @@ import os
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from server.test_runner import run_startup_suite
 from server.workspace import WorkspaceStore
 
 BASE_DIR = os.path.dirname(__file__)
@@ -47,6 +48,8 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None: print(f"[structure] {self.address_string()} {fmt % args}")
 
 def main() -> None:
-    print(f"Structure 0.2.0 -> http://{HOST}:{PORT}"); ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+    run_startup_suite()
+    print(f"Structure 0.2.0 -> http://{HOST}:{PORT}")
+    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
 
 if __name__ == "__main__": main()
