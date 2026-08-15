@@ -49,7 +49,6 @@ function syncCameraAnglesToReference() {
   ws.camera.pitch = Math.asin(Math.max(-1, Math.min(1, forward[1])));
 }
 
-// Replace the old active-selection camera binding with an explicit reference point.
 viewForward = referenceForward;
 cameraRight = referenceRight;
 cameraUp = referenceUp;
@@ -133,6 +132,9 @@ canvas.onmousedown = event => {
 
   const axis = gizmoAxisHit(event.clientX, event.clientY);
   if (axis && selected.size) {
+    // Moving an Entity that currently owns the lookAt reference must not drag the camera.
+    // Freeze the current reference point first, then move the Entity independently.
+    if (lookAtEntityId && selected.has(lookAtEntityId)) detachLookAtReference();
     dragAxis = axis;
     last = [event.clientX, event.clientY];
     return;
@@ -215,9 +217,6 @@ window.onmousemove = event => {
     const axisIndex = { x: 0, y: 1, z: 2 }[dragAxis];
     for (const entity of ws.entities) {
       if (selected.has(entity.id)) entity.position[axisIndex] += amount;
-    }
-    if (lookAtEntityId && selected.has(lookAtEntityId)) {
-      ws.camera.reference = [...cameraReference()];
     }
     syncCameraAnglesToReference();
     last = [event.clientX, event.clientY];
