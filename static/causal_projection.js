@@ -312,12 +312,13 @@ async function loadStartingScene() {
   status('starter scene: New Order');
 }
 
+// Capture phase is intentional: the Event button's own pulse handler stops bubbling.
 document.addEventListener('click', event => {
   const button = event.target.closest?.('.event-button');
   if (!button) return;
   const eventRef = button.dataset.eventId;
   if (eventRef) openCausalProjection(eventRef);
-});
+}, true);
 
 window.addEventListener('keydown', event => {
   if (event.key === 'Escape' && causalProjection.rootEventRef) clearCausalProjection();
