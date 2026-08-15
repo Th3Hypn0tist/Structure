@@ -6,7 +6,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from server.test_runner import run_startup_suite
-from server.workspace import WorkspaceStore
+from server.workspace import WorkspaceStore, starting_workspace
 
 BASE_DIR = os.path.dirname(__file__)
 STATIC_DIR = os.path.join(BASE_DIR, "static")
@@ -18,6 +18,7 @@ STATIC = {
     "/static/app.js": ("app.js", "application/javascript; charset=utf-8"),
     "/static/camera_reference_model.js": ("camera_reference_model.js", "application/javascript; charset=utf-8"),
     "/static/entity_editor.js": ("entity_editor.js", "application/javascript; charset=utf-8"),
+    "/static/causal_projection.js": ("causal_projection.js", "application/javascript; charset=utf-8"),
     "/static/style.css": ("style.css", "text/css; charset=utf-8"),
 }
 
@@ -64,6 +65,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True, "service": "Structure", "version": "0.2.0"})
             if path == "/api/workspace":
                 return self._json({"ok": True, "workspace": STORE.load()})
+            if path == "/api/starting-scene":
+                return self._json({"ok": True, "workspace": STORE._validate(starting_workspace())})
             return self._json({"ok": False, "error": "not_found"}, 404)
         except Exception as exc:
             return self._json({"ok": False, "error": str(exc)}, 400)
