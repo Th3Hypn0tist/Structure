@@ -17,6 +17,7 @@ STATIC = {
     "/": ("structure.html", "text/html; charset=utf-8"),
     "/static/app.js": ("app.js", "application/javascript; charset=utf-8"),
     "/static/camera_reference_model.js": ("camera_reference_model.js", "application/javascript; charset=utf-8"),
+    "/static/entity_editor.js": ("entity_editor.js", "application/javascript; charset=utf-8"),
     "/static/style.css": ("style.css", "text/css; charset=utf-8"),
 }
 
