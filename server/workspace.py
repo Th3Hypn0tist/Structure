@@ -16,7 +16,18 @@ DEFAULT_WORKSPACE: dict[str, Any] = {
     "view": {"ruleset_ref": "ALL"},
     "camera": {"position": [0.0, 1.5, 8.0], "yaw": 0.0, "pitch": 0.0, "fov": 60.0},
     "settings": {
-        "camera_defaults": {"position": [0.0, 1.5, 8.0], "yaw": 0.0, "pitch": 0.0, "fov": 60.0, "movement_speed": 6.0, "mouse_sensitivity": 0.0025, "near_clip": 0.05, "far_clip": 1000.0},
+        "camera_defaults": {
+            "position": [0.0, 1.5, 8.0],
+            "yaw": 0.0,
+            "pitch": 0.0,
+            "fov": 60.0,
+            "movement_speed": 6.0,
+            "mouse_sensitivity": 0.0025,
+            "wheel_zoom_speed": 0.15,
+            "drag_pan_speed": 0.01,
+            "near_clip": 0.05,
+            "far_clip": 1000.0,
+        },
         "link_visualization": {"anchor_spacing": 0.28, "anchor_offset": 0.58, "base_flow_speed": 0.15, "flow_width": 0.18},
         "event_playback": {"base_link_speed": 0.15, "active_link_speed": 2.0, "effect_travel_duration": 1.2, "next_event_delay": 0.25, "fade_out_duration": 0.4, "global_playback_speed": 1.0},
     },
@@ -60,5 +71,9 @@ class WorkspaceStore:
         if not 15.0 <= fov <= 170.0: raise ValueError("camera.fov must be within 15..170 degrees")
         camera["fov"] = fov
         settings = data.setdefault("settings", copy.deepcopy(DEFAULT_WORKSPACE["settings"]))
-        for key, default in DEFAULT_WORKSPACE["settings"].items(): settings.setdefault(key, copy.deepcopy(default))
+        for key, default in DEFAULT_WORKSPACE["settings"].items():
+            settings.setdefault(key, copy.deepcopy(default))
+        camera_defaults = settings.setdefault("camera_defaults", copy.deepcopy(DEFAULT_WORKSPACE["settings"]["camera_defaults"]))
+        for key, default in DEFAULT_WORKSPACE["settings"]["camera_defaults"].items():
+            camera_defaults.setdefault(key, copy.deepcopy(default))
         data["version"] = "0.2.0"; return data
