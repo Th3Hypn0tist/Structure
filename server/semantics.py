@@ -19,6 +19,7 @@ DEFAULT_RULESETS: list[dict[str, Any]] = [
     {"id": "RULESET_LINK_AUTHORITY", "name": "Authority", "property_type_ref": "link", "link_type_ref": "authority", "semantic_roles": {"parent_ref": "authority", "child_ref": "governed"}, "property_owner": "ruleset_defined", "color_space_ref": "COLORSPACE_AUTHORITY"},
     {"id": "RULESET_LINK_CONTAINMENT", "name": "Containment", "property_type_ref": "link", "link_type_ref": "containment", "semantic_roles": {"parent_ref": "container", "child_ref": "contained"}, "property_owner": "ruleset_defined", "color_space_ref": "COLORSPACE_CONTAINMENT"},
     {"id": "RULESET_LINK_ARCHITECTURE_PARENT", "name": "Architecture Parent", "property_type_ref": "link", "link_type_ref": "architecture_parent", "semantic_roles": {"parent_ref": "architecture_parent", "child_ref": "architecture_child"}, "property_owner": "ruleset_defined", "color_space_ref": "COLORSPACE_ARCHITECTURE"},
+    {"id": "RULESET_EVENT", "name": "Event", "property_type_ref": "event"},
 ]
 
 
@@ -53,17 +54,21 @@ def validate_color_spaces(color_spaces: list[dict[str, Any]]) -> dict[str, dict[
 def validate_rulesets(rulesets: list[dict[str, Any]], color_spaces: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     index = index_by_id(rulesets, "ruleset")
     for ruleset in rulesets:
-        if ruleset.get("property_type_ref") != "link":
-            raise ValueError(f"MVP ruleset {ruleset['id']} must apply to property_type_ref=link")
-        for field in ("link_type_ref", "semantic_roles", "property_owner"):
-            if field not in ruleset:
-                raise ValueError(f"link ruleset {ruleset['id']} requires {field}")
-        roles = ruleset["semantic_roles"]
-        if not isinstance(roles, dict) or not roles.get("parent_ref") or not roles.get("child_ref"):
-            raise ValueError(f"link ruleset {ruleset['id']} requires parent_ref and child_ref semantic roles")
-        color_space_ref = ruleset.get("color_space_ref")
-        if color_space_ref not in color_spaces:
-            raise ValueError(f"ruleset {ruleset['id']} color_space_ref does not resolve: {color_space_ref}")
+        property_type_ref = ruleset.get("property_type_ref")
+        if property_type_ref == "link":
+            for field in ("link_type_ref", "semantic_roles", "property_owner"):
+                if field not in ruleset:
+                    raise ValueError(f"link ruleset {ruleset['id']} requires {field}")
+            roles = ruleset["semantic_roles"]
+            if not isinstance(roles, dict) or not roles.get("parent_ref") or not roles.get("child_ref"):
+                raise ValueError(f"link ruleset {ruleset['id']} requires parent_ref and child_ref semantic roles")
+            color_space_ref = ruleset.get("color_space_ref")
+            if color_space_ref not in color_spaces:
+                raise ValueError(f"ruleset {ruleset['id']} color_space_ref does not resolve: {color_space_ref}")
+        elif property_type_ref == "event":
+            continue
+        else:
+            raise ValueError(f"MVP ruleset {ruleset['id']} has unsupported property_type_ref: {property_type_ref}")
     return index
 
 
@@ -72,8 +77,7 @@ def validate_properties(entities: list[dict[str, Any]], rulesets: dict[str, dict
     property_index: dict[str, tuple[str, dict[str, Any]]] = {}
 
     for entity in entities:
-        properties = entity.get("properties", [])
-        for prop in properties:
+        for prop in entity.get("properties", []):
             if not isinstance(prop, dict):
                 raise ValueError(f"entity {entity['id']} property must be an object")
             prop_id = prop.get("id")
@@ -112,5 +116,13 @@ def validate_properties(entities: list[dict[str, Any]], rulesets: dict[str, dict
             value.setdefault("properties", {})
             if not isinstance(value["properties"], dict):
                 raise ValueError(f"property {prop_id} value.properties must be an object")
-            prop.setdefault("metadata", {})
-            prop["metadata"].setdefault("workspace_entity_ref", owner_id)
+        elif property_type_ref == "event":
+            event_type_ref = value.get("event_type_ref")
+            if not isinstance(event_type_ref, str) or not event_type_ref:
+                raise ValueError(f"event property {prop_id} requires event_type_ref")
+            value.setdefault("properties", {})
+            if not isinstance(value["properties"], dict):
+                raise ValueError(f"event property {prop_id} value.properties must be an object")
+
+        prop.setdefault("metadata", {})
+        prop["metadata"].setdefault("workspace_entity_ref", owner_id)
