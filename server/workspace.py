@@ -13,6 +13,7 @@ from server.semantics import (
     validate_properties,
     validate_rulesets,
 )
+from server.starting_scene import starting_entities
 
 DEFAULT_WORKSPACE: dict[str, Any] = {
     "version": "0.2.0",
@@ -20,10 +21,17 @@ DEFAULT_WORKSPACE: dict[str, Any] = {
     "rulesets": copy.deepcopy(DEFAULT_RULESETS),
     "color_spaces": copy.deepcopy(DEFAULT_COLOR_SPACES),
     "view": {"ruleset_ref": "ALL"},
-    "camera": {"position": [0.0, 1.5, 8.0], "yaw": 0.0, "pitch": 0.0, "fov": 60.0},
+    "camera": {
+        "position": [0.0, 1.5, 16.0],
+        "reference": [0.0, 0.0, 0.0],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "fov": 60.0,
+    },
     "settings": {
         "camera_defaults": {
-            "position": [0.0, 1.5, 8.0],
+            "position": [0.0, 1.5, 16.0],
+            "reference": [0.0, 0.0, 0.0],
             "yaw": 0.0,
             "pitch": 0.0,
             "fov": 60.0,
@@ -50,6 +58,12 @@ DEFAULT_WORKSPACE: dict[str, Any] = {
         },
     },
 }
+
+
+def starting_workspace() -> dict[str, Any]:
+    workspace = copy.deepcopy(DEFAULT_WORKSPACE)
+    workspace["entities"] = starting_entities()
+    return workspace
 
 
 def _default_contract() -> dict[str, Any]:
@@ -107,7 +121,7 @@ class WorkspaceStore:
 
     def load(self) -> dict[str, Any]:
         if not os.path.exists(self.path):
-            return copy.deepcopy(DEFAULT_WORKSPACE)
+            return self._validate(starting_workspace())
         with open(self.path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
         return self._validate(data)
@@ -180,15 +194,16 @@ class WorkspaceStore:
         if not 15.0 <= fov <= 170.0:
             raise ValueError("camera.fov must be within 15..170 degrees")
         camera["fov"] = fov
-        reference = camera.get("reference")
-        if reference is not None:
-            if not (
-                isinstance(reference, list)
-                and len(reference) == 3
-                and all(isinstance(value, (int, float)) for value in reference)
-            ):
-                raise ValueError("camera.reference must be [x,y,z]")
-            camera["reference"] = [float(value) for value in reference]
+        for field in ("position", "reference"):
+            vector = camera.get(field)
+            if vector is not None:
+                if not (
+                    isinstance(vector, list)
+                    and len(vector) == 3
+                    and all(isinstance(value, (int, float)) for value in vector)
+                ):
+                    raise ValueError(f"camera.{field} must be [x,y,z]")
+                camera[field] = [float(value) for value in vector]
 
         settings = data.setdefault("settings", copy.deepcopy(DEFAULT_WORKSPACE["settings"]))
         for key, default in DEFAULT_WORKSPACE["settings"].items():
