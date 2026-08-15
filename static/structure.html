@@ -43,7 +43,8 @@
     <label>FOV <input id="fov" type="range" min="15" max="170" value="60"><output id="fovValue">60°</output></label>
     <label>Move speed <input id="moveSpeed" type="number" min="0.1" step="0.1" value="6"></label>
     <label>Mouse sensitivity <input id="mouseSensitivity" type="number" min="0.0001" step="0.0001" value="0.0025"></label>
-    <label>Wheel zoom speed <input id="wheelZoomSpeed" type="number" min="0.1" step="0.1" value="1.5"></label>
+    <label>Wheel zoom speed <input id="wheelZoomSpeed" type="number" min="0.01" step="0.01" value="0.15"></label>
+    <label>Drag pan speed <input id="dragPanSpeed" type="number" min="0.001" step="0.001" value="0.01"></label>
     <button id="setCameraDefault">Set current camera as default</button>
     <button id="resetCamera">Reset to default camera</button>
     <hr>
@@ -77,7 +78,7 @@
     </div>
   </div>
 
-  <div id="help">RMB drag: look · wheel: zoom · WASD/QE: move · LMB: select · Ctrl/Shift+LMB: multi-select · gizmo: move selection</div>
+  <div id="help">LMB drag on empty space: pan camera · RMB drag: look · wheel: local Z zoom · WASD/QE: move · LMB node: select · Ctrl/Shift+LMB: multi-select · gizmo: move selection</div>
   <script type="module" src="/static/app.js"></script>
 </body>
 </html>
