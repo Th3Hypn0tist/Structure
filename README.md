@@ -2,7 +2,7 @@
 
 Clean-slate Structure MVP.
 
-Structure is a client/server semantic modelling environment built around Entities, Properties and Rulesets. The first implementation intentionally keeps the runtime small: an HTTP server owns workspace semantics and persistence; the browser owns 3D representation and interaction.
+Structure is a client/server semantic modelling environment built around Canonical Contract Format 2.0 Entities + Properties and externally governed Rulesets. The HTTP server owns workspace semantics and persistence; the browser owns 3D representation and interaction.
 
 ## Run
 
@@ -19,10 +19,14 @@ Open `http://127.0.0.1:8765/`.
 - create/delete Entities
 - raw WebGL NodeInstance primitives
 - mouse-look camera + WASD/QE movement
-- camera FOV 15..170 degrees
-- camera defaults in Settings
-- node selection
-- Blender-style XYZ translation gizmo for a selected node
-- workspace save/load through server API
+- FOV 15..170 degrees
+- XYZ translation gizmo
+- Ruleset instances using CanonicalWireframe CCF 2.0 Ruleset identities
+- Link Properties stored under Entity properties[]
+- incoming/outgoing anchor rails derived from Link Properties
+- one generic animated line renderer for dependency, ownership, authority, containment and architecture links
+- Ruleset view selector
+- per-Ruleset ColorSpace instances
+- workspace save/load
 
-Next: incoming/outgoing anchor rails, LineInstance links, Ruleset views, then Event authoring and transient causal visualization.
+Canonical semantics never depend on node position, link color, shader animation or visual layout.
