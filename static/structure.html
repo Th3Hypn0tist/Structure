@@ -8,6 +8,7 @@
 </head>
 <body>
   <canvas id="scene"></canvas>
+  <div id="nodeLabels" aria-hidden="true"></div>
   <div id="gizmoLabels" aria-hidden="true">
     <span id="gizmoX" class="gizmo-label x">X</span>
     <span id="gizmoY" class="gizmo-label y">Y</span>
@@ -33,8 +34,26 @@
     <span id="status">ready</span>
   </header>
 
+  <aside id="entityEditor">
+    <h3>Entity</h3>
+    <div id="entityEditorEmpty">Select one Entity to edit</div>
+    <div id="entityEditorFields" hidden>
+      <div class="entity-id-row">ID <code id="entityId"></code></div>
+      <label>Name <input id="entityName" type="text"></label>
+      <label>Description <textarea id="entityDescription" rows="5"></textarea></label>
+      <label class="contract-field">Human-readable contract
+        <textarea id="entityHumanContract" rows="14" placeholder="Write the contract once in human language. Machine-readable form is generated downstream from this source."></textarea>
+      </label>
+      <div class="machine-status">
+        <strong>Machine-readable</strong>
+        <span id="machineContractStatus">not generated</span>
+        <small>Derived only. Never edited here. Direction: human-readable → machine-readable.</small>
+      </div>
+    </div>
+  </aside>
+
   <aside id="inspector">
-    <h3>Inspector</h3>
+    <h3>Selection / Relations</h3>
     <div id="selection">No selection</div>
   </aside>
 
@@ -44,7 +63,7 @@
     <label>Move speed <input id="moveSpeed" type="number" min="0.1" step="0.1" value="6"></label>
     <label>Mouse sensitivity <input id="mouseSensitivity" type="number" min="0.0001" step="0.0001" value="0.0025"></label>
     <label>Wheel zoom speed <input id="wheelZoomSpeed" type="number" min="0.01" step="0.01" value="0.15"></label>
-    <label>Drag pan speed <input id="dragPanSpeed" type="number" min="0.001" step="0.001" value="0.01"></label>
+    <label>Drag reference speed <input id="dragPanSpeed" type="number" min="0.001" step="0.001" value="0.01"></label>
     <button id="setCameraDefault">Set current camera as default</button>
     <button id="resetCamera">Reset to default camera</button>
     <hr>
@@ -78,8 +97,9 @@
     </div>
   </div>
 
-  <div id="help">Double-click Entity: set lookAt reference · LMB drag empty: move reference point · RMB drag: orbit around reference · wheel: local Z zoom · WASD/QE: move · LMB node: select · Ctrl/Shift+LMB: multi-select · gizmo: move selection</div>
+  <div id="help">Double-click Entity: bind lookAt · move bound Entity: reference freezes in place · LMB drag empty: move reference point · RMB drag: orbit · wheel: local Z zoom · LMB node: select · Ctrl/Shift+LMB: multi-select · gizmo: move selection</div>
   <script src="/static/app.js"></script>
   <script src="/static/camera_reference_model.js"></script>
+  <script src="/static/entity_editor.js"></script>
 </body>
 </html>
