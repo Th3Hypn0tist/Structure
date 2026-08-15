@@ -5,190 +5,84 @@ import os
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from nanocms import projection
-from primitive_registry import load_registry
-from session_cache import cache_stats
-from session_engine import build_session_scene, load_masters, normalize_sources, session_catalog
-from source_adapter import list_branches
-from source_selection import browse_directories, source_spec_from_query
-from structure_runtime import APP_HOST, APP_PORT, SUGGESTED_SOURCE_REPO, StructureError
-from topic_projection import PROJECTIONS
-from view_rules import ViewRuleError, binding_children, binding_tree
-
+from server.workspace import WorkspaceStore
 
 BASE_DIR = os.path.dirname(__file__)
-STRUCTURE_HTML = os.path.join(BASE_DIR, "static", "structure.html")
-UI_RUNTIME_JS = os.path.join(BASE_DIR, "static", "ui_runtime.js")
-RENDERER_JS = os.path.join(BASE_DIR, "static", "renderer.js")
-SOURCE_SELECT_UI_JS = os.path.join(BASE_DIR, "static", "source_select_ui.js")
-SOURCE_PICKER_BROWSE_JS = os.path.join(BASE_DIR, "static", "source_picker_browse.js")
-SESSION_UI_JS = os.path.join(BASE_DIR, "static", "session_ui.js")
-DIAGNOSTICS_UI_JS = os.path.join(BASE_DIR, "static", "diagnostics_ui.js")
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+HOST = os.environ.get("STRUCTURE_HOST", "127.0.0.1")
+PORT = int(os.environ.get("STRUCTURE_PORT", "8765"))
+STORE = WorkspaceStore(os.path.join(BASE_DIR, "workspace.json"))
 
-
-def _file_payload(path: str) -> bytes:
-    with open(path, "rb") as handle:
-        return handle.read()
-
-
-def _session_result(body: dict) -> dict:
-    masters = load_masters(normalize_sources(body))
-    instances = body.get("instances")
-    if not isinstance(instances, list) or not instances or not all(isinstance(item, dict) for item in instances):
-        raise ValueError("POST /api/scene requires a non-empty instances array of objects")
-
-    result = build_session_scene(masters, instances)
-    errors: list[dict] = []
-    warnings: list[dict] = []
-    valid = True
-    projectable = True
-    for master in masters.values():
-        tree = master["tree"]
-        errors.extend(tree.get("errors", []))
-        warnings.extend(tree.get("warnings", []))
-        valid = valid and bool(tree.get("valid"))
-        projectable = projectable and bool(tree.get("projectable"))
-
-    result.update({
-        "valid": valid and not errors,
-        "projectable": projectable,
-        "degraded": bool(errors or warnings or not valid),
-        "finding_count": len(errors) + len(warnings),
-        "errors": errors,
-        "warnings": warnings,
-        "ruleset": "structure_topic_session",
-        "projection_policy": "Topic only; canonical findings are visible and non-blocking when a projectable StructureTree exists",
-    })
-    return result
-
-
-def _query_master(query: dict[str, list[str]]) -> dict:
-    source = source_spec_from_query(query)
-    return load_masters([{"id": "master-1", "name": "master-1", "source": source}])["master-1"]
+STATIC = {
+    "/": ("structure.html", "text/html; charset=utf-8"),
+    "/static/app.js": ("app.js", "application/javascript; charset=utf-8"),
+    "/static/style.css": ("style.css", "text/css; charset=utf-8"),
+}
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "Structure/0.35.0"
+    server_version = "Structure/0.1.0"
 
-    def _write_json(self, payload: dict, status: int = 200) -> None:
-        body = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
+    def _body(self) -> dict:
+        size = int(self.headers.get("Content-Length", "0") or 0)
+        if not size:
+            return {}
+        payload = json.loads(self.rfile.read(size).decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("JSON body must be an object")
+        return payload
+
+    def _json(self, payload: dict, status: int = 200) -> None:
+        raw = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Length", str(len(raw)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(body)
+        self.wfile.write(raw)
 
-    def _write_body(self, body: bytes, content_type: str) -> None:
+    def _file(self, filename: str, content_type: str) -> None:
+        path = os.path.join(STATIC_DIR, filename)
+        with open(path, "rb") as fh:
+            raw = fh.read()
         self.send_response(200)
         self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Length", str(len(raw)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(body)
-
-    def _write_file(self, path: str, content_type: str) -> None:
-        self._write_body(_file_payload(path), content_type)
-
-    def _read_json_body(self) -> dict:
-        length = int(self.headers.get("Content-Length", "0") or 0)
-        if length <= 0:
-            return {}
-        data = json.loads(self.rfile.read(length).decode("utf-8"))
-        if not isinstance(data, dict):
-            raise ValueError("JSON request body must be an object")
-        return data
-
-    def _error(self, exc: Exception) -> None:
-        payload = exc.as_dict() if isinstance(exc, StructureError) else {
-            "id": "STRUCTURE_REQUEST_FAILED",
-            "message": str(exc),
-            "type": type(exc).__name__,
-        }
-        self._write_json({"ok": False, "error": payload}, 400)
+        self.wfile.write(raw)
 
     def do_GET(self) -> None:
-        parsed = urllib.parse.urlparse(self.path)
-        path = parsed.path
-        query = urllib.parse.parse_qs(parsed.query)
+        path = urllib.parse.urlparse(self.path).path
         try:
-            if path == "/":
-                return self._write_file(STRUCTURE_HTML, "text/html; charset=utf-8")
-            static_routes = {
-                "/static/ui_runtime.js": UI_RUNTIME_JS,
-                "/static/renderer.js": RENDERER_JS,
-                "/static/session_ui.js": SESSION_UI_JS,
-                "/static/source_select_ui.js": SOURCE_SELECT_UI_JS,
-                "/static/source_picker_browse.js": SOURCE_PICKER_BROWSE_JS,
-                "/static/diagnostics_ui.js": DIAGNOSTICS_UI_JS,
-            }
-            if path in static_routes:
-                return self._write_file(static_routes[path], "application/javascript; charset=utf-8")
+            if path in STATIC:
+                filename, content_type = STATIC[path]
+                return self._file(filename, content_type)
             if path == "/api/health":
-                return self._write_json({
-                    "ok": True,
-                    "server": self.server_version,
-                    "startup": "empty",
-                    "projection_types": ["topic"],
-                    "projection_api": "POST /api/scene only",
-                    "projection_contract": ["master_ref", "scope_ref", "scope_style", "projection_dimension"],
-                    "projection_generators": sorted(PROJECTIONS),
-                    "compatibility_aliases": False,
-                    "automatic_source_read": False,
-                    "automatic_projection": False,
-                    "structure_tree_indexes": "resolved_once_at_import",
-                    "source_cache": cache_stats(),
-                    "cross_master_inference": False,
-                })
-            if path == "/api/primitives":
-                return self._write_json(load_registry())
-            if path == "/api/branches":
-                repo = (query.get("repo") or [SUGGESTED_SOURCE_REPO])[0]
-                return self._write_json({"repository": repo, "branches": list_branches(repo)})
-            if path == "/api/directories":
-                return self._write_json(browse_directories((query.get("path") or [None])[0]))
-            if path == "/api/nanocms":
-                return self._write_json(projection(query.get("page", ["canonical"])[0]))
-            if path == "/api/projection-catalog":
-                master = _query_master(query)
-                return self._write_json(session_catalog({"master-1": master}))
-            if path == "/api/binding-tree":
-                master = _query_master(query)
-                return self._write_json(binding_tree(
-                    master["graph"],
-                    root=query.get("root", [None])[0],
-                    depth=int(query.get("depth", ["1"])[0]),
-                    budget=int(query.get("budget", ["1500"])[0]),
-                ))
-            if path == "/api/binding-children":
-                master = _query_master(query)
-                return self._write_json(binding_children(master["graph"], node_id=query.get("node", [None])[0]))
-            return self._write_json({"ok": False, "error": {"id": "STRUCTURE_NOT_FOUND", "message": path}}, 404)
-        except (StructureError, ViewRuleError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
-            return self._error(exc)
+                return self._json({"ok": True, "service": "Structure", "version": "0.1.0"})
+            if path == "/api/workspace":
+                return self._json({"ok": True, "workspace": STORE.load()})
+            return self._json({"ok": False, "error": "not_found"}, 404)
+        except Exception as exc:
+            return self._json({"ok": False, "error": str(exc)}, 400)
 
     def do_POST(self) -> None:
+        path = urllib.parse.urlparse(self.path).path
         try:
-            if urllib.parse.urlparse(self.path).path != "/api/scene":
-                return self._write_json({"ok": False, "error": {"id": "STRUCTURE_NOT_FOUND", "message": self.path}}, 404)
-            result = _session_result(self._read_json_body())
-            return self._write_json(result, 200 if result.get("projectable") else 422)
-        except (StructureError, ViewRuleError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
-            return self._error(exc)
+            if path == "/api/workspace":
+                workspace = STORE.save(self._body())
+                return self._json({"ok": True, "workspace": workspace})
+            return self._json({"ok": False, "error": "not_found"}, 404)
+        except Exception as exc:
+            return self._json({"ok": False, "error": str(exc)}, 400)
 
-    def log_message(self, fmt: str, *args: object) -> None:
-        print(f"{self.address_string()} - {fmt % args}")
+    def log_message(self, fmt: str, *args) -> None:
+        print(f"[structure] {self.address_string()} {fmt % args}")
 
 
 def main() -> None:
-    server = ThreadingHTTPServer((APP_HOST, APP_PORT), Handler)
-    print(f"Structure listening on http://{APP_HOST}:{APP_PORT}")
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()
+    print(f"Structure 0.1.0 -> http://{HOST}:{PORT}")
+    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
 
 
 if __name__ == "__main__":

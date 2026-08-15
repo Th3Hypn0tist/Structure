@@ -1,8 +1,0 @@
-{
-  "format": "CANONICALWIREFRAME_STRUCTURE_MAPPER_CONTRACT",
-  "version": "1.0",
-  "status": "locked",
-  "name": "StructureMapper",
-  "product": "CanonicalWireframe",
-  "purpose": "Map an observed customer information system explicitly onto the AIGM/AIGMos Business Universal canonical substrate so similarities, overlaps, gaps and later domain compositions can be inspected without semantic guessing.",
-  "primary_target
