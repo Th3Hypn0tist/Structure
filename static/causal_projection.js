@@ -32,8 +32,22 @@ function propertyPanelSettings() {
   const view = ws.settings.view_defaults;
   view.property_panel_direction ??= 0;
   view.property_panel_size ??= 1;
-  view.property_panel_mode ??= 'labels';
+  view.property_panel_collapsed ??= {};
+  view.show_all_props ??= false;
   return view;
+}
+
+function propertyPanelCollapsed(ownerId) {
+  const settings = propertyPanelSettings();
+  if (settings.show_all_props) return false;
+  return Boolean(settings.property_panel_collapsed?.[ownerId]);
+}
+
+function setPropertyPanelCollapsed(ownerId, collapsed) {
+  const settings = propertyPanelSettings();
+  settings.property_panel_collapsed ??= {};
+  if (collapsed) settings.property_panel_collapsed[ownerId] = true;
+  else delete settings.property_panel_collapsed[ownerId];
 }
 
 function ensurePropertyPanelControls() {
@@ -56,17 +70,14 @@ function ensurePropertyPanelControls() {
     directionControl?.after(sizeControl);
   }
 
-  if (!document.querySelector('#propertyPanelMode')) {
-    const modeControl = document.createElement('label');
-    modeControl.className = 'props-mode-control';
-    modeControl.innerHTML = `
-      <span>PROPS MODE</span>
-      <select id="propertyPanelMode">
-        <option value="labels">LABELS</option>
-        <option value="dots">DOTS</option>
-      </select>
-    `;
-    document.querySelector('#propertyPanelSize')?.closest('label')?.after(modeControl);
+  if (!document.querySelector('#showAllProps')) {
+    const button = document.createElement('button');
+    button.id = 'showAllProps';
+    button.type = 'button';
+    button.className = 'show-all-props-control';
+    button.textContent = 'SHOW ALL PROPS';
+    button.title = 'Temporarily expand every node Property panel. Disable to restore node-specific collapsed states.';
+    document.querySelector('#propertyPanelSize')?.closest('label')?.after(button);
   }
 
   const direction = document.querySelector('#propertyPanelDirection');
@@ -87,11 +98,12 @@ function ensurePropertyPanelControls() {
     });
   }
 
-  const mode = document.querySelector('#propertyPanelMode');
-  if (mode && !mode.dataset.propertyPanelBound) {
-    mode.dataset.propertyPanelBound = '1';
-    mode.addEventListener('change', event => {
-      propertyPanelSettings().property_panel_mode = event.target.value === 'dots' ? 'dots' : 'labels';
+  const showAll = document.querySelector('#showAllProps');
+  if (showAll && !showAll.dataset.propertyPanelBound) {
+    showAll.dataset.propertyPanelBound = '1';
+    showAll.addEventListener('click', () => {
+      const settings = propertyPanelSettings();
+      settings.show_all_props = !settings.show_all_props;
       syncPropertyPanelControls();
     });
   }
@@ -103,13 +115,16 @@ function syncPropertyPanelControls() {
   const directionOutput = document.querySelector('#propertyPanelDirectionValue');
   const size = document.querySelector('#propertyPanelSize');
   const sizeOutput = document.querySelector('#propertyPanelSizeValue');
-  const mode = document.querySelector('#propertyPanelMode');
+  const showAll = document.querySelector('#showAllProps');
 
   if (direction) direction.value = String(Number(settings.property_panel_direction || 0));
   if (directionOutput) directionOutput.textContent = `${Math.round(Number(settings.property_panel_direction || 0))}°`;
   if (size) size.value = String(Number(settings.property_panel_size || 1));
   if (sizeOutput) sizeOutput.textContent = `${Number(settings.property_panel_size || 1).toFixed(2)}×`;
-  if (mode) mode.value = settings.property_panel_mode === 'dots' ? 'dots' : 'labels';
+  if (showAll) {
+    showAll.classList.toggle('active', Boolean(settings.show_all_props));
+    showAll.setAttribute('aria-pressed', settings.show_all_props ? 'true' : 'false');
+  }
 }
 
 function canonicalIndex() {
@@ -217,13 +232,37 @@ function ensurePropertyPanel(owner, items) {
     panel = document.createElement('div');
     panel.className = 'property-panel';
     panel.dataset.ownerEntityId = owner.id;
+
+    const header = document.createElement('div');
+    header.className = 'property-panel-header';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'property-panel-toggle';
+    toggle.textContent = 'PROPS';
+    toggle.title = 'Collapse or expand this node Property panel';
+    toggle.addEventListener('click', event => {
+      event.stopPropagation();
+      if (propertyPanelSettings().show_all_props) return;
+      setPropertyPanelCollapsed(owner.id, !propertyPanelCollapsed(owner.id));
+    });
+    header.appendChild(toggle);
+    panel.appendChild(header);
+
     causalNodes.appendChild(panel);
     causalProjection.panelElements.set(owner.id, panel);
   }
 
-  const mode = propertyPanelSettings().property_panel_mode === 'dots' ? 'dots' : 'labels';
-  panel.classList.toggle('dots', mode === 'dots');
-  panel.classList.toggle('labels', mode === 'labels');
+  const collapsed = propertyPanelCollapsed(owner.id);
+  panel.classList.toggle('collapsed', collapsed);
+  panel.classList.toggle('expanded', !collapsed);
+  const toggle = panel.querySelector('.property-panel-toggle');
+  if (toggle) {
+    toggle.disabled = Boolean(propertyPanelSettings().show_all_props);
+    toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    toggle.title = propertyPanelSettings().show_all_props
+      ? 'SHOW ALL PROPS is active; disable it to restore node-specific Property panel states'
+      : 'Collapse or expand this node Property panel';
+  }
 
   const wanted = new Set(items.map(({ ref }) => ref));
   for (const row of [...panel.querySelectorAll('.property-row')]) {
