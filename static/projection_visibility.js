@@ -127,7 +127,9 @@ function renderProjectionControls() {
 }
 function syncEventRouteVisibility() {
   if (!ws) return;
-  causalSvg.style.display = projectionVisibilitySettings().event_routes_visible ? '' : 'none';
+  const svg = document.querySelector('#causalLines');
+  if (!svg) throw new Error('required causal projection surface missing: #causalLines');
+  svg.style.display = projectionVisibilitySettings().event_routes_visible ? '' : 'none';
 }
 
 window.addEventListener('load', bindResetEventsControl);
