@@ -1,8 +1,53 @@
-// Abstraction Library: Publish stores canonical semantic source in the backend.
-// Mount creates only a local Entity + MOUNT Property reference; it never copies
-// the published Abstraction into the current canonical graph.
+// Abstraction Library and canonical semantic export.
+// Publish and Export CW share exactly the same semantic source boundary:
+// Entities + Rulesets + ColorSpaces. Camera and view/runtime state are excluded.
 
 const ABSTRACTION_VERSION = '1.0.0';
+
+function canonicalSemanticPayload() {
+  const source = assertWorkspace();
+  return {
+    entities: structuredClone(source.entities),
+    rulesets: structuredClone(source.rulesets),
+    color_spaces: structuredClone(source.color_spaces),
+  };
+}
+
+function cwExportDocument() {
+  const source = assertWorkspace();
+  return {
+    version: source.version,
+    ...canonicalSemanticPayload(),
+  };
+}
+
+function cwExportFilename() {
+  const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  return `Structure_CW_${timestamp}.json`;
+}
+
+function downloadJson(filename, value) {
+  const blob = new Blob([`${JSON.stringify(value, null, 2)}\n`], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  try {
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function exportCurrentCw() {
+  const documentValue = cwExportDocument();
+  const filename = cwExportFilename();
+  downloadJson(filename, documentValue);
+  status(`exported CW · ${documentValue.entities.length} entities · ${filename}`);
+}
 
 function openPublishAbstraction() {
   $('#abstractionId').value = '';
@@ -16,14 +61,11 @@ async function publishCurrentAbstraction() {
   const id = $('#abstractionId').value.trim();
   const name = $('#abstractionName').value.trim();
   if (!id || !name) { status('Abstraction ID and name are required'); return; }
-  const source = assertWorkspace();
   const abstraction = {
     version: ABSTRACTION_VERSION,
     id,
     name,
-    entities: structuredClone(source.entities),
-    rulesets: structuredClone(source.rulesets),
-    color_spaces: structuredClone(source.color_spaces),
+    ...canonicalSemanticPayload(),
   };
   await fetchJson('/api/abstractions', {
     method: 'POST',
@@ -85,6 +127,10 @@ function mountPublishedAbstraction(abstractionRef, abstractionName) {
 }
 
 window.addEventListener('load', () => {
+  $('#exportCw').onclick = () => {
+    try { exportCurrentCw(); }
+    catch (error) { reportUiError(error); }
+  };
   $('#confirmPublishAbstraction').onclick = () => publishCurrentAbstraction().catch(reportUiError);
   $('#cancelPublishAbstraction').onclick = closePublishAbstraction;
   $('#cancelMountAbstraction').onclick = closeMountAbstraction;
