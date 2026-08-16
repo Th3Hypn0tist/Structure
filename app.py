@@ -11,6 +11,7 @@ from server.workspace import WORKSPACE_VERSION, WorkspaceStore, starting_workspa
 
 BASE_DIR = os.path.dirname(__file__)
 STATIC_DIR = os.path.join(BASE_DIR, "static")
+IMAGES_DIR = os.path.join(BASE_DIR, "images")
 HOST = os.environ.get("STRUCTURE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("STRUCTURE_PORT", "8765"))
 STORE = WorkspaceStore(os.path.join(BASE_DIR, "workspace.json"))
@@ -25,6 +26,9 @@ STATIC = {
     "/static/abstraction_library.js": ("abstraction_library.js", "application/javascript; charset=utf-8"),
     "/static/link_projection.js": ("link_projection.js", "application/javascript; charset=utf-8"),
     "/static/style.css": ("style.css", "text/css; charset=utf-8"),
+}
+IMAGES = {
+    "/images/AIGM-LOGO-tight.png": ("AIGM-LOGO-tight.png", "image/png"),
 }
 
 
@@ -49,8 +53,8 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
-    def _file(self, filename: str, content_type: str) -> None:
-        path = os.path.join(STATIC_DIR, filename)
+    def _file(self, directory: str, filename: str, content_type: str) -> None:
+        path = os.path.join(directory, filename)
         with open(path, "rb") as fh:
             raw = fh.read()
         self.send_response(200)
@@ -65,7 +69,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path in STATIC:
                 filename, content_type = STATIC[path]
-                return self._file(filename, content_type)
+                return self._file(STATIC_DIR, filename, content_type)
+            if path in IMAGES:
+                filename, content_type = IMAGES[path]
+                return self._file(IMAGES_DIR, filename, content_type)
             if path == "/api/health":
                 return self._json({"ok": True, "service": "Structure", "version": WORKSPACE_VERSION})
             if path == "/api/workspace":
