@@ -42,27 +42,41 @@
     <span id="status">booting</span>
   </header>
 
-  <div id="viewControls" aria-label="View controls">
-    <label class="node-size-control">
-      <span>NODE SIZE</span>
-      <input id="nodeMasterSize" type="range" min="0.35" max="2.50" step="0.05" value="1">
-      <output id="nodeMasterSizeValue">1.00×</output>
-    </label>
-    <label class="node-size-control property-direction-control">
-      <span>PROPS ANGLE</span>
-      <input id="propertyPanelDirection" type="range" min="-180" max="180" step="5" value="0">
-      <output id="propertyPanelDirectionValue">0°</output>
-    </label>
-    <label class="node-size-control property-size-control">
-      <span>PROPS SIZE</span>
-      <input id="propertyPanelSize" type="range" min="0.25" max="2.50" step="0.05" value="1">
-      <output id="propertyPanelSizeValue">1.00×</output>
-    </label>
-    <button id="showAllProps" class="show-all-props-control" type="button">SHOW ALL PROPS</button>
+  <aside id="rightControls" aria-label="View controls">
+    <div class="right-control-fixed">
+      <label class="view-toggle active"><input id="gridToggle" type="checkbox" checked><span>GRID</span></label>
+      <label class="view-toggle active"><input id="snapToggle" type="checkbox" checked><span>SNAP</span></label>
+    </div>
+
+    <details class="right-control-group" open>
+      <summary>VIEW</summary>
+      <div id="viewControls" class="right-control-body">
+        <label class="node-size-control">
+          <span>NODE SIZE</span>
+          <input id="nodeMasterSize" type="range" min="0.35" max="2.50" step="0.05" value="1">
+          <output id="nodeMasterSizeValue">1.00×</output>
+        </label>
+        <label class="node-size-control property-direction-control">
+          <span>PROPS ANGLE</span>
+          <input id="propertyPanelDirection" type="range" min="-180" max="180" step="5" value="0">
+          <output id="propertyPanelDirectionValue">0°</output>
+        </label>
+        <label class="node-size-control property-size-control">
+          <span>PROPS SIZE</span>
+          <input id="propertyPanelSize" type="range" min="0.25" max="2.50" step="0.05" value="1">
+          <output id="propertyPanelSizeValue">1.00×</output>
+        </label>
+        <button id="showAllProps" class="show-all-props-control" type="button">SHOW ALL PROPS</button>
+      </div>
+    </details>
+
+    <details class="right-control-group" open>
+      <summary>VISIBILITY</summary>
+      <div id="projectionControls" class="right-control-body" aria-label="Projection visibility"></div>
+    </details>
+
     <button id="resetEvents" class="show-all-props-control reset-events-control" type="button">RESET EVENTS</button>
-    <label class="view-toggle active"><input id="gridToggle" type="checkbox" checked><span>GRID</span></label>
-    <label class="view-toggle active"><input id="snapToggle" type="checkbox" checked><span>SNAP</span></label>
-  </div>
+  </aside>
 
   <aside id="entityEditor">
     <h3>Entity</h3>
@@ -98,8 +112,6 @@
       </section>
     </div>
   </aside>
-
-  <aside id="projectionControls" aria-label="Projection visibility"></aside>
 
   <aside id="settings" hidden>
     <h3>Camera Defaults</h3>
@@ -167,6 +179,20 @@
 
   <button id="errorReportButton" class="error-report-button" type="button" title="Copy captured errors to clipboard" aria-live="polite">ERRORS 0</button>
   <div id="help">Double-click Entity: bind lookAt · LMB empty: move reference · RMB: orbit · wheel: zoom · Event: fire causal chain</div>
+
+  <script>
+    (() => {
+      const toolbar = document.querySelector('#toolbar');
+      if (!toolbar) throw new Error('toolbar missing');
+      const syncToolbarClearance = () => {
+        document.documentElement.style.setProperty('--toolbar-clearance', `${Math.ceil(toolbar.getBoundingClientRect().bottom + 8)}px`);
+      };
+      const observer = new ResizeObserver(syncToolbarClearance);
+      observer.observe(toolbar);
+      window.addEventListener('resize', syncToolbarClearance);
+      syncToolbarClearance();
+    })();
+  </script>
 
   <script>
     (() => {
