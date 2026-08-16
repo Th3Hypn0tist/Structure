@@ -34,6 +34,7 @@
     <span class="divider"></span>
     <label class="compact">Ruleset <select id="rulesetView"></select></label>
     <span class="divider"></span>
+    <button id="newWorkspace">New</button>
     <button id="save">Save</button>
     <button id="load">Load</button>
     <button id="publishAbstraction">Publish Abstraction</button>
@@ -238,5 +239,26 @@
   <script src="/static/event_rule_editor.js"></script>
   <script src="/static/abstraction_library.js"></script>
   <script src="/static/link_projection.js"></script>
+  <script>
+    async function createBlankWorkspace() {
+      const blank = (await fetchJson('/api/starting-scene')).workspace;
+      blank.entities = [];
+      ws = blank;
+      assertWorkspace();
+      selected.clear();
+      activeEntityId = null;
+      lookAtEntityId = null;
+      hovered = null;
+      clearLink();
+      syncCatalog();
+      syncSettings();
+      renderProjectionControls();
+      syncEventRouteVisibility();
+      inspect();
+      updateButtons();
+      status('new blank workspace · unsaved');
+    }
+    $('#newWorkspace').onclick = () => createBlankWorkspace().catch(reportUiError);
+  </script>
 </body>
 </html>
