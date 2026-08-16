@@ -1,6 +1,7 @@
 html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#090b10;color:#eef2f7;font:13px/1.4 system-ui,sans-serif}
 #scene{display:block;width:100%;height:100%}
 #toolbar{position:fixed;left:12px;top:12px;display:flex;gap:7px;align-items:center;padding:8px 10px;background:#111722e8;border:1px solid #263044;border-radius:8px;backdrop-filter:blur(8px);z-index:10}
+.structure-brand{display:flex;align-items:center;gap:6px;white-space:nowrap}.structure-brand-logo{display:block;width:auto;height:22px;object-fit:contain}.structure-brand-separator{color:#71839b;font-weight:700}.structure-brand strong{font-size:13px;color:#eef2f7}
 button,input,select,textarea{font:inherit}
 button,select{color:#eef2f7;background:#1b2638;border:1px solid #33425c;border-radius:5px;padding:5px 9px}
 button{cursor:pointer}button:hover,select:hover{background:#26354d}button.active{outline:2px solid #5ca6ff;background:#203757}button:disabled{opacity:.4;cursor:not-allowed}
