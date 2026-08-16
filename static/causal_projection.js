@@ -1,6 +1,6 @@
 // Canonical Event -> Effect -> target -> Event impact projection.
 // Projection instances are view-only and remain attached to their canonical owner Entities.
-// Only Entity labels are fixed-size camera billboards. Property panels are owner-relative world-space UI.
+// Only Entity labels are fixed-size camera billboards. Data/Effect panels are owner-relative world-space UI.
 
 const causalProjection = {
   rootEventRef: null,
@@ -136,18 +136,16 @@ function nodeClass(item) {
   return item.propertyType || 'property';
 }
 
-function graphPropertyGroups(graph) {
+function propertyGroups(index) {
   const groups = new Map();
-  for (const node of graph.nodes) {
-    if (node.ref === graph.rootRef) continue;
-    const item = graph.index.get(node.ref);
-    if (!item || item.propertyType === 'event') continue;
+  for (const item of index.values()) {
+    if (item.kind !== 'property' || !['data', 'effect'].includes(item.propertyType)) continue;
     if (!groups.has(item.owner.id)) groups.set(item.owner.id, []);
-    groups.get(item.owner.id).push({ node, item });
+    groups.get(item.owner.id).push({ ref: item.ref, item });
   }
   for (const items of groups.values()) {
     items.sort((a, b) => {
-      const order = { effect: 0, data: 1, function: 2 };
+      const order = { effect: 0, data: 1 };
       const typeOrder = (order[a.item.propertyType] ?? 9) - (order[b.item.propertyType] ?? 9);
       return typeOrder || displayName(a.item).localeCompare(displayName(b.item));
     });
@@ -165,18 +163,18 @@ function ensurePropertyPanel(owner, items) {
     causalProjection.panelElements.set(owner.id, panel);
   }
 
-  const wanted = new Set(items.map(({ node }) => node.ref));
+  const wanted = new Set(items.map(({ ref }) => ref));
   for (const row of [...panel.querySelectorAll('.property-row')]) {
     if (!wanted.has(row.dataset.ref)) row.remove();
   }
 
-  for (const { node, item } of items) {
-    let row = panel.querySelector(`.property-row[data-ref="${CSS.escape(node.ref)}"]`);
+  for (const { ref, item } of items) {
+    let row = panel.querySelector(`.property-row[data-ref="${CSS.escape(ref)}"]`);
     if (!row) {
       row = document.createElement('button');
       row.type = 'button';
       row.className = 'property-row';
-      row.dataset.ref = node.ref;
+      row.dataset.ref = ref;
       row.addEventListener('click', event => {
         event.stopPropagation();
         const fresh = canonicalIndex().get(row.dataset.ref);
@@ -202,12 +200,13 @@ function clearCausalProjection() {
   causalProjection.rootEventRef = null;
   causalProjection.graph = null;
   causalProjection.playbackStartedAt = 0;
-  for (const element of causalProjection.panelElements.values()) element.hidden = true;
+  document.querySelectorAll('.property-row.reached').forEach(row => row.classList.remove('reached'));
   document.querySelectorAll('.event-button.causal-reached').forEach(button => button.classList.remove('causal-reached'));
   causalSvg.querySelectorAll('.causal-edge').forEach(path => path.remove());
 }
 
 function triggerCausalProjection(eventRef) {
+  document.querySelectorAll('.property-row.reached').forEach(row => row.classList.remove('reached'));
   document.querySelectorAll('.event-button.causal-reached').forEach(button => button.classList.remove('causal-reached'));
   const graph = buildCausalGraph(eventRef, causalProjection.maxDepth);
   if (!graph) { status(`Event ${eventRef} has no resolvable causal root`); return; }
@@ -243,41 +242,19 @@ function rectPoint(rect) {
 function renderCausalProjection() {
   const graph = causalProjection.rootEventRef ? buildCausalGraph(causalProjection.rootEventRef, causalProjection.maxDepth) : null;
   causalProjection.graph = graph;
+  const index = graph?.index || canonicalIndex();
+  const groups = propertyGroups(index);
+  const graphDepth = new Map((graph?.nodes || []).map(node => [node.ref, node.depth]));
+  const positions = new Map();
+  const visibleOwners = new Set();
+  const density = devicePixelRatio || 1;
+  const elapsed = graph ? performance.now() - causalProjection.playbackStartedAt : 0;
+  const stepMs = Math.max(120, Number(ws.settings.event_playback.effect_travel_duration || 1.2) * 350);
+
   causalSvg.setAttribute('width', String(innerWidth));
   causalSvg.setAttribute('height', String(innerHeight));
   causalSvg.setAttribute('viewBox', `0 0 ${innerWidth} ${innerHeight}`);
   causalSvg.querySelectorAll('.causal-edge').forEach(path => path.remove());
-
-  if (!graph) {
-    for (const element of causalProjection.panelElements.values()) element.hidden = true;
-    requestAnimationFrame(renderCausalProjection);
-    return;
-  }
-
-  const positions = new Map();
-  const rootRect = eventButtonRect(graph.rootRef);
-  if (!rootRect) {
-    for (const element of causalProjection.panelElements.values()) element.hidden = true;
-    requestAnimationFrame(renderCausalProjection);
-    return;
-  }
-  positions.set(graph.rootRef, rootRect);
-
-  const groups = graphPropertyGroups(graph);
-  const visibleOwners = new Set();
-  const density = devicePixelRatio || 1;
-  const elapsed = performance.now() - causalProjection.playbackStartedAt;
-  const stepMs = Math.max(120, Number(ws.settings.event_playback.effect_travel_duration || 1.2) * 350);
-
-  for (const node of graph.nodes) {
-    if (node.ref === graph.rootRef) continue;
-    const item = graph.index.get(node.ref);
-    if (!item || item.propertyType !== 'event') continue;
-    const rect = eventButtonRect(node.ref);
-    if (rect) positions.set(node.ref, rect);
-    const eventButton = document.querySelector(`.event-button[data-event-id="${CSS.escape(node.ref)}"]`);
-    if (eventButton) eventButton.classList.toggle('causal-reached', elapsed >= node.depth * stepMs);
-  }
 
   for (const [ownerId, items] of groups) {
     const owner = items[0]?.item?.owner;
@@ -294,17 +271,35 @@ function renderCausalProjection() {
     panel.style.top = `${screen[1] / density}px`;
     panel.style.setProperty('--property-world-scale', String(scale));
 
-    for (const { node } of items) {
-      const row = panel.querySelector(`.property-row[data-ref="${CSS.escape(node.ref)}"]`);
+    for (const { ref } of items) {
+      const row = panel.querySelector(`.property-row[data-ref="${CSS.escape(ref)}"]`);
       if (!row) continue;
-      const reached = elapsed >= node.depth * stepMs;
-      row.classList.toggle('reached', reached);
-      positions.set(node.ref, rectPoint(row.getBoundingClientRect()));
+      const depth = graphDepth.get(ref);
+      row.classList.toggle('reached', depth !== undefined && elapsed >= depth * stepMs);
+      positions.set(ref, rectPoint(row.getBoundingClientRect()));
     }
   }
 
   for (const [ownerId, element] of causalProjection.panelElements) {
     if (!visibleOwners.has(ownerId)) element.hidden = true;
+  }
+
+  if (!graph) {
+    requestAnimationFrame(renderCausalProjection);
+    return;
+  }
+
+  const rootRect = eventButtonRect(graph.rootRef);
+  if (rootRect) positions.set(graph.rootRef, rootRect);
+
+  for (const node of graph.nodes) {
+    if (node.ref === graph.rootRef) continue;
+    const item = graph.index.get(node.ref);
+    if (!item || item.propertyType !== 'event') continue;
+    const rect = eventButtonRect(node.ref);
+    if (rect) positions.set(node.ref, rect);
+    const eventButton = document.querySelector(`.event-button[data-event-id="${CSS.escape(node.ref)}"]`);
+    if (eventButton) eventButton.classList.toggle('causal-reached', elapsed >= node.depth * stepMs);
   }
 
   const svgNS = 'http://www.w3.org/2000/svg';
