@@ -11,6 +11,7 @@ document.body.appendChild(causalSvg);
 const causalNodes = document.createElement('div');
 causalNodes.id = 'causalNodes';
 document.body.appendChild(causalNodes);
+window.StructureCausalProjection = Object.freeze({ state: causalProjection, surface: causalSvg });
 
 function propertyPanelSettings() { return viewSettings(); }
 function propertyPanelCollapsed(ownerId) { return propertyPanelSettings().show_all_props ? false : Boolean(propertyPanelSettings().property_panel_collapsed[ownerId]); }
@@ -75,7 +76,13 @@ function propertyGroups(index) {
     if (!groups.has(item.owner.id)) groups.set(item.owner.id, []);
     groups.get(item.owner.id).push({ ref: item.ref, item });
   }
-  for (const items of groups.values()) items.sort((a, b) => ({ effect: 0, data: 1 }[a.item.propertyType] - ({ effect: 0, data: 1 }[b.item.propertyType]) || displayName(a.item).localeCompare(displayName(b.item)));
+  const order = { effect: 0, data: 1 };
+  for (const items of groups.values()) {
+    items.sort((a, b) => {
+      const delta = order[a.item.propertyType] - order[b.item.propertyType];
+      return delta || displayName(a.item).localeCompare(displayName(b.item));
+    });
+  }
   return groups;
 }
 
