@@ -1,5 +1,4 @@
-// Entity authoring UI. Human-authored contract text is the only editable contract source.
-// Machine-readable contract data is downstream-only and is invalidated on human edits.
+// Entity authoring overlays. Labels are fixed-size billboards; Event controls are node-relative.
 
 const entityEditor = {
   entityId: null,
@@ -52,7 +51,6 @@ function renderEntityEditor() {
   const entity = selectedEntityForEditor();
   const editor = $('#entityEditorFields');
   const empty = $('#entityEditorEmpty');
-
   if (!entity) {
     entityEditor.entityId = null;
     editor.hidden = true;
@@ -60,7 +58,6 @@ function renderEntityEditor() {
     empty.textContent = selected.size > 1 ? `${selected.size} Entities selected` : 'Select one Entity to edit';
     return;
   }
-
   empty.hidden = true;
   editor.hidden = false;
   entityEditor.entityId = entity.id;
@@ -96,90 +93,6 @@ $('#entityHumanContract').addEventListener('input', event => {
   invalidateMachineContract(entity);
   $('#machineContractStatus').textContent = machineContractStatus(entity);
 });
-
-function entityForCanonicalRef(ref) {
-  const direct = ws.entities.find(entity => entity.id === ref);
-  if (direct) return direct;
-  for (const entity of ws.entities) {
-    if ((entity.properties || []).some(property => property.id === ref)) return entity;
-  }
-  return null;
-}
-
-// Presentation routing only. Canonical dependency orientation remains parent_ref -> child_ref.
-// Visually the dependency leaves the child from its top edge and arrives at the parent's bottom edge.
-linkSlots = function () {
-  const spacing = ws.settings.link_visualization.anchor_spacing || .28;
-  const offset = ws.settings.link_visualization.anchor_offset || .58;
-  const slots = new Map();
-  const dependencyOut = new Map();
-  const dependencyIn = new Map();
-  const sideOut = new Map();
-  const sideIn = new Map();
-
-  function push(map, entityId, propertyId) {
-    if (!map.has(entityId)) map.set(entityId, []);
-    map.get(entityId).push(propertyId);
-  }
-
-  for (const { property } of activeLinkProperties()) {
-    const childEntity = entityForCanonicalRef(property.value.child_ref);
-    const parentEntity = entityForCanonicalRef(property.value.parent_ref);
-    if (!childEntity || !parentEntity) continue;
-
-    if (property.value.link_type_ref === 'dependency') {
-      push(dependencyOut, childEntity.id, property.id);
-      push(dependencyIn, parentEntity.id, property.id);
-    } else {
-      push(sideOut, childEntity.id, property.id);
-      push(sideIn, parentEntity.id, property.id);
-    }
-  }
-
-  for (const entity of ws.entities) {
-    const depOutIds = (dependencyOut.get(entity.id) || []).sort();
-    const depInIds = (dependencyIn.get(entity.id) || []).sort();
-    const depOutStart = -(depOutIds.length - 1) * spacing / 2;
-    const depInStart = -(depInIds.length - 1) * spacing / 2;
-
-    depOutIds.forEach((id, index) => {
-      slots.set(`${id}:out`, [
-        entity.position[0] + depOutStart + index * spacing,
-        entity.position[1] + offset,
-        entity.position[2],
-      ]);
-    });
-    depInIds.forEach((id, index) => {
-      slots.set(`${id}:in`, [
-        entity.position[0] + depInStart + index * spacing,
-        entity.position[1] - offset,
-        entity.position[2],
-      ]);
-    });
-
-    const sideOutIds = (sideOut.get(entity.id) || []).sort();
-    const sideInIds = (sideIn.get(entity.id) || []).sort();
-    const sideOutStart = -(sideOutIds.length - 1) * spacing / 2;
-    const sideInStart = -(sideInIds.length - 1) * spacing / 2;
-
-    sideOutIds.forEach((id, index) => {
-      slots.set(`${id}:out`, [
-        entity.position[0] + offset,
-        entity.position[1] + sideOutStart + index * spacing,
-        entity.position[2],
-      ]);
-    });
-    sideInIds.forEach((id, index) => {
-      slots.set(`${id}:in`, [
-        entity.position[0] - offset,
-        entity.position[1] + sideInStart + index * spacing,
-        entity.position[2],
-      ]);
-    });
-  }
-
-  return slots;
-};
 
 function ensureNodeLabel(entity) {
   let label = entityEditor.labelElements.get(entity.id);
@@ -219,11 +132,9 @@ function ensureEventButton(entity, property) {
 
 function renderNodeOverlays() {
   const livingEntities = new Set(ws.entities.map(entity => entity.id));
-  const livingEvents = new Set(
-    ws.entities.flatMap(entity => (entity.properties || [])
-      .filter(property => property.property_type_ref === 'event')
-      .map(property => property.id))
-  );
+  const livingEvents = new Set(ws.entities.flatMap(entity => (entity.properties || [])
+    .filter(property => property.property_type_ref === 'event')
+    .map(property => property.id)));
 
   for (const [id, label] of entityEditor.labelElements) {
     if (!livingEntities.has(id)) {
@@ -241,6 +152,7 @@ function renderNodeOverlays() {
   const visible = visibleEntityIds();
   const vp = viewProjection();
   const density = devicePixelRatio || 1;
+  const size = nodeMasterSize();
 
   for (const entity of ws.entities) {
     ensureAuthoringFields(entity);
@@ -248,7 +160,8 @@ function renderNodeOverlays() {
     if (!visible.has(entity.id)) {
       label.hidden = true;
     } else {
-      const screen = project([entity.position[0], entity.position[1] + .72, entity.position[2]], vp);
+      const labelWorld = [entity.position[0], entity.position[1] + .72 * size, entity.position[2]];
+      const screen = project(labelWorld, vp);
       if (!screen) {
         label.hidden = true;
       } else {
@@ -261,8 +174,10 @@ function renderNodeOverlays() {
     }
 
     const events = (entity.properties || []).filter(property => property.property_type_ref === 'event');
-    const eventSpacing = .30;
+    const eventSpacing = .34 * size;
     const eventStart = -(events.length - 1) * eventSpacing / 2;
+    const pxPerWorld = worldPixelsAt(entity.position);
+    const eventScale = Math.max(.18, Math.min(4, pxPerWorld * size / 42));
 
     events.forEach((property, index) => {
       const button = ensureEventButton(entity, property);
@@ -270,10 +185,8 @@ function renderNodeOverlays() {
         button.hidden = true;
         return;
       }
-
-      // Event rail is on the left. Event semantics/playback proceed left -> right.
       const world = [
-        entity.position[0] - .72,
+        entity.position[0] - .72 * size,
         entity.position[1] + eventStart + index * eventSpacing,
         entity.position[2],
       ];
@@ -282,14 +195,13 @@ function renderNodeOverlays() {
         button.hidden = true;
         return;
       }
-
       button.hidden = false;
       button.textContent = property.value?.event_type_ref || property.id;
       button.style.left = `${screen[0] / density}px`;
       button.style.top = `${screen[1] / density}px`;
+      button.style.setProperty('--event-world-scale', String(eventScale));
     });
   }
-
   requestAnimationFrame(renderNodeOverlays);
 }
 
