@@ -107,7 +107,111 @@
     </div>
   </div>
 
+  <button id="errorReportButton" class="error-report-button" type="button" title="Copy all captured errors to clipboard" aria-live="polite">ERRORS 0</button>
   <div id="help">Double-click Entity: bind lookAt · move bound Entity: reference freezes · LMB drag empty: move reference · RMB drag: orbit · wheel: zoom · GRID/SNAP: top-right · Event button: fire causal chain</div>
+
+  <script>
+    (() => {
+      const errors = [];
+      const button = document.querySelector('#errorReportButton');
+
+      function normalizeError(value) {
+        if (value instanceof Error) return { message: value.message || value.name, stack: value.stack || '' };
+        if (typeof value === 'string') return { message: value, stack: '' };
+        try { return { message: JSON.stringify(value), stack: '' }; }
+        catch { return { message: String(value), stack: '' }; }
+      }
+
+      function refreshButton() {
+        button.textContent = `ERRORS ${errors.length}`;
+        button.classList.toggle('has-errors', errors.length > 0);
+      }
+
+      function record(entry) {
+        errors.push({ timestamp: new Date().toISOString(), ...entry });
+        if (errors.length > 100) errors.shift();
+        refreshButton();
+      }
+
+      window.reportStructureError = (error, context = {}) => {
+        const normalized = normalizeError(error);
+        record({ type: context.type || 'caught_error', ...normalized, ...context });
+      };
+
+      window.addEventListener('error', event => {
+        if (event instanceof ErrorEvent) {
+          record({
+            type: 'runtime_error',
+            message: event.message || 'Runtime error',
+            stack: event.error?.stack || '',
+            source: event.filename || '',
+            line: event.lineno || 0,
+            column: event.colno || 0,
+          });
+          return;
+        }
+        const target = event.target;
+        const source = target?.src || target?.href || '';
+        if (source) record({ type: 'resource_error', message: `Failed to load resource: ${source}`, source });
+      }, true);
+
+      window.addEventListener('unhandledrejection', event => {
+        const normalized = normalizeError(event.reason);
+        record({ type: 'unhandled_rejection', ...normalized });
+      });
+
+      function reportText() {
+        const header = [
+          'STRUCTURE ERROR REPORT',
+          `generated: ${new Date().toISOString()}`,
+          `url: ${location.href}`,
+          `user_agent: ${navigator.userAgent}`,
+          `error_count: ${errors.length}`,
+          '',
+        ];
+        const body = errors.flatMap((error, index) => {
+          const lines = [
+            `[${index + 1}] ${error.timestamp} ${error.type || 'error'}`,
+            `message: ${error.message || ''}`,
+          ];
+          if (error.source) lines.push(`source: ${error.source}${error.line ? `:${error.line}:${error.column || 0}` : ''}`);
+          if (error.context) lines.push(`context: ${error.context}`);
+          if (error.stack) lines.push(`stack:\n${error.stack}`);
+          return [...lines, ''];
+        });
+        return [...header, ...body].join('\n');
+      }
+
+      async function copyText(text) {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(text);
+          return;
+        }
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        textarea.remove();
+      }
+
+      button.addEventListener('click', async () => {
+        try {
+          await copyText(reportText());
+          const count = errors.length;
+          button.textContent = `COPIED ${count}`;
+          setTimeout(refreshButton, 900);
+        } catch (error) {
+          record({ type: 'clipboard_error', ...normalizeError(error) });
+        }
+      });
+
+      window.StructureErrorLog = errors;
+      refreshButton();
+    })();
+  </script>
   <script src="/static/app.js"></script>
   <script src="/static/entity_editor.js"></script>
   <script src="/static/causal_projection.js"></script>
