@@ -4,16 +4,15 @@
 
 const LINK_FLOW_MASK_PIXELS = 100;
 const LINK_FLOW_REPEAT_SCALE = 0.26;
-const LINK_TOUCH_RADIUS_PX = 10;
-const LINK_TOUCH_BOOST_MS = 480;
-const NODE_TOUCH_FLASH_MS = 360;
+const LINK_EVENT_BOOST_MS = 480;
+const NODE_EVENT_FLASH_MS = 360;
 const linkProjection = {
   ports: new Map(),
   flowPhases: new Map(),
   boostUntil: new Map(),
-  hoveredLinkId: null,
-  flashEntityId: null,
-  flashStartedAt: 0,
+  causalRunKey: null,
+  causalTouchedLinks: new Set(),
+  flashes: new Map(),
 };
 
 const linkFlowSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -22,20 +21,10 @@ linkFlowSvg.setAttribute('aria-hidden', 'true');
 Object.assign(linkFlowSvg.style, { position: 'fixed', inset: '0', pointerEvents: 'none', zIndex: '9', overflow: 'visible' });
 document.body.appendChild(linkFlowSvg);
 
-const linkTouchFlash = document.createElement('div');
-linkTouchFlash.setAttribute('aria-hidden', 'true');
-Object.assign(linkTouchFlash.style, {
-  position: 'fixed',
-  display: 'none',
-  pointerEvents: 'none',
-  zIndex: '8',
-  background: '#ffffff',
-  border: '1px solid #ffffff',
-  borderRadius: '3px',
-  boxShadow: '0 0 18px #ffffff',
-  mixBlendMode: 'screen',
-});
-document.body.appendChild(linkTouchFlash);
+const linkEventFlashLayer = document.createElement('div');
+linkEventFlashLayer.setAttribute('aria-hidden', 'true');
+Object.assign(linkEventFlashLayer.style, { position: 'fixed', inset: '0', pointerEvents: 'none', zIndex: '8' });
+document.body.appendChild(linkEventFlashLayer);
 
 function causalRuntime() {
   const runtime = window.StructureCausalProjection;
@@ -43,24 +32,31 @@ function causalRuntime() {
   return runtime;
 }
 
-function linkProjectionColor(property, variant) {
+function linkProjectionRgb(property, variant) {
   const ruleset = rulesetMap().get(property.ruleset_ref);
   if (!ruleset) throw new Error(`Ruleset unresolved: ${property.ruleset_ref}`);
   const colorSpace = colorSpaceMap().get(ruleset.color_space_ref);
   if (!colorSpace) throw new Error(`ColorSpace unresolved: ${ruleset.color_space_ref}`);
   const rgb = colorSpace.colors[variant];
   if (!Array.isArray(rgb) || rgb.length !== 3) throw new Error(`ColorSpace ${colorSpace.id}.${variant} must be [r,g,b]`);
-  const target = rgb.map(value => Number(value));
+  return rgb.map(value => Number(value));
+}
+function rgbCss(rgb) { return `rgb(${rgb.map(value => Math.round(value * 255)).join(',')})`; }
+function linkProjectionColor(property, variant) {
+  const target = linkProjectionRgb(property, variant);
   const subtract = target.map(value => 1 - value);
   const tintedWhite = subtract.map(value => 1 - value);
-  return `rgb(${tintedWhite.map(value => Math.round(value * 255)).join(',')})`;
+  return rgbCss(tintedWhite);
+}
+function brightenedLinkColor(property) {
+  return rgbCss(linkProjectionRgb(property, 'flow').map(value => value + (1 - value) * .58));
 }
 function linkTypeColor(linkType) {
   const matches = assertWorkspace().rulesets.filter(ruleset => ruleset.property_type_ref === 'link' && ruleset.link_type_ref === linkType);
   if (matches.length !== 1) throw new Error(`Link type ${linkType} must resolve to exactly one Ruleset, found ${matches.length}`);
   const colorSpace = colorSpaceMap().get(matches[0].color_space_ref);
   if (!colorSpace) throw new Error(`ColorSpace unresolved: ${matches[0].color_space_ref}`);
-  return `rgb(${colorSpace.colors.flow.map(value => Math.round(value * 255)).join(',')})`;
+  return rgbCss(colorSpace.colors.flow);
 }
 function linkTypeOrder(types) {
   const order = new Map();
@@ -141,41 +137,6 @@ function cssPoint(world) {
   return { x: screen[0] / density, y: screen[1] / density };
 }
 function svgElement(name) { return document.createElementNS('http://www.w3.org/2000/svg', name); }
-function pointSegmentDistance(px, py, start, end) {
-  const vx = end.x - start.x;
-  const vy = end.y - start.y;
-  const lengthSquared = vx * vx + vy * vy;
-  if (lengthSquared <= 1e-9) return Math.hypot(px - start.x, py - start.y);
-  const t = Math.max(0, Math.min(1, ((px - start.x) * vx + (py - start.y) * vy) / lengthSquared));
-  return Math.hypot(px - (start.x + vx * t), py - (start.y + vy * t));
-}
-function genericLinkAt(clientX, clientY) {
-  if (!ws) return null;
-  const slots = linkSlots();
-  let winner = null;
-  let best = LINK_TOUCH_RADIUS_PX;
-  for (const { property } of activeLinkProperties()) {
-    const start = cssPoint(slots.get(`${property.id}:out`));
-    const end = cssPoint(slots.get(`${property.id}:in`));
-    if (!start || !end) continue;
-    const distance = pointSegmentDistance(clientX, clientY, start, end);
-    if (distance < best) { best = distance; winner = property; }
-  }
-  return winner;
-}
-function activateGenericLinkTouch(property, time = performance.now()) {
-  const target = entityForCanonicalRef(property.value.parent_ref);
-  if (!target) throw new Error(`Link target unresolved for touch feedback: ${property.id}`);
-  linkProjection.boostUntil.set(property.id, time + LINK_TOUCH_BOOST_MS);
-  linkProjection.flashEntityId = target.id;
-  linkProjection.flashStartedAt = time;
-}
-function updateGenericLinkHover(clientX, clientY) {
-  const property = genericLinkAt(clientX, clientY);
-  const nextId = property?.id ?? null;
-  if (property && nextId !== linkProjection.hoveredLinkId) activateGenericLinkTouch(property);
-  linkProjection.hoveredLinkId = nextId;
-}
 function flowDashOffset(property, time, period) {
   let state = linkProjection.flowPhases.get(property.id);
   if (!state) {
@@ -190,26 +151,70 @@ function flowDashOffset(property, time, period) {
   state.time = time;
   return -state.phase;
 }
-function renderNodeTouchFlash(time) {
-  if (!linkProjection.flashEntityId) { linkTouchFlash.style.display = 'none'; return; }
-  const progress = (time - linkProjection.flashStartedAt) / NODE_TOUCH_FLASH_MS;
-  if (progress < 0 || progress >= 1) {
-    linkProjection.flashEntityId = null;
-    linkTouchFlash.style.display = 'none';
+function activateGenericLinkFromEvent(property, time) {
+  const target = entityForCanonicalRef(property.value.parent_ref);
+  if (!target) throw new Error(`Generic Link target unresolved during Event playback: ${property.id}`);
+  linkProjection.boostUntil.set(property.id, time + LINK_EVENT_BOOST_MS);
+  linkProjection.flashes.set(target.id, { startedAt: time, color: brightenedLinkColor(property) });
+}
+function syncGenericLinksFromCausalPlayback(time) {
+  const state = causalRuntime().state;
+  if (!ws || !state.graph || !state.playbackStartedAt) {
+    linkProjection.causalRunKey = null;
+    linkProjection.causalTouchedLinks.clear();
     return;
   }
-  const entity = assertWorkspace().entities.find(item => item.id === linkProjection.flashEntityId);
-  if (!entity) throw new Error(`Touch flash Entity unresolved: ${linkProjection.flashEntityId}`);
-  const bounds = entityScreenBounds(entity, viewProjection());
-  if (!bounds) { linkTouchFlash.style.display = 'none'; return; }
+  const runKey = `${state.rootEventRef}\u0000${state.playbackStartedAt}`;
+  if (linkProjection.causalRunKey !== runKey) {
+    linkProjection.causalRunKey = runKey;
+    linkProjection.causalTouchedLinks.clear();
+  }
+  const elapsed = time - state.playbackStartedAt;
+  const stepMs = Math.max(120, eventSettings().effect_travel_duration * 350);
+  const reachedOwners = new Set();
+  for (const node of state.graph.nodes) {
+    if (elapsed < node.depth * stepMs) continue;
+    const item = state.graph.index.get(node.ref);
+    if (!item) throw new Error(`Causal node unresolved during generic Link feedback: ${node.ref}`);
+    reachedOwners.add(item.owner.id);
+  }
+  for (const { property } of activeLinkProperties()) {
+    if (linkProjection.causalTouchedLinks.has(property.id)) continue;
+    const source = entityForCanonicalRef(property.value.child_ref);
+    if (!source) throw new Error(`Generic Link source unresolved during Event playback: ${property.id}`);
+    if (!reachedOwners.has(source.id)) continue;
+    linkProjection.causalTouchedLinks.add(property.id);
+    activateGenericLinkFromEvent(property, time);
+  }
+}
+function renderNodeEventFlashes(time) {
+  linkEventFlashLayer.replaceChildren();
   const density = devicePixelRatio || 1;
-  const pulse = Math.sin(Math.PI * progress);
-  linkTouchFlash.style.display = 'block';
-  linkTouchFlash.style.left = `${bounds.minX / density}px`;
-  linkTouchFlash.style.top = `${bounds.minY / density}px`;
-  linkTouchFlash.style.width = `${Math.max(1, (bounds.maxX - bounds.minX) / density)}px`;
-  linkTouchFlash.style.height = `${Math.max(1, (bounds.maxY - bounds.minY) / density)}px`;
-  linkTouchFlash.style.opacity = String(.62 * pulse);
+  for (const [entityId, flash] of [...linkProjection.flashes]) {
+    const progress = (time - flash.startedAt) / NODE_EVENT_FLASH_MS;
+    if (progress < 0 || progress >= 1) { linkProjection.flashes.delete(entityId); continue; }
+    const entity = assertWorkspace().entities.find(item => item.id === entityId);
+    if (!entity) throw new Error(`Event flash Entity unresolved: ${entityId}`);
+    const bounds = entityScreenBounds(entity, viewProjection());
+    if (!bounds) continue;
+    const pulse = Math.sin(Math.PI * progress);
+    const marker = document.createElement('div');
+    Object.assign(marker.style, {
+      position: 'fixed',
+      left: `${bounds.minX / density}px`,
+      top: `${bounds.minY / density}px`,
+      width: `${Math.max(1, (bounds.maxX - bounds.minX) / density)}px`,
+      height: `${Math.max(1, (bounds.maxY - bounds.minY) / density)}px`,
+      pointerEvents: 'none',
+      background: flash.color,
+      border: `1px solid ${flash.color}`,
+      borderRadius: '3px',
+      boxShadow: `0 0 18px ${flash.color}`,
+      mixBlendMode: 'screen',
+      opacity: String(.68 * pulse),
+    });
+    linkEventFlashLayer.appendChild(marker);
+  }
 }
 
 function renderGenericLinks(time) {
@@ -270,7 +275,7 @@ function causalFlowColor() {
   if (!ruleset) throw new Error('RULESET_LINK_EVENT_EFFECT missing');
   const colorSpace = colorSpaceMap().get(ruleset.color_space_ref);
   if (!colorSpace) throw new Error(`ColorSpace unresolved: ${ruleset.color_space_ref}`);
-  return `rgb(${colorSpace.colors.flow.map(value => Math.round(value * 255)).join(',')})`;
+  return rgbCss(colorSpace.colors.flow);
 }
 function renderEventFlow(time) {
   const runtime = causalRuntime();
@@ -307,17 +312,11 @@ function renderEventFlow(time) {
   }
 }
 
-canvas.addEventListener('pointermove', event => updateGenericLinkHover(event.clientX, event.clientY), { passive: true });
-canvas.addEventListener('pointerleave', () => { linkProjection.hoveredLinkId = null; });
-canvas.addEventListener('pointerdown', event => {
-  const property = genericLinkAt(event.clientX, event.clientY);
-  if (property) activateGenericLinkTouch(property);
-}, { passive: true });
-
 function renderLinkProjection(time) {
+  syncGenericLinksFromCausalPlayback(time);
   renderGenericLinks(time);
   renderEventFlow(time);
-  renderNodeTouchFlash(time);
+  renderNodeEventFlashes(time);
   requestAnimationFrame(renderLinkProjection);
 }
 requestAnimationFrame(renderLinkProjection);
