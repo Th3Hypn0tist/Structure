@@ -5,6 +5,7 @@ const entityEditor = {
   entityId: null,
   labelElements: new Map(),
   eventElements: new Map(),
+  eventGeometry: new Map(),
 };
 
 function ensureAuthoringFields(entity) {
@@ -90,6 +91,44 @@ function applyWorldPlaneTransform(element, centerWorld, worldPerCssPixel) {
   element.style.transformOrigin = '0 0';
   element.style.transform = `matrix(${a}, ${b}, ${c}, ${d}, ${e}, ${f})`;
   return true;
+}
+
+function worldPlaneLocalToWorld(centerWorld, worldPerCssPixel, width, height, localX, localY) {
+  return [
+    centerWorld[0] + (localX - width / 2) * worldPerCssPixel,
+    centerWorld[1] - (localY - height / 2) * worldPerCssPixel,
+    centerWorld[2],
+  ];
+}
+
+function projectWorldToCss(world) {
+  const screen = project(world, viewProjection());
+  if (!screen) return null;
+  const density = devicePixelRatio || 1;
+  return { x: screen[0] / density, y: screen[1] / density };
+}
+
+// World-derived projected edge anchors. These are intentionally not DOM bounding-box anchors:
+// the attachment points remain on the fixed Entity-child plane when the camera orbits.
+function worldPlaneProjectedAnchors(element, centerWorld, worldPerCssPixel, localY = null) {
+  const width = element.offsetWidth;
+  const height = element.offsetHeight;
+  if (!width || !height) return null;
+  const y = localY ?? height / 2;
+  const points = {
+    left: worldPlaneLocalToWorld(centerWorld, worldPerCssPixel, width, height, 0, y),
+    right: worldPlaneLocalToWorld(centerWorld, worldPerCssPixel, width, height, width, y),
+    top: worldPlaneLocalToWorld(centerWorld, worldPerCssPixel, width, height, width / 2, 0),
+    bottom: worldPlaneLocalToWorld(centerWorld, worldPerCssPixel, width, height, width / 2, height),
+    center: worldPlaneLocalToWorld(centerWorld, worldPerCssPixel, width, height, width / 2, y),
+  };
+  const projected = {};
+  for (const [name, world] of Object.entries(points)) {
+    const screen = projectWorldToCss(world);
+    if (!screen) return null;
+    projected[name] = { ...screen, world };
+  }
+  return projected;
 }
 
 function selectedEntityForEditor() {
@@ -215,6 +254,7 @@ function renderNodeOverlays() {
     if (!livingEvents.has(id)) {
       button.remove();
       entityEditor.eventElements.delete(id);
+      entityEditor.eventGeometry.delete(id);
     }
   }
 
@@ -254,6 +294,7 @@ function renderNodeOverlays() {
       const button = ensureEventButton(entity, property);
       if (!visible.has(entity.id)) {
         button.hidden = true;
+        entityEditor.eventGeometry.delete(property.id);
         return;
       }
       const world = [
@@ -263,7 +304,12 @@ function renderNodeOverlays() {
       ];
       button.textContent = propertyDisplayName(property, entity);
       button.hidden = false;
-      if (!applyWorldPlaneTransform(button, world, worldPerCssPixel)) button.hidden = true;
+      if (!applyWorldPlaneTransform(button, world, worldPerCssPixel)) {
+        button.hidden = true;
+        entityEditor.eventGeometry.delete(property.id);
+        return;
+      }
+      entityEditor.eventGeometry.set(property.id, { centerWorld: world, worldPerCssPixel });
     });
   }
   requestAnimationFrame(renderNodeOverlays);
