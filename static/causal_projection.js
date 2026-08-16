@@ -387,11 +387,79 @@ function propertyRowAnchors(panel, row, geometry) {
   return { left, right, center };
 }
 
+function propertyPanelAnchors(panel, geometry) {
+  const y = panel.offsetHeight / 2;
+  const left = projectedPoint(propertyPanelLocalWorld(geometry, 0, y));
+  const right = projectedPoint(propertyPanelLocalWorld(geometry, panel.offsetWidth, y));
+  const center = projectedPoint(propertyPanelLocalWorld(geometry, panel.offsetWidth / 2, y));
+  if (!left || !right || !center) return null;
+  return { left, right, center };
+}
+
 function eventButtonAnchors(ref) {
   const button = document.querySelector(`.event-button[data-event-id="${CSS.escape(ref)}"]`);
   const geometry = entityEditor.eventGeometry.get(ref);
   if (!button || button.hidden || !geometry) return null;
   return worldPlaneProjectedAnchors(button, geometry.centerWorld, geometry.worldPerCssPixel);
+}
+
+function projectedCausalRoutes(graph) {
+  const routes = [];
+  const effectTargetGroups = new Map();
+
+  for (const edge of graph.edges) {
+    if (edge.linkType !== 'effect_target') {
+      routes.push({ edges: [edge], edge });
+      continue;
+    }
+
+    const source = graph.index.get(edge.from);
+    const target = graph.index.get(edge.to);
+    const sourceOwnerId = source?.owner?.id;
+    const targetOwnerId = target?.owner?.id;
+
+    if (!sourceOwnerId || !targetOwnerId || sourceOwnerId === targetOwnerId) {
+      routes.push({ edges: [edge], edge });
+      continue;
+    }
+
+    const key = `${sourceOwnerId}\u0000${targetOwnerId}`;
+    if (!effectTargetGroups.has(key)) {
+      effectTargetGroups.set(key, {
+        sourceOwnerId,
+        targetOwnerId,
+        edges: [],
+      });
+    }
+    effectTargetGroups.get(key).edges.push(edge);
+  }
+
+  for (const group of effectTargetGroups.values()) {
+    const edge = group.edges[0];
+    routes.push({
+      ...group,
+      edge: {
+        ...edge,
+        id: group.edges.map(item => item.id).join(','),
+        depth: Math.min(...group.edges.map(item => item.depth)),
+        cycle: group.edges.some(item => item.cycle),
+      },
+      panelRoute: true,
+    });
+  }
+
+  return routes;
+}
+
+function causalPlaybackState(edges, elapsed, stepMs) {
+  let active = false;
+  let reached = false;
+  for (const edge of edges) {
+    const activeAt = Math.max(0, edge.depth - 1) * stepMs;
+    if (elapsed >= activeAt && elapsed < activeAt + stepMs * .9) active = true;
+    if (elapsed >= activeAt + stepMs * .75) reached = true;
+  }
+  return { active, reached };
 }
 
 function renderCausalProjection() {
@@ -401,6 +469,7 @@ function renderCausalProjection() {
   const groups = propertyGroups(index);
   const graphDepth = new Map((graph?.nodes || []).map(node => [node.ref, node.depth]));
   const positions = new Map();
+  const panelPositions = new Map();
   const visibleOwners = new Set();
   const elapsed = graph ? performance.now() - causalProjection.playbackStartedAt : 0;
   const stepMs = Math.max(120, Number(ws.settings.event_playback.effect_travel_duration || 1.2) * 350);
@@ -422,6 +491,9 @@ function renderCausalProjection() {
       panel.hidden = true;
       continue;
     }
+
+    const panelAnchors = propertyPanelAnchors(panel, geometry);
+    if (panelAnchors) panelPositions.set(ownerId, panelAnchors);
 
     for (const { ref } of items) {
       const row = panel.querySelector(`.property-row[data-ref="${CSS.escape(ref)}"]`);
@@ -456,9 +528,10 @@ function renderCausalProjection() {
   }
 
   const svgNS = 'http://www.w3.org/2000/svg';
-  for (const edge of graph.edges) {
-    const from = positions.get(edge.from);
-    const to = positions.get(edge.to);
+  for (const route of projectedCausalRoutes(graph)) {
+    const edge = route.edge;
+    const from = route.panelRoute ? panelPositions.get(route.sourceOwnerId) : positions.get(edge.from);
+    const to = route.panelRoute ? panelPositions.get(route.targetOwnerId) : positions.get(edge.to);
     if (!from || !to) continue;
     const start = from.right || from.center;
     const end = to.left || to.center;
@@ -470,14 +543,13 @@ function renderCausalProjection() {
     const bend = Math.max(24, Math.abs(x2 - x1) * .35);
     const direction = x2 >= x1 ? 1 : -1;
     const path = document.createElementNS(svgNS, 'path');
-    const activeAt = Math.max(0, edge.depth - 1) * stepMs;
-    const reached = elapsed >= activeAt + stepMs * .75;
-    const active = elapsed >= activeAt && elapsed < activeAt + stepMs * .9;
-    path.setAttribute('class', `causal-edge ${edge.linkType}${edge.cycle ? ' cycle' : ''}${active ? ' active' : ''}${reached ? ' reached' : ''}`);
+    const { active, reached } = causalPlaybackState(route.edges, elapsed, stepMs);
+    path.setAttribute('class', `causal-edge ${edge.linkType}${route.panelRoute ? ' aggregated' : ''}${edge.cycle ? ' cycle' : ''}${active ? ' active' : ''}${reached ? ' reached' : ''}`);
     path.setAttribute('d', `M ${x1} ${y1} C ${x1 + direction * bend} ${y1}, ${x2 - direction * bend} ${y2}, ${x2} ${y2}`);
     path.setAttribute('marker-end', 'url(#causalArrow)');
     path.dataset.linkId = edge.id;
-    const sourceItem = graph.index.get(edge.from);
+    if (route.panelRoute) path.dataset.linkCount = String(route.edges.length);
+    const sourceItem = graph.index.get(route.edges[0].from);
     const sourceWorld = sourceItem?.owner?.position || [0, 0, 0];
     path.style.strokeWidth = `${Math.max(.7, Math.min(5, worldPixelsAt(sourceWorld) / 24))}px`;
     causalSvg.appendChild(path);
