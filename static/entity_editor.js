@@ -1,13 +1,8 @@
-// Entity authoring and owner-relative representation.
-// Canonical data is never defaulted or migrated here. Optional fields are only
-// created as a direct result of an explicit edit.
+// Entity authoring only. Scene representation lives in the 3D projection
+// layer; this module must not create DOM representations of canonical scene
+// objects.
 
-const entityEditor = {
-  entityId: null,
-  labelElements: new Map(),
-  eventElements: new Map(),
-  eventGeometry: new Map(),
-};
+const entityEditor = { entityId: null };
 
 function humanizeCanonicalName(value) {
   return String(value)
@@ -33,65 +28,6 @@ function propertyDisplayName(property, owner = null) {
   return humanizeCanonicalName(ref);
 }
 
-function applyWorldPlaneTransform(element, centerWorld, worldPerCssPixel) {
-  const vp = viewProjection();
-  const density = devicePixelRatio || 1;
-  const center = project(centerWorld, vp);
-  const xPoint = project(V.add(centerWorld, [worldPerCssPixel, 0, 0]), vp);
-  const yPoint = project(V.add(centerWorld, [0, -worldPerCssPixel, 0]), vp);
-  if (!center || !xPoint || !yPoint) return false;
-  const cx = center[0] / density;
-  const cy = center[1] / density;
-  const a = xPoint[0] / density - cx;
-  const b = xPoint[1] / density - cy;
-  const c = yPoint[0] / density - cx;
-  const d = yPoint[1] / density - cy;
-  const width = element.offsetWidth;
-  const height = element.offsetHeight;
-  if (!width || !height || Math.abs(a * d - b * c) < .00001) return false;
-  const e = cx - a * width / 2 - c * height / 2;
-  const f = cy - b * width / 2 - d * height / 2;
-  element.style.left = '0px';
-  element.style.top = '0px';
-  element.style.transformOrigin = '0 0';
-  element.style.transform = `matrix(${a}, ${b}, ${c}, ${d}, ${e}, ${f})`;
-  return true;
-}
-
-function worldPlaneLocalToWorld(centerWorld, worldPerCssPixel, width, height, localX, localY) {
-  return [
-    centerWorld[0] + (localX - width / 2) * worldPerCssPixel,
-    centerWorld[1] - (localY - height / 2) * worldPerCssPixel,
-    centerWorld[2],
-  ];
-}
-function projectWorldToCss(world) {
-  const screen = project(world, viewProjection());
-  if (!screen) return null;
-  const density = devicePixelRatio || 1;
-  return { x: screen[0] / density, y: screen[1] / density };
-}
-function worldPlaneProjectedAnchors(element, centerWorld, worldPerCssPixel, localY = null) {
-  const width = element.offsetWidth;
-  const height = element.offsetHeight;
-  if (!width || !height) return null;
-  const y = localY ?? height / 2;
-  const worldPoints = {
-    left: worldPlaneLocalToWorld(centerWorld, worldPerCssPixel, width, height, 0, y),
-    right: worldPlaneLocalToWorld(centerWorld, worldPerCssPixel, width, height, width, y),
-    top: worldPlaneLocalToWorld(centerWorld, worldPerCssPixel, width, height, width / 2, 0),
-    bottom: worldPlaneLocalToWorld(centerWorld, worldPerCssPixel, width, height, width / 2, height),
-    center: worldPlaneLocalToWorld(centerWorld, worldPerCssPixel, width, height, width / 2, y),
-  };
-  const result = {};
-  for (const [name, world] of Object.entries(worldPoints)) {
-    const screen = projectWorldToCss(world);
-    if (!screen) return null;
-    result[name] = { ...screen, world };
-  }
-  return result;
-}
-
 function selectedEntityForEditor() {
   if (selected.size !== 1) return null;
   return assertWorkspace().entities.find(item => selected.has(item.id)) ?? null;
@@ -115,7 +51,6 @@ function syncInfoSections() {
     section.querySelector('.entity-info-heading')?.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
   }
 }
-
 for (const button of document.querySelectorAll('[data-info-section-toggle]')) {
   button.addEventListener('click', event => {
     event.preventDefault();
@@ -140,10 +75,7 @@ function setEntityType(entity, typeRef) {
     if (existing) entity.properties = entity.properties.filter(property => property.id !== existing.id);
     return;
   }
-  if (existing) {
-    existing.value.type_ref = value;
-    return;
-  }
+  if (existing) { existing.value.type_ref = value; return; }
   entity.properties.push({
     id: nextId('TYPE'),
     property_type_ref: 'type',
@@ -229,97 +161,3 @@ $('#entityHumanContract').addEventListener('input', event => {
   invalidateMachineContract(entity);
   $('#machineContractStatus').textContent = machineContractStatus(entity);
 });
-
-function ensureNodeLabel(entity) {
-  let label = entityEditor.labelElements.get(entity.id);
-  if (!label) {
-    label = document.createElement('div');
-    label.className = 'node-label';
-    label.dataset.entityId = entity.id;
-    $('#nodeLabels').appendChild(label);
-    entityEditor.labelElements.set(entity.id, label);
-  }
-  return label;
-}
-function ensureEventButton(entity, property) {
-  let button = entityEditor.eventElements.get(property.id);
-  if (!button) {
-    button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'event-button';
-    button.dataset.entityId = entity.id;
-    button.dataset.eventId = property.id;
-    button.addEventListener('click', event => {
-      event.stopPropagation();
-      const item = canonicalIndex().get(button.dataset.eventId);
-      if (!item || item.propertyType !== 'event') throw new Error(`Event unresolved: ${button.dataset.eventId}`);
-      status(`Event ${propertyDisplayName(item.object, item.owner)} @ ${item.owner.name}`);
-      button.classList.remove('pulse');
-      void button.offsetWidth;
-      button.classList.add('pulse');
-    });
-    document.body.appendChild(button);
-    entityEditor.eventElements.set(property.id, button);
-  }
-  return button;
-}
-
-function renderNodeOverlays() {
-  if (!ws) { requestAnimationFrame(renderNodeOverlays); return; }
-  const livingEntities = new Set(assertWorkspace().entities.map(entity => entity.id));
-  const livingEvents = new Set(assertWorkspace().entities.flatMap(entity => entity.properties.filter(property => property.property_type_ref === 'event').map(property => property.id)));
-  for (const [id, label] of entityEditor.labelElements) {
-    if (!livingEntities.has(id)) { label.remove(); entityEditor.labelElements.delete(id); }
-  }
-  for (const [id, button] of entityEditor.eventElements) {
-    if (!livingEvents.has(id)) { button.remove(); entityEditor.eventElements.delete(id); entityEditor.eventGeometry.delete(id); }
-  }
-
-  const visible = visibleEntityIds();
-  const vp = viewProjection();
-  const density = devicePixelRatio || 1;
-  const size = nodeMasterSize();
-  const half = nodeHalfSize();
-  for (const entity of assertWorkspace().entities) {
-    const label = ensureNodeLabel(entity);
-    if (!visible.has(entity.id)) label.hidden = true;
-    else {
-      const screen = project([entity.position[0], entity.position[1] + .72 * size, entity.position[2]], vp);
-      if (!screen) label.hidden = true;
-      else {
-        label.hidden = false;
-        label.textContent = entity.name;
-        label.style.left = `${screen[0] / density}px`;
-        label.style.top = `${screen[1] / density}px`;
-        label.classList.toggle('selected', selected.has(entity.id));
-      }
-    }
-
-    const events = entity.properties.filter(property => property.property_type_ref === 'event');
-    const eventSpacing = .34 * size;
-    const eventStart = -(events.length - 1) * eventSpacing / 2;
-    const worldPerCssPixel = size / 42;
-    events.forEach((property, index) => {
-      const button = ensureEventButton(entity, property);
-      if (!visible.has(entity.id)) {
-        button.hidden = true;
-        entityEditor.eventGeometry.delete(property.id);
-        return;
-      }
-      button.textContent = propertyDisplayName(property, entity);
-      button.hidden = false;
-      const anchorWorld = [entity.position[0] - half, entity.position[1] + eventStart + index * eventSpacing, entity.position[2]];
-      const widthWorld = button.offsetWidth * worldPerCssPixel;
-      const centerWorld = [anchorWorld[0] - widthWorld / 2, anchorWorld[1], anchorWorld[2]];
-      if (!applyWorldPlaneTransform(button, centerWorld, worldPerCssPixel)) {
-        button.hidden = true;
-        entityEditor.eventGeometry.delete(property.id);
-        return;
-      }
-      entityEditor.eventGeometry.set(property.id, { centerWorld, worldPerCssPixel, parentAnchorWorld: anchorWorld, parentAnchor: 'right-edge-to-entity-left-edge' });
-    });
-  }
-  requestAnimationFrame(renderNodeOverlays);
-}
-
-requestAnimationFrame(renderNodeOverlays);
