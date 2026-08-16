@@ -3,15 +3,16 @@
 // representation.
 //
 // Locked Entity-local layout:
-//   generic/Dependency OUT ports above
-//   Event list left (right edge -> Entity left edge, with gap)
-//   Props list below (top edge -> Entity bottom edge, with gap)
-//   generic/Dependency IN ports below the full Props list
+//   Dependency OUT above
+//   Event list left of Entity
+//   Props list directly below Entity
+//   Event IN left of Props, Event OUT right of Props, same Y as Props center
+//   Dependency IN below Props
 //
-// Event I/O is link-level projection state, not Event-row state. An Entity owns
-// exactly one shared Event IN port and one shared Event OUT port regardless of
-// how many Event Properties it contains. Individual Event rows remain buttons
-// in the Event list and never create their own input/output ports.
+// Event IN / Event OUT are shared link-projection nodes. An Entity owns at most
+// one of each regardless of Event Property count. Canonical Event/Effect edges
+// remain distinct in the graph/playback, but external scene routes aggregate at
+// Entity boundaries instead of drawing per-Property spaghetti.
 
 const causalProjection = {
   rootEventRef: null,
@@ -129,6 +130,8 @@ function propertyGroups(index) {
 const SCENE_COLORS = Object.freeze({
   event: [.42, .25, .09],
   eventActive: [.92, .42, .10],
+  eventIo: [.42, .25, .09],
+  eventIoActive: [.92, .42, .10],
   propsFrame: [.36, .42, .52],
   effect: [.48, .16, .13],
   data: [.08, .29, .43],
@@ -154,7 +157,6 @@ function eventListLayout(entity) {
   const totalHeight = events.length ? events.length * rowHeight + Math.max(0, events.length - 1) * rowGap : 0;
   const top = entity.position[1] + totalHeight / 2;
   const rightEdge = entity.position[0] - half - gap;
-  const leftEdge = rightEdge - width;
   const rows = events.map((property, index) => ({
     ref: property.id,
     property,
@@ -167,16 +169,7 @@ function eventListLayout(entity) {
     width,
     height: rowHeight,
   }));
-  return {
-    entity,
-    rows,
-    rightEdge,
-    leftEdge,
-    // One shared Event IN link port for the whole Entity/Event list.
-    inAnchor: [leftEdge - gap, entity.position[1], entity.position[2]],
-    // One shared Event OUT link port for the whole Entity, independent of Event count.
-    outAnchor: [entity.position[0] + half + gap, entity.position[1], entity.position[2]],
-  };
+  return { entity, rows, rightEdge };
 }
 
 function propsListLayout(entity, items) {
@@ -187,6 +180,13 @@ function propsListLayout(entity, items) {
   const gap = .20 * master;
   const depth = .075 * master * scale;
   const topEdge = entity.position[1] - half - gap;
+  const width = 1.62 * master * scale;
+  const rowHeight = .25 * master * scale;
+  const rowGap = .055 * master * scale;
+  const padding = .10 * master * scale;
+  const rowsHeight = items.length * rowHeight + Math.max(0, items.length - 1) * rowGap;
+  const expandedHeight = rowsHeight + padding * 2;
+  const attachmentCenter = [entity.position[0], topEdge - expandedHeight / 2, entity.position[2]];
   const collapsed = propertyPanelCollapsed(entity.id);
 
   if (collapsed) {
@@ -205,16 +205,13 @@ function propsListLayout(entity, items) {
       width: buttonSize,
       height: buttonSize,
       toggleCenter: center,
+      attachmentCenter,
+      attachmentWidth: width,
+      attachmentHeight: expandedHeight,
     };
   }
 
-  const width = 1.62 * master * scale;
-  const rowHeight = .25 * master * scale;
-  const rowGap = .055 * master * scale;
-  const padding = .10 * master * scale;
-  const rowsHeight = items.length * rowHeight + Math.max(0, items.length - 1) * rowGap;
-  const height = rowsHeight + padding * 2;
-  const center = [entity.position[0], topEdge - height / 2, entity.position[2]];
+  const center = attachmentCenter;
   const top = topEdge - padding;
   const rows = items.map(({ ref, item }, index) => ({
     ref,
@@ -234,33 +231,38 @@ function propsListLayout(entity, items) {
     entity,
     collapsed,
     center,
-    frameScale: [width / 2, height / 2, depth],
+    frameScale: [width / 2, expandedHeight / 2, depth],
     rows,
     width,
-    height,
+    height: expandedHeight,
     toggleCenter,
     toggleSize,
+    attachmentCenter,
+    attachmentWidth: width,
+    attachmentHeight: expandedHeight,
   };
 }
 
-function refWorldAnchor(ref, layouts, index, side = 'center', linkType = null) {
-  const item = index.get(ref);
-  if (!item) return null;
-  if (item.kind === 'entity') return item.owner.position;
-  const event = layouts.events.get(ref);
-  if (event) {
-    const eventLayout = layouts.entities.get(item.owner.id)?.eventLayout;
-    if (linkType === 'event_input' && side === 'in') return eventLayout?.inAnchor ?? event.center;
-    if (linkType === 'event_output' && side === 'out') return eventLayout?.outAnchor ?? event.center;
-    return event.center;
-  }
-  const prop = layouts.properties.get(ref);
-  if (prop) {
-    if (side === 'in') return [prop.center[0] - prop.halfScale[0], prop.center[1], prop.center[2]];
-    if (side === 'out') return [prop.center[0] + prop.halfScale[0], prop.center[1], prop.center[2]];
-    return prop.center;
-  }
-  return item.owner.position;
+function eventIoLayout(entity, eventLayout, propsLayout) {
+  if (!eventLayout.rows.length) return null;
+  const master = nodeMasterSize();
+  const gap = .20 * master;
+  const half = nodeHalfSize();
+  const propsCenter = propsLayout?.attachmentCenter ?? [
+    entity.position[0],
+    entity.position[1] - nodeHalfSize() - gap - half,
+    entity.position[2],
+  ];
+  const propsWidth = propsLayout?.attachmentWidth ?? master;
+  const leftEdge = propsCenter[0] - propsWidth / 2;
+  const rightEdge = propsCenter[0] + propsWidth / 2;
+  const y = propsCenter[1];
+  const z = entity.position[2];
+  return {
+    inCenter: [leftEdge - gap - half, y, z],
+    outCenter: [rightEdge + gap + half, y, z],
+    halfScale: [half, half, half],
+  };
 }
 
 function clearCausalProjection() {
@@ -294,11 +296,42 @@ function buildSceneLayouts(index) {
     const eventLayout = eventListLayout(entity);
     const propsItems = groups.get(entity.id) ?? [];
     const propsLayout = propsListLayout(entity, propsItems);
-    entities.set(entity.id, { eventLayout, propsLayout });
+    const eventIo = eventIoLayout(entity, eventLayout, propsLayout);
+    entities.set(entity.id, { eventLayout, propsLayout, eventIo });
     for (const row of eventLayout.rows) events.set(row.ref, row);
     if (propsLayout) for (const row of propsLayout.rows) properties.set(row.ref, row);
   }
   return { entities, events, properties };
+}
+
+function ownerForRef(ref, index) {
+  const item = index.get(ref);
+  return item?.owner ?? null;
+}
+function aggregateCausalRoutes(graph, layouts, elapsed, stepMs) {
+  const grouped = new Map();
+  for (const edge of graph.edges) {
+    const sourceOwner = ownerForRef(edge.from, graph.index);
+    const targetOwner = ownerForRef(edge.to, graph.index);
+    if (!sourceOwner || !targetOwner) continue;
+    if (sourceOwner.id === targetOwner.id) continue;
+    const key = `${sourceOwner.id}\u0000${targetOwner.id}`;
+    if (!grouped.has(key)) grouped.set(key, { sourceOwner, targetOwner, edges: [] });
+    grouped.get(key).edges.push(edge);
+  }
+  return [...grouped.values()].map(route => {
+    const sourceLayout = layouts.entities.get(route.sourceOwner.id);
+    const targetLayout = layouts.entities.get(route.targetOwner.id);
+    const start = sourceLayout?.eventIo?.outCenter ?? route.sourceOwner.position;
+    const end = targetLayout?.eventIo?.inCenter ?? route.targetOwner.position;
+    const states = route.edges.map(edge => causalPlaybackState(edge, elapsed, stepMs));
+    return {
+      start,
+      end,
+      active: states.some(state => state.active),
+      reached: states.some(state => state.reached),
+    };
+  });
 }
 
 function drawSceneProjection3D() {
@@ -321,8 +354,6 @@ function drawSceneProjection3D() {
     const labelCenter = [entity.position[0], entity.position[1] + nodeHalfSize() + .28 * nodeMasterSize(), entity.position[2] + .012];
     drawSceneText3D(entity.name, labelCenter, 1.75 * nodeMasterSize(), .32 * nodeMasterSize(), selected.has(entity.id) ? [.62,.82,1] : [.94,.97,1]);
 
-    // Event rows are only Event instances. Shared Event I/O ports are rendered
-    // once per Entity below, regardless of the number of rows.
     for (const row of local.eventLayout.rows) {
       const depth = graphDepth.get(row.ref);
       const reached = depth !== undefined && elapsed >= depth * stepMs;
@@ -332,11 +363,6 @@ function drawSceneProjection3D() {
       drawBox(row.center, [row.halfScale[0]+.008,row.halfScale[1]+.008,row.halfScale[2]+.008], active ? [.98,.66,.28] : SCENE_COLORS.outline, true);
       drawSceneText3D(propertyDisplayName(row.property, entity), [row.center[0],row.center[1],row.center[2]+row.halfScale[2]+.012], row.width*.88, row.height*.68, [.98,.92,.82]);
       causalProjection.eventHitTargets.push({ ref: row.ref, center: row.center, halfWidth: row.halfScale[0], halfHeight: row.halfScale[1] });
-    }
-    if (local.eventLayout.rows.length) {
-      const portRadius = .055 * nodeMasterSize();
-      drawBox(local.eventLayout.inAnchor, [portRadius, portRadius, portRadius], SCENE_COLORS.causal, true);
-      drawBox(local.eventLayout.outAnchor, [portRadius, portRadius, portRadius], SCENE_COLORS.causal);
     }
 
     const props = local.propsLayout;
@@ -363,19 +389,20 @@ function drawSceneProjection3D() {
         causalProjection.propertyHitTargets.push({ kind: 'toggle', ownerId: entity.id, center: props.toggleCenter, halfWidth: toggleHalf, halfHeight: toggleHalf });
       }
     }
+
+    if (local.eventIo) {
+      const ioColor = graph ? SCENE_COLORS.eventIoActive : SCENE_COLORS.eventIo;
+      drawBox(local.eventIo.inCenter, local.eventIo.halfScale, ioColor, true);
+      drawBox(local.eventIo.outCenter, local.eventIo.halfScale, ioColor);
+      const textY = local.eventIo.inCenter[1] + local.eventIo.halfScale[1] + .24 * nodeMasterSize();
+      drawSceneText3D('Event in', [local.eventIo.inCenter[0], textY, local.eventIo.inCenter[2]+.012], 1.20*nodeMasterSize(), .28*nodeMasterSize(), [.96,.91,.84]);
+      drawSceneText3D('Event out', [local.eventIo.outCenter[0], textY, local.eventIo.outCenter[2]+.012], 1.20*nodeMasterSize(), .28*nodeMasterSize(), [.96,.91,.84]);
+    }
   }
 
-  // Canonical causal edges remain distinct, but all event_input edges terminate
-  // at the Entity's single shared Event IN port and all event_output edges begin
-  // at its single shared Event OUT port. Event count never multiplies I/O ports.
   if (graph && viewSettings().event_routes_visible) {
-    for (const edge of graph.edges) {
-      const from = refWorldAnchor(edge.from, layouts, graph.index, 'out', edge.linkType);
-      const to = refWorldAnchor(edge.to, layouts, graph.index, 'in', edge.linkType);
-      if (!from || !to) continue;
-      const state = causalPlaybackState(edge, elapsed, stepMs);
-      const color = state.active ? SCENE_COLORS.causalActive : SCENE_COLORS.causal;
-      drawLine(from, to, color);
+    for (const route of aggregateCausalRoutes(graph, layouts, elapsed, stepMs)) {
+      drawLine(route.start, route.end, route.active ? SCENE_COLORS.causalActive : SCENE_COLORS.causal);
     }
   }
 }
