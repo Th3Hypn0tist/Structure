@@ -30,28 +30,86 @@ function propertyPanelSettings() {
   ws.settings ??= {};
   ws.settings.view_defaults ??= {};
   const view = ws.settings.view_defaults;
-  view.property_panel_direction ??= -90;
-  view.property_panel_distance ??= 1.35;
+  view.property_panel_direction ??= 0;
+  view.property_panel_size ??= 1;
+  view.property_panel_mode ??= 'labels';
   return view;
 }
 
-function syncPropertyPanelDirectionControl() {
-  const input = document.querySelector('#propertyPanelDirection');
-  const output = document.querySelector('#propertyPanelDirectionValue');
-  if (!input || !output) return;
-  const value = Number(propertyPanelSettings().property_panel_direction ?? -90);
-  input.value = String(value);
-  output.textContent = `${Math.round(value)}°`;
+function ensurePropertyPanelControls() {
+  const controls = document.querySelector('#viewControls');
+  if (!controls) return;
+
+  const directionInput = document.querySelector('#propertyPanelDirection');
+  const directionLabel = directionInput?.closest('label')?.querySelector('span');
+  if (directionLabel) directionLabel.textContent = 'PROPS ANGLE';
+
+  if (!document.querySelector('#propertyPanelSize')) {
+    const sizeControl = document.createElement('label');
+    sizeControl.className = 'node-size-control property-size-control';
+    sizeControl.innerHTML = `
+      <span>PROPS SIZE</span>
+      <input id="propertyPanelSize" type="range" min="0.25" max="2.50" step="0.05" value="1">
+      <output id="propertyPanelSizeValue">1.00×</output>
+    `;
+    const directionControl = directionInput?.closest('label');
+    directionControl?.after(sizeControl);
+  }
+
+  if (!document.querySelector('#propertyPanelMode')) {
+    const modeControl = document.createElement('label');
+    modeControl.className = 'props-mode-control';
+    modeControl.innerHTML = `
+      <span>PROPS MODE</span>
+      <select id="propertyPanelMode">
+        <option value="labels">LABELS</option>
+        <option value="dots">DOTS</option>
+      </select>
+    `;
+    document.querySelector('#propertyPanelSize')?.closest('label')?.after(modeControl);
+  }
+
+  const direction = document.querySelector('#propertyPanelDirection');
+  if (direction && !direction.dataset.propertyPanelBound) {
+    direction.dataset.propertyPanelBound = '1';
+    direction.addEventListener('input', event => {
+      propertyPanelSettings().property_panel_direction = Number(event.target.value);
+      syncPropertyPanelControls();
+    });
+  }
+
+  const size = document.querySelector('#propertyPanelSize');
+  if (size && !size.dataset.propertyPanelBound) {
+    size.dataset.propertyPanelBound = '1';
+    size.addEventListener('input', event => {
+      propertyPanelSettings().property_panel_size = Number(event.target.value);
+      syncPropertyPanelControls();
+    });
+  }
+
+  const mode = document.querySelector('#propertyPanelMode');
+  if (mode && !mode.dataset.propertyPanelBound) {
+    mode.dataset.propertyPanelBound = '1';
+    mode.addEventListener('change', event => {
+      propertyPanelSettings().property_panel_mode = event.target.value === 'dots' ? 'dots' : 'labels';
+      syncPropertyPanelControls();
+    });
+  }
 }
 
-const propertyDirectionInput = document.querySelector('#propertyPanelDirection');
-if (propertyDirectionInput) {
-  propertyDirectionInput.addEventListener('input', event => {
-    const value = Number(event.target.value);
-    propertyPanelSettings().property_panel_direction = value;
-    const output = document.querySelector('#propertyPanelDirectionValue');
-    if (output) output.textContent = `${Math.round(value)}°`;
-  });
+function syncPropertyPanelControls() {
+  const settings = propertyPanelSettings();
+  const direction = document.querySelector('#propertyPanelDirection');
+  const directionOutput = document.querySelector('#propertyPanelDirectionValue');
+  const size = document.querySelector('#propertyPanelSize');
+  const sizeOutput = document.querySelector('#propertyPanelSizeValue');
+  const mode = document.querySelector('#propertyPanelMode');
+
+  if (direction) direction.value = String(Number(settings.property_panel_direction || 0));
+  if (directionOutput) directionOutput.textContent = `${Math.round(Number(settings.property_panel_direction || 0))}°`;
+  if (size) size.value = String(Number(settings.property_panel_size || 1));
+  if (sizeOutput) sizeOutput.textContent = `${Number(settings.property_panel_size || 1).toFixed(2)}×`;
+  if (mode) mode.value = settings.property_panel_mode === 'dots' ? 'dots' : 'labels';
 }
 
 function canonicalIndex() {
@@ -163,6 +221,10 @@ function ensurePropertyPanel(owner, items) {
     causalProjection.panelElements.set(owner.id, panel);
   }
 
+  const mode = propertyPanelSettings().property_panel_mode === 'dots' ? 'dots' : 'labels';
+  panel.classList.toggle('dots', mode === 'dots');
+  panel.classList.toggle('labels', mode === 'labels');
+
   const wanted = new Set(items.map(({ ref }) => ref));
   for (const row of [...panel.querySelectorAll('.property-row')]) {
     if (!wanted.has(row.dataset.ref)) row.remove();
@@ -191,6 +253,7 @@ function ensurePropertyPanel(owner, items) {
     }
     row.className = `property-row ${nodeClass(item)}`;
     row.innerHTML = `<span class="property-type">${nodeClass(item).toUpperCase()}</span><strong>${displayName(item)}</strong>`;
+    row.title = `${nodeClass(item).toUpperCase()}: ${displayName(item)}`;
   }
 
   return panel;
@@ -217,26 +280,79 @@ function triggerCausalProjection(eventRef) {
   status(`fired: ${displayName(eventItem)}`);
 }
 
-function eventButtonRect(ref) {
-  const button = document.querySelector(`.event-button[data-event-id="${CSS.escape(ref)}"]`);
-  if (!button || button.hidden) return null;
-  const rect = button.getBoundingClientRect();
-  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+function projectedPoint(world) {
+  const screen = project(world, viewProjection());
+  if (!screen) return null;
+  const density = devicePixelRatio || 1;
+  return { x: screen[0] / density, y: screen[1] / density, world };
 }
 
-function propertyPanelWorldPoint(owner) {
+function propertyPanelBasis() {
+  const angle = Number(propertyPanelSettings().property_panel_direction || 0) * Math.PI / 180;
+  return {
+    x: [Math.cos(angle), Math.sin(angle), 0],
+    down: [Math.sin(angle), -Math.cos(angle), 0],
+  };
+}
+
+function propertyPanelGeometry(owner) {
+  const half = nodeHalfSize();
   const settings = propertyPanelSettings();
-  const angle = Number(settings.property_panel_direction ?? -90) * Math.PI / 180;
-  const distance = Number(settings.property_panel_distance ?? 1.35) * nodeMasterSize();
-  return [
-    owner.position[0] + Math.cos(angle) * distance,
-    owner.position[1] + Math.sin(angle) * distance,
-    owner.position[2],
-  ];
+  return {
+    // Exact parent attachment: Property panel top-left == Entity bottom-left in world XY.
+    anchorWorld: [owner.position[0] - half, owner.position[1] - half, owner.position[2]],
+    worldPerCssPixel: nodeMasterSize() / 44 * Number(settings.property_panel_size || 1),
+    basis: propertyPanelBasis(),
+  };
 }
 
-function rectPoint(rect) {
-  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+function propertyPanelLocalWorld(geometry, localX, localY) {
+  return V.add(
+    geometry.anchorWorld,
+    V.add(
+      V.mul(geometry.basis.x, localX * geometry.worldPerCssPixel),
+      V.mul(geometry.basis.down, localY * geometry.worldPerCssPixel),
+    ),
+  );
+}
+
+function applyPropertyPanelTransform(panel, geometry) {
+  const density = devicePixelRatio || 1;
+  const origin = project(geometry.anchorWorld, viewProjection());
+  const xPoint = project(propertyPanelLocalWorld(geometry, 1, 0), viewProjection());
+  const yPoint = project(propertyPanelLocalWorld(geometry, 0, 1), viewProjection());
+  if (!origin || !xPoint || !yPoint || !panel.offsetWidth || !panel.offsetHeight) return false;
+
+  const ox = origin[0] / density;
+  const oy = origin[1] / density;
+  const a = xPoint[0] / density - ox;
+  const b = xPoint[1] / density - oy;
+  const c = yPoint[0] / density - ox;
+  const d = yPoint[1] / density - oy;
+  const determinant = a * d - b * c;
+  if (Math.abs(determinant) < 0.00001) return false;
+
+  panel.style.left = '0px';
+  panel.style.top = '0px';
+  panel.style.transformOrigin = '0 0';
+  panel.style.transform = `matrix(${a}, ${b}, ${c}, ${d}, ${ox}, ${oy})`;
+  return true;
+}
+
+function propertyRowAnchors(panel, row, geometry) {
+  const y = row.offsetTop + row.offsetHeight / 2;
+  const left = projectedPoint(propertyPanelLocalWorld(geometry, 0, y));
+  const right = projectedPoint(propertyPanelLocalWorld(geometry, panel.offsetWidth, y));
+  const center = projectedPoint(propertyPanelLocalWorld(geometry, panel.offsetWidth / 2, y));
+  if (!left || !right || !center) return null;
+  return { left, right, center };
+}
+
+function eventButtonAnchors(ref) {
+  const button = document.querySelector(`.event-button[data-event-id="${CSS.escape(ref)}"]`);
+  const geometry = entityEditor.eventGeometry.get(ref);
+  if (!button || button.hidden || !geometry) return null;
+  return worldPlaneProjectedAnchors(button, geometry.centerWorld, geometry.worldPerCssPixel);
 }
 
 function renderCausalProjection() {
@@ -259,14 +375,11 @@ function renderCausalProjection() {
     const owner = items[0]?.item?.owner;
     if (!owner) continue;
     visibleOwners.add(ownerId);
-    const world = propertyPanelWorldPoint(owner);
     const panel = ensurePropertyPanel(owner, items);
+    const geometry = propertyPanelGeometry(owner);
     panel.hidden = false;
 
-    // The entire panel is a true world-space child plane of the Entity.
-    // It shares the same fixed world XY orientation as Event controls instead of facing the camera.
-    const worldPerCssPixel = nodeMasterSize() / 44;
-    if (!applyWorldPlaneTransform(panel, world, worldPerCssPixel)) {
+    if (!applyPropertyPanelTransform(panel, geometry)) {
       panel.hidden = true;
       continue;
     }
@@ -276,7 +389,8 @@ function renderCausalProjection() {
       if (!row) continue;
       const depth = graphDepth.get(ref);
       row.classList.toggle('reached', depth !== undefined && elapsed >= depth * stepMs);
-      positions.set(ref, rectPoint(row.getBoundingClientRect()));
+      const anchors = propertyRowAnchors(panel, row, geometry);
+      if (anchors) positions.set(ref, anchors);
     }
   }
 
@@ -289,15 +403,15 @@ function renderCausalProjection() {
     return;
   }
 
-  const rootRect = eventButtonRect(graph.rootRef);
-  if (rootRect) positions.set(graph.rootRef, rootRect);
+  const rootAnchors = eventButtonAnchors(graph.rootRef);
+  if (rootAnchors) positions.set(graph.rootRef, rootAnchors);
 
   for (const node of graph.nodes) {
     if (node.ref === graph.rootRef) continue;
     const item = graph.index.get(node.ref);
     if (!item || item.propertyType !== 'event') continue;
-    const rect = eventButtonRect(node.ref);
-    if (rect) positions.set(node.ref, rect);
+    const anchors = eventButtonAnchors(node.ref);
+    if (anchors) positions.set(node.ref, anchors);
     const eventButton = document.querySelector(`.event-button[data-event-id="${CSS.escape(node.ref)}"]`);
     if (eventButton) eventButton.classList.toggle('causal-reached', elapsed >= node.depth * stepMs);
   }
@@ -307,10 +421,13 @@ function renderCausalProjection() {
     const from = positions.get(edge.from);
     const to = positions.get(edge.to);
     if (!from || !to) continue;
-    const x1 = from.right ?? from.x;
-    const y1 = from.y;
-    const x2 = to.left ?? to.x;
-    const y2 = to.y;
+    const start = from.right || from.center;
+    const end = to.left || to.center;
+    if (!start || !end) continue;
+    const x1 = start.x;
+    const y1 = start.y;
+    const x2 = end.x;
+    const y2 = end.y;
     const bend = Math.max(24, Math.abs(x2 - x1) * .35);
     const direction = x2 >= x1 ? 1 : -1;
     const path = document.createElementNS(svgNS, 'path');
@@ -339,7 +456,8 @@ async function loadStartingScene() {
   propertyPanelSettings();
   syncCatalog();
   syncSettings();
-  syncPropertyPanelDirectionControl();
+  ensurePropertyPanelControls();
+  syncPropertyPanelControls();
   selected.clear();
   activeEntityId = null;
   lookAtEntityId = null;
@@ -362,7 +480,8 @@ window.addEventListener('keydown', event => {
 });
 
 propertyPanelSettings();
-syncPropertyPanelDirectionControl();
+ensurePropertyPanelControls();
+syncPropertyPanelControls();
 requestAnimationFrame(renderCausalProjection);
 loadStartingScene().catch(error => {
   window.reportStructureError?.(error, { type: 'starting_scene_error' });
