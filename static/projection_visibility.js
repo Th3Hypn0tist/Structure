@@ -56,18 +56,8 @@ function resetEventProjection() {
   document.querySelectorAll('.event-button.pulse').forEach(button => button.classList.remove('pulse'));
   status('events reset');
 }
-function ensureResetEventsControl() {
-  const showAll = document.querySelector('#showAllProps');
-  if (!showAll) throw new Error('SHOW ALL PROPS control missing');
-  if (document.querySelector('#resetEvents')) return;
-  const button = document.createElement('button');
-  button.id = 'resetEvents';
-  button.type = 'button';
-  button.className = 'show-all-props-control reset-events-control';
-  button.textContent = 'RESET EVENTS';
-  button.title = 'Clear active Event route, Event highlights and reached Property state';
-  button.addEventListener('click', resetEventProjection);
-  showAll.after(button);
+function bindResetEventsControl() {
+  $('#resetEvents').addEventListener('click', resetEventProjection);
 }
 
 function genericLinkTypes() {
@@ -140,6 +130,4 @@ function syncEventRouteVisibility() {
   causalSvg.style.display = projectionVisibilitySettings().event_routes_visible ? '' : 'none';
 }
 
-window.addEventListener('load', () => {
-  ensureResetEventsControl();
-});
+window.addEventListener('load', bindResetEventsControl);
