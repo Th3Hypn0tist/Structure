@@ -262,6 +262,7 @@ function renderNodeOverlays() {
   const vp = viewProjection();
   const density = devicePixelRatio || 1;
   const size = nodeMasterSize();
+  const half = nodeHalfSize();
 
   for (const entity of ws.entities) {
     ensureAuthoringFields(entity);
@@ -284,7 +285,8 @@ function renderNodeOverlays() {
       }
     }
 
-    // Event controls are true child planes of the Entity in world space, not camera-facing overlays.
+    // Event controls are true Entity-child world planes. Each Event's RIGHT EDGE is
+    // attached directly to the Entity's LEFT EDGE. No camera-facing attachment math.
     const events = (entity.properties || []).filter(property => property.property_type_ref === 'event');
     const eventSpacing = .34 * size;
     const eventStart = -(events.length - 1) * eventSpacing / 2;
@@ -297,19 +299,30 @@ function renderNodeOverlays() {
         entityEditor.eventGeometry.delete(property.id);
         return;
       }
-      const world = [
-        entity.position[0] - .72 * size,
+
+      button.textContent = propertyDisplayName(property, entity);
+      button.hidden = false;
+
+      const anchorWorld = [
+        entity.position[0] - half,
         entity.position[1] + eventStart + index * eventSpacing,
         entity.position[2],
       ];
-      button.textContent = propertyDisplayName(property, entity);
-      button.hidden = false;
-      if (!applyWorldPlaneTransform(button, world, worldPerCssPixel)) {
+      const widthWorld = button.offsetWidth * worldPerCssPixel;
+      const centerWorld = [anchorWorld[0] - widthWorld / 2, anchorWorld[1], anchorWorld[2]];
+
+      if (!applyWorldPlaneTransform(button, centerWorld, worldPerCssPixel)) {
         button.hidden = true;
         entityEditor.eventGeometry.delete(property.id);
         return;
       }
-      entityEditor.eventGeometry.set(property.id, { centerWorld: world, worldPerCssPixel });
+
+      entityEditor.eventGeometry.set(property.id, {
+        centerWorld,
+        worldPerCssPixel,
+        parentAnchorWorld: anchorWorld,
+        parentAnchor: 'right-edge-to-entity-left-edge',
+      });
     });
   }
   requestAnimationFrame(renderNodeOverlays);
