@@ -37,3 +37,5 @@ h3{margin:0 0 8px;font-size:13px;color:#aebed2}hr{border:0;border-top:1px solid 
 .property-row.effect{background:#2a1718;border-color:#6f3430}.property-row.effect .property-type{color:#e47c6d}.property-row.effect strong{color:#ffe0da}.property-panel.collapsed .property-row.effect{background:#d96557;border-color:#ff9a8d}
 .property-row.function{background:#211a2a;border-color:#4e3e62}.property-row.function .property-type{color:#ae8bd4}.property-row.function strong{color:#eee2ff}
 .property-row.reached{box-shadow:inset 0 0 0 1px #ff806e,0 0 7px #ff654733}.property-row.reached .property-type,.property-row.reached strong{color:#ffae9f}
+.property-panel.collapsed .property-row.reached{border-color:#ffd0ca;box-shadow:0 0 0 1px #ff7869,0 0 9px #ff5b45cc;animation:propertyDotEventPulse .42s ease-out}
+@keyframes propertyDotEventPulse{0%{transform:scale(1);filter:brightness(1)}45%{transform:scale(1.65);filter:brightness(1.9)}100%{transform:scale(1);filter:brightness(1.2)}}
