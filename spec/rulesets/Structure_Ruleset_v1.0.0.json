@@ -1,0 +1,205 @@
+{
+  "name": "Structure Ruleset",
+  "type": "dependency_rules",
+  "version": "1.0.0",
+  "status": "unlocked",
+  "inheritance": {
+    "model": "DependencyRules",
+    "base_semantics": "inherited_unchanged",
+    "rule": "Ruleset composition, dependency closure, conflict, exclusion, cycle, resolution and validation semantics are inherited from DependencyRules."
+  },
+  "target": {
+    "format_ref": "Canonical Contract Format",
+    "format_version": "2.0.0"
+  },
+  "purpose": "Define Structure-domain recognition, progressive formalization, Event/Effect causality, dependency precision, evaluation results and projection boundaries over CCF 2.0 without changing CCF.",
+  "evaluation_model": {
+    "candidate_evidence_first": true,
+    "statuses": ["satisfied", "incomplete", "violated", "not_applicable"],
+    "rules": [
+      "UNRESOLVED != INVALID.",
+      "Missing required information normally produces incomplete, not violated.",
+      "violated requires explicit canonical evidence that conflicts with a hard Ruleset requirement.",
+      "not_applicable means insufficient candidate evidence exists to apply the Ruleset.",
+      "Evaluation results are derived and MUST NOT rewrite canonical truth."
+    ],
+    "result_shape": {
+      "ruleset_ref": "RULESET_EXAMPLE",
+      "subject_ref": "CANONICAL_REF",
+      "result": "incomplete",
+      "satisfied": ["recognized_candidate"],
+      "missing": ["required_contract_part"],
+      "violations": []
+    }
+  },
+  "rulesets": [
+    {
+      "id": "RULESET_MINDMAP",
+      "status": "unlocked",
+      "role": "Minimum permissive Structure interpretation of CCF.",
+      "candidate_evidence": ["Entity with human-usable name"],
+      "requirements": [
+        "Stable Entity identity when persisted.",
+        "Relationships may remain generic while meaning is unresolved."
+      ],
+      "projection": ["mindmap"]
+    },
+    {
+      "id": "RULESET_CW",
+      "status": "unlocked",
+      "role": "CanonicalWireframe formalization goal over the same CCF abstraction.",
+      "extends_ruleset_refs": ["RULESET_MINDMAP"],
+      "requirements": [
+        "Machine-significant Properties use explicit Property Types and applicable external Rulesets.",
+        "Directed semantic connections are explicit Link Properties.",
+        "Unknown required semantics remain explicit gaps.",
+        "Causal semantics preserve explicit Event -> Effect -> target paths when those intermediate semantics are meaningful.",
+        "Canonical references resolve deterministically without semantic guessing."
+      ]
+    }
+  ],
+  "property_rulesets": [
+    {
+      "id": "STRUCTURE_RULESET_SEMANTICS",
+      "applies_to_property_type_ref": "structure_semantics",
+      "status": "unlocked",
+      "value_shape": {"required_fields": []},
+      "constraints": ["Carries Structure-domain semantic contract facts without introducing new CCF primitives."]
+    },
+    {
+      "id": "STRUCTURE_RULESET_DATA",
+      "applies_to_property_type_ref": "data",
+      "status": "unlocked",
+      "value_shape": {"required_fields": ["data_type_ref", "properties"]},
+      "constraints": ["Data semantics are canonical and independent of rendering."]
+    },
+    {
+      "id": "STRUCTURE_RULESET_FUNCTION",
+      "applies_to_property_type_ref": "function",
+      "status": "unlocked",
+      "value_shape": {"required_fields": ["function_type_ref", "properties"]},
+      "constraints": [
+        "Function inputs and outputs use canonical references when modeled.",
+        "Function semantics do not arise from UI controls."
+      ]
+    }
+  ],
+  "link_refinements": [
+    {
+      "ruleset_ref": "RULESET_LINK_DEPENDENCY",
+      "constraints": [
+        "parent_ref is the dependency target and child_ref is the dependent.",
+        "The dependency target SHOULD be the narrowest known canonical identity.",
+        "Entity targets are used only when the dependency genuinely concerns the whole Entity.",
+        "A dependency MAY target a Property, including data, function, Event or another addressable Property.",
+        "No duplicate target_ref or dependency_type field is required when endpoint identity and canonical facts are sufficient."
+      ]
+    },
+    {
+      "ruleset_ref": "RULESET_LINK_EVENT_READ",
+      "allowed_source": ["Property:data", "Property:state"],
+      "allowed_target": ["Property:event"],
+      "canonical_direction": "DATA_OR_STATE_PROPERTY -> EVENT_PROPERTY"
+    },
+    {
+      "ruleset_ref": "RULESET_LINK_EVENT_INPUT",
+      "allowed_source": ["Entity", "Property"],
+      "allowed_target": ["Property:event"],
+      "canonical_direction": "Entity|Property -> EVENT_PROPERTY"
+    },
+    {
+      "ruleset_ref": "RULESET_LINK_EVENT_OUTPUT",
+      "allowed_source": ["Property:event"],
+      "allowed_target": ["Entity", "Property"],
+      "canonical_direction": "EVENT_PROPERTY -> Entity|Property"
+    },
+    {
+      "ruleset_ref": "RULESET_LINK_EVENT_EFFECT",
+      "allowed_source": ["Property:event"],
+      "allowed_target": ["Property:effect"],
+      "canonical_direction": "EVENT_PROPERTY -> EFFECT_PROPERTY"
+    },
+    {
+      "ruleset_ref": "RULESET_LINK_EVENT_CAUSE",
+      "allowed_source": ["Entity", "Property"],
+      "allowed_target": ["Property:event"],
+      "canonical_direction": "Entity|Property -> EVENT_PROPERTY"
+    },
+    {
+      "ruleset_ref": "RULESET_LINK_EVENT_CONDITION",
+      "allowed_source": ["Entity", "Property"],
+      "allowed_target": ["Property:event"],
+      "canonical_direction": "Entity|Property -> EVENT_PROPERTY"
+    },
+    {
+      "ruleset_ref": "RULESET_LINK_EFFECT_TARGET",
+      "allowed_source": ["Property:effect"],
+      "allowed_target": ["Entity", "Property"],
+      "canonical_direction": "EFFECT_PROPERTY -> Entity|Property",
+      "constraints": ["Property targeting is preferred when the affected canonical subject is known more precisely."]
+    }
+  ],
+  "causal_contract": {
+    "canonical_path": [
+      "DATA_OR_STATE_PROPERTY",
+      "EVENT_CONDITION | EVENT_INPUT | EVENT_READ | EVENT_CAUSE",
+      "EVENT_PROPERTY",
+      "EVENT_EFFECT",
+      "EFFECT_PROPERTY",
+      "EFFECT_TARGET",
+      "DATA_OR_STATE_PROPERTY | ENTITY",
+      "possible downstream EVENT"
+    ],
+    "rules": [
+      "No reverse causal link is implied.",
+      "Event A -> Event B MUST NOT replace Event -> Effect -> target -> downstream Event when the intermediate path carries canonical meaning.",
+      "Event ownership or visual placement MUST NOT be inferred from link direction.",
+      "Visual Event controls are representations only."
+    ]
+  },
+  "progressive_formalization": {
+    "creation_minimum": {"entity_name": true},
+    "rule": "Nothing is blocked merely because a semantic contract is incomplete; incompleteness is exposed as derived evaluation data and actionable gaps.",
+    "workflow": [
+      "loose mindmap",
+      "stable identities",
+      "properties",
+      "typed relationships",
+      "dependencies / ownership / authority",
+      "events / effects / causality",
+      "gaps and validation",
+      "CanonicalWireframe",
+      "implementation / documentation / tests / projections"
+    ]
+  },
+  "projection_boundary": {
+    "rule": "Projection is representation, never canonical truth.",
+    "mapping": {
+      "Entity": "NodeInstance",
+      "Link Property": "LineInstance or aggregated LineInstance",
+      "Event Property": "EventButtonInstance",
+      "Causal contracts": "transient EventEffectLinkInstances"
+    },
+    "aggregation_rule": "Multiple canonical links of the same link type between the same projected subjects MAY be visually aggregated without deleting or merging canonical Link identities.",
+    "event_exception": "Event causal links are shown through causal route projection rather than generic structural-link rendering."
+  },
+  "abstraction_model": {
+    "term": "Abstraction",
+    "role": "Persistable and composable boundary containing CCF Entities.",
+    "imports": "Abstractions MAY import other Abstractions by reference. Import is composition, not copy; the imported Abstraction remains authoritative for its own canonical content.",
+    "ruleset_boundary": "Ruleset definitions remain external to Abstraction CCF."
+  },
+  "validation": {
+    "required_checks": [
+      "evaluation status is one of satisfied/incomplete/violated/not_applicable",
+      "ruleset evaluation does not mutate canonical truth",
+      "dependency target uses canonical Link endpoint semantics",
+      "Event causal links satisfy endpoint-kind constraints",
+      "Effect target is explicit",
+      "projection state does not become canonical semantics",
+      "unresolved semantics are not silently classified as invalid",
+      "no semantic guessing"
+    ]
+  },
+  "source_refinement": "STRUCTURE_RULESET_EVENT_SEMANTIC_REFINEMENTS v1.0.0"
+}
