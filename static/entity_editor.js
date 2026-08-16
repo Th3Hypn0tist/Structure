@@ -1,4 +1,5 @@
-// Entity authoring overlays. Labels are fixed-size billboards; Event controls are node-relative.
+// Entity authoring overlays. Only Entity labels are fixed-size camera billboards.
+// Event/Data/Effect projection instances are owner-relative world-space UI.
 
 const entityEditor = {
   entityId: null,
@@ -21,6 +22,42 @@ function ensureAuthoringFields(entity) {
   entity.contract.machine.generated_from_human_revision ??= null;
   if (!Object.hasOwn(entity.contract.machine, 'data')) entity.contract.machine.data = null;
   return entity;
+}
+
+function humanizeCanonicalName(value) {
+  return String(value || '')
+    .split('_')
+    .filter(Boolean)
+    .map(part => {
+      const upper = part.toUpperCase();
+      if (['ID', 'DB', 'API', 'HTTP', 'REST', 'OSC', 'URL', 'URI', 'SQL'].includes(upper)) return upper;
+      return part.charAt(0).toUpperCase() + part.slice(1).toLowerCase();
+    })
+    .join(' ');
+}
+
+// One presentation-name resolver for Property instances. It does not create semantic authority.
+function propertyDisplayName(property, owner = null) {
+  const explicit = property?.name || property?.value?.properties?.name;
+  if (typeof explicit === 'string' && explicit.trim()) return explicit.trim();
+
+  let ref = String(property?.id || '');
+  const ownerPrefix = owner?.id ? `${owner.id}_` : '';
+  if (ownerPrefix && ref.startsWith(ownerPrefix)) ref = ref.slice(ownerPrefix.length);
+
+  for (const prefix of ['EVENT_', 'EFFECT_', 'DATA_', 'FUNCTION_']) {
+    if (ref.startsWith(prefix)) {
+      ref = ref.slice(prefix.length);
+      break;
+    }
+  }
+
+  if (/^\d+$/.test(ref)) {
+    const semanticRef = property?.value?.event_type_ref || property?.value?.effect_type_ref || property?.value?.function_type_ref;
+    if (semanticRef) ref = semanticRef;
+  }
+
+  return humanizeCanonicalName(ref || property?.id || property?.property_type_ref || 'Property');
 }
 
 function selectedEntityForEditor() {
@@ -119,7 +156,7 @@ function ensureEventButton(entity, property) {
       const currentEntity = ws.entities.find(item => item.id === button.dataset.entityId);
       const currentEvent = currentEntity?.properties?.find(item => item.id === button.dataset.eventId);
       if (!currentEntity || !currentEvent) return;
-      status(`Event ${currentEvent.value?.event_type_ref || currentEvent.id} @ ${currentEntity.name || currentEntity.id}`);
+      status(`Event ${propertyDisplayName(currentEvent, currentEntity)} @ ${currentEntity.name || currentEntity.id}`);
       button.classList.remove('pulse');
       void button.offsetWidth;
       button.classList.add('pulse');
@@ -156,6 +193,8 @@ function renderNodeOverlays() {
 
   for (const entity of ws.entities) {
     ensureAuthoringFields(entity);
+
+    // Entity label is the only fixed-size camera-facing label.
     const label = ensureNodeLabel(entity);
     if (!visible.has(entity.id)) {
       label.hidden = true;
@@ -173,6 +212,7 @@ function renderNodeOverlays() {
       }
     }
 
+    // Event controls are owner-relative world-space instances. They move and scale with the Entity.
     const events = (entity.properties || []).filter(property => property.property_type_ref === 'event');
     const eventSpacing = .34 * size;
     const eventStart = -(events.length - 1) * eventSpacing / 2;
@@ -196,7 +236,7 @@ function renderNodeOverlays() {
         return;
       }
       button.hidden = false;
-      button.textContent = property.value?.event_type_ref || property.id;
+      button.textContent = propertyDisplayName(property, entity);
       button.style.left = `${screen[0] / density}px`;
       button.style.top = `${screen[1] / density}px`;
       button.style.setProperty('--event-world-scale', String(eventScale));
