@@ -8,7 +8,7 @@
 </head>
 <body>
   <canvas id="scene"></canvas>
-  <div id="nodeLabels" aria-hidden="true"></div>
+  <div id="nodeLabels" aria-hidden="true" hidden></div>
   <div id="gizmoLabels" aria-hidden="true">
     <span id="gizmoX" class="gizmo-label x">X</span>
     <span id="gizmoY" class="gizmo-label y">Y</span>
@@ -17,222 +17,50 @@
 
   <header id="toolbar">
     <div class="structure-brand" aria-label="AIGM - Structure">
-      <a class="structure-brand-link" href="https://aigm.fi" aria-label="AIGM">
-        <img class="structure-brand-logo" src="/images/AIGM-LOGO-tight.png" alt="AIGM">
-      </a>
-      <span class="structure-brand-separator" aria-hidden="true">-</span>
-      <strong>Structure</strong>
+      <a class="structure-brand-link" href="https://aigm.fi" aria-label="AIGM"><img class="structure-brand-logo" src="/images/AIGM-LOGO-tight.png" alt="AIGM"></a>
+      <span class="structure-brand-separator" aria-hidden="true">-</span><strong>Structure</strong>
     </div>
-    <button id="addEntity">+ Entity</button>
-    <button id="deleteEntity">Delete</button>
-    <span class="divider"></span>
-    <div class="tool-group" aria-label="Add Property">
-      <span class="group-title">Add Property</span>
-      <button id="addLink">+ Link</button>
-      <button id="addEvent">+ Event</button>
-    </div>
-    <span class="divider"></span>
-    <label class="compact">Ruleset <select id="rulesetView"></select></label>
-    <span class="divider"></span>
-    <button id="newWorkspace">New</button>
-    <button id="save">Save</button>
-    <button id="load">Load</button>
-    <button id="publishAbstraction">Publish Abstraction</button>
-    <button id="mountAbstraction">Mount Abstraction</button>
-    <button id="settingsButton">Settings</button>
-    <span id="status">booting</span>
+    <button id="addEntity">+ Entity</button><button id="deleteEntity">Delete</button><span class="divider"></span>
+    <div class="tool-group" aria-label="Add Property"><span class="group-title">Add Property</span><button id="addLink">+ Link</button><button id="addEvent">+ Event</button></div>
+    <span class="divider"></span><label class="compact">Ruleset <select id="rulesetView"></select></label><span class="divider"></span>
+    <button id="newWorkspace">New</button><button id="save">Save</button><button id="load">Load</button><button id="publishAbstraction">Publish Abstraction</button><button id="mountAbstraction">Mount Abstraction</button><button id="settingsButton">Settings</button><span id="status">booting</span>
   </header>
 
   <aside id="rightControls" aria-label="View controls">
-    <div class="right-control-fixed">
-      <label class="view-toggle active"><input id="gridToggle" type="checkbox" checked><span>GRID</span></label>
-      <label class="view-toggle active"><input id="snapToggle" type="checkbox" checked><span>SNAP</span></label>
-    </div>
-
-    <details class="right-control-group" open>
-      <summary>VIEW</summary>
-      <div id="viewControls" class="right-control-body">
-        <label class="node-size-control">
-          <span>NODE SIZE</span>
-          <input id="nodeMasterSize" type="range" min="0.35" max="2.50" step="0.05" value="1">
-          <output id="nodeMasterSizeValue">1.00×</output>
-        </label>
-        <label class="node-size-control property-direction-control">
-          <span>PROPS ANGLE</span>
-          <input id="propertyPanelDirection" type="range" min="-180" max="180" step="5" value="0">
-          <output id="propertyPanelDirectionValue">0°</output>
-        </label>
-        <label class="node-size-control property-size-control">
-          <span>PROPS SIZE</span>
-          <input id="propertyPanelSize" type="range" min="0.25" max="2.50" step="0.05" value="1">
-          <output id="propertyPanelSizeValue">1.00×</output>
-        </label>
-        <button id="showAllProps" class="show-all-props-control" type="button">SHOW ALL PROPS</button>
-      </div>
-    </details>
-
-    <details class="right-control-group" open>
-      <summary>VISIBILITY</summary>
-      <div id="projectionControls" class="right-control-body" aria-label="Projection visibility"></div>
-    </details>
-
+    <div class="right-control-fixed"><label class="view-toggle active"><input id="gridToggle" type="checkbox" checked><span>GRID</span></label><label class="view-toggle active"><input id="snapToggle" type="checkbox" checked><span>SNAP</span></label></div>
+    <details class="right-control-group" open><summary>VIEW</summary><div id="viewControls" class="right-control-body">
+      <label class="node-size-control"><span>NODE SIZE</span><input id="nodeMasterSize" type="range" min="0.35" max="2.50" step="0.05" value="1"><output id="nodeMasterSizeValue">1.00×</output></label>
+      <label class="node-size-control property-size-control"><span>PROPS SIZE</span><input id="propertyPanelSize" type="range" min="0.25" max="2.50" step="0.05" value="1"><output id="propertyPanelSizeValue">1.00×</output></label>
+      <button id="showAllProps" class="show-all-props-control" type="button">SHOW ALL PROPS</button>
+    </div></details>
+    <details class="right-control-group" open><summary>VISIBILITY</summary><div id="projectionControls" class="right-control-body" aria-label="Projection visibility"></div></details>
     <button id="resetEvents" class="show-all-props-control reset-events-control" type="button">RESET EVENTS</button>
   </aside>
 
-  <aside id="entityEditor">
-    <h3>Entity</h3>
-    <div id="entityEditorEmpty">Select one Entity to edit</div>
-    <div id="entityEditorFields" hidden>
-      <section class="entity-info-section" data-info-section="identity">
-        <button class="entity-info-heading" type="button" data-info-section-toggle="identity" aria-expanded="true">Identity</button>
-        <div class="entity-info-body">
-          <div class="entity-id-row">ID <code id="entityId"></code></div>
-          <label>Name <input id="entityName" type="text"></label>
-          <label>Type <input id="entityType" type="text" placeholder="unresolved"></label>
-        </div>
-      </section>
+  <aside id="entityEditor"><h3>Entity</h3><div id="entityEditorEmpty">Select one Entity to edit</div><div id="entityEditorFields" hidden>
+    <section class="entity-info-section" data-info-section="identity"><button class="entity-info-heading" type="button" data-info-section-toggle="identity" aria-expanded="true">Identity</button><div class="entity-info-body"><div class="entity-id-row">ID <code id="entityId"></code></div><label>Name <input id="entityName" type="text"></label><label>Type <input id="entityType" type="text" placeholder="unresolved"></label></div></section>
+    <section class="entity-info-section" data-info-section="description"><button class="entity-info-heading" type="button" data-info-section-toggle="description" aria-expanded="true">Description</button><div class="entity-info-body"><label><textarea id="entityDescription" rows="5"></textarea></label></div></section>
+    <section class="entity-info-section" data-info-section="contract"><button class="entity-info-heading" type="button" data-info-section-toggle="contract" aria-expanded="true">Human-readable contract</button><div class="entity-info-body"><label class="contract-field"><textarea id="entityHumanContract" rows="14" placeholder="Write the contract once in human language. Machine-readable form is derived downstream from this source."></textarea></label></div></section>
+    <section class="entity-info-section" data-info-section="machine"><button class="entity-info-heading" type="button" data-info-section-toggle="machine" aria-expanded="true">Machine-readable</button><div class="entity-info-body"><div class="machine-status"><span id="machineContractStatus">not generated</span><small>Derived only. Direction: human-readable → machine-readable.</small></div></div></section>
+    <section class="entity-info-section" data-info-section="relations"><button class="entity-info-heading" type="button" data-info-section-toggle="relations" aria-expanded="true">Selection / Relations</button><div class="entity-info-body"><div id="selection">No selection</div></div></section>
+  </div></aside>
 
-      <section class="entity-info-section" data-info-section="description">
-        <button class="entity-info-heading" type="button" data-info-section-toggle="description" aria-expanded="true">Description</button>
-        <div class="entity-info-body"><label><textarea id="entityDescription" rows="5"></textarea></label></div>
-      </section>
+  <aside id="settings" hidden><h3>Camera Defaults</h3><label>FOV <input id="fov" type="range" min="15" max="170" value="60"><output id="fovValue">60°</output></label><label>Move speed <input id="moveSpeed" type="number" min="0.1" step="0.1" value="6"></label><label>Mouse sensitivity <input id="mouseSensitivity" type="number" min="0.0001" step="0.0001" value="0.0025"></label><label>Wheel zoom speed <input id="wheelZoomSpeed" type="number" min="0.01" step="0.01" value="0.15"></label><label>Drag reference speed <input id="dragPanSpeed" type="number" min="0.001" step="0.001" value="0.01"></label><button id="setCameraDefault">Set current camera as default</button><button id="resetCamera">Reset to default camera</button><hr><h3>Links</h3><label>Type spacing <input id="anchorSpacing" type="number" min="0.05" step="0.01" value="0.28"></label><label>Row offset <input id="anchorOffset" type="number" min="0.1" step="0.01" value="0.58"></label><label>Flow speed <input id="baseLinkSpeed" type="number" step="0.05" value="0.15"></label><hr><h3>Event Playback</h3><label>Active link speed <input id="activeLinkSpeed" type="number" step="0.1" value="2"></label><label>Effect travel (s) <input id="effectTravel" type="number" step="0.1" value="1.2"></label></aside>
 
-      <section class="entity-info-section" data-info-section="contract">
-        <button class="entity-info-heading" type="button" data-info-section-toggle="contract" aria-expanded="true">Human-readable contract</button>
-        <div class="entity-info-body"><label class="contract-field"><textarea id="entityHumanContract" rows="14" placeholder="Write the contract once in human language. Machine-readable form is derived downstream from this source."></textarea></label></div>
-      </section>
-
-      <section class="entity-info-section" data-info-section="machine">
-        <button class="entity-info-heading" type="button" data-info-section-toggle="machine" aria-expanded="true">Machine-readable</button>
-        <div class="entity-info-body"><div class="machine-status"><span id="machineContractStatus">not generated</span><small>Derived only. Direction: human-readable → machine-readable.</small></div></div>
-      </section>
-
-      <section class="entity-info-section" data-info-section="relations">
-        <button class="entity-info-heading" type="button" data-info-section-toggle="relations" aria-expanded="true">Selection / Relations</button>
-        <div class="entity-info-body"><div id="selection">No selection</div></div>
-      </section>
-    </div>
-  </aside>
-
-  <aside id="settings" hidden>
-    <h3>Camera Defaults</h3>
-    <label>FOV <input id="fov" type="range" min="15" max="170" value="60"><output id="fovValue">60°</output></label>
-    <label>Move speed <input id="moveSpeed" type="number" min="0.1" step="0.1" value="6"></label>
-    <label>Mouse sensitivity <input id="mouseSensitivity" type="number" min="0.0001" step="0.0001" value="0.0025"></label>
-    <label>Wheel zoom speed <input id="wheelZoomSpeed" type="number" min="0.01" step="0.01" value="0.15"></label>
-    <label>Drag reference speed <input id="dragPanSpeed" type="number" min="0.001" step="0.001" value="0.01"></label>
-    <button id="setCameraDefault">Set current camera as default</button>
-    <button id="resetCamera">Reset to default camera</button>
-    <hr>
-    <h3>Links</h3>
-    <label>Type spacing <input id="anchorSpacing" type="number" min="0.05" step="0.01" value="0.28"></label>
-    <label>Row offset <input id="anchorOffset" type="number" min="0.1" step="0.01" value="0.58"></label>
-    <label>Flow speed <input id="baseLinkSpeed" type="number" step="0.05" value="0.15"></label>
-    <hr>
-    <h3>Event Playback</h3>
-    <label>Active link speed <input id="activeLinkSpeed" type="number" step="0.1" value="2"></label>
-    <label>Effect travel (s) <input id="effectTravel" type="number" step="0.1" value="1.2"></label>
-  </aside>
-
-  <div id="entityCreatePopup" class="popup" hidden>
-    <div class="popup-card">
-      <h3>Create Entity</h3>
-      <label>Name <input id="newEntityName" type="text" autocomplete="off"></label>
-      <div class="popup-buttons"><button id="createEntity">Create</button><button id="cancelEntityCreate">Cancel</button></div>
-    </div>
-  </div>
-
-  <div id="linkTypePopup" class="popup" hidden>
-    <div class="popup-card">
-      <h3>Link Type</h3>
-      <div id="linkEndpoints" class="muted"></div>
-      <div id="linkTypeButtons" class="popup-buttons"></div>
-      <button id="cancelLink">Cancel</button>
-    </div>
-  </div>
-
-  <div id="eventPopup" class="popup" hidden>
-    <div class="popup-card">
-      <h3>Add Event Property</h3>
-      <label>Event type <input id="eventType" type="text" value="event"></label>
-      <div class="popup-buttons"><button id="createEvent">Create Event</button><button id="cancelEvent">Cancel</button></div>
-    </div>
-  </div>
-
-  <div id="publishAbstractionPopup" class="popup" hidden>
-    <div class="popup-card">
-      <h3>Publish Abstraction</h3>
-      <label>ID <input id="abstractionId" type="text" placeholder="MY_ABSTRACTION"></label>
-      <label>Name <input id="abstractionName" type="text"></label>
-      <small class="muted">Publishes canonical semantic source only. Camera and view state are not part of the Abstraction.</small>
-      <div class="popup-buttons"><button id="confirmPublishAbstraction">Publish</button><button id="cancelPublishAbstraction">Cancel</button></div>
-    </div>
-  </div>
-
-  <div id="mountAbstractionPopup" class="popup" hidden>
-    <div class="popup-card">
-      <h3>Mount Abstraction</h3>
-      <div id="mountAbstractionList" class="abstraction-list"></div>
-      <small class="muted">Mount creates a reference Entity. Published source is not copied.</small>
-      <div class="popup-buttons"><button id="cancelMountAbstraction">Cancel</button></div>
-    </div>
-  </div>
+  <div id="entityCreatePopup" class="popup" hidden><div class="popup-card"><h3>Create Entity</h3><label>Name <input id="newEntityName" type="text" autocomplete="off"></label><div class="popup-buttons"><button id="createEntity">Create</button><button id="cancelEntityCreate">Cancel</button></div></div></div>
+  <div id="linkTypePopup" class="popup" hidden><div class="popup-card"><h3>Link Type</h3><div id="linkEndpoints" class="muted"></div><div id="linkTypeButtons" class="popup-buttons"></div><button id="cancelLink">Cancel</button></div></div>
+  <div id="eventPopup" class="popup" hidden><div class="popup-card"><h3>Add Event Property</h3><label>Event type <input id="eventType" type="text" value="event"></label><div class="popup-buttons"><button id="createEvent">Create Event</button><button id="cancelEvent">Cancel</button></div></div></div>
+  <div id="publishAbstractionPopup" class="popup" hidden><div class="popup-card"><h3>Publish Abstraction</h3><label>ID <input id="abstractionId" type="text" placeholder="MY_ABSTRACTION"></label><label>Name <input id="abstractionName" type="text"></label><small class="muted">Publishes canonical semantic source only. Camera and view state are not part of the Abstraction.</small><div class="popup-buttons"><button id="confirmPublishAbstraction">Publish</button><button id="cancelPublishAbstraction">Cancel</button></div></div></div>
+  <div id="mountAbstractionPopup" class="popup" hidden><div class="popup-card"><h3>Mount Abstraction</h3><div id="mountAbstractionList" class="abstraction-list"></div><small class="muted">Mount creates a reference Entity. Published source is not copied.</small><div class="popup-buttons"><button id="cancelMountAbstraction">Cancel</button></div></div></div>
 
   <button id="errorReportButton" class="error-report-button" type="button" title="Copy captured errors to clipboard" aria-live="polite">ERRORS 0</button>
   <div id="help">Double-click Entity: bind lookAt · LMB empty: move reference · RMB: orbit · wheel: zoom · Event: fire causal chain</div>
 
-  <script>
-    (() => {
-      const toolbar = document.querySelector('#toolbar');
-      if (!toolbar) throw new Error('toolbar missing');
-      const syncToolbarClearance = () => {
-        document.documentElement.style.setProperty('--toolbar-clearance', `${Math.ceil(toolbar.getBoundingClientRect().bottom + 8)}px`);
-      };
-      const observer = new ResizeObserver(syncToolbarClearance);
-      observer.observe(toolbar);
-      window.addEventListener('resize', syncToolbarClearance);
-      syncToolbarClearance();
-    })();
-  </script>
+  <script>(()=>{const toolbar=document.querySelector('#toolbar');if(!toolbar)throw new Error('toolbar missing');const sync=()=>document.documentElement.style.setProperty('--toolbar-clearance',`${Math.ceil(toolbar.getBoundingClientRect().bottom+8)}px`);new ResizeObserver(sync).observe(toolbar);window.addEventListener('resize',sync);sync();})();</script>
+  <script>(()=>{const errors=[];const button=document.querySelector('#errorReportButton');if(!button)throw new Error('errorReportButton missing');function normalizeError(value){if(value instanceof Error)return{message:value.message,stack:value.stack};if(typeof value==='string')return{message:value,stack:''};return{message:JSON.stringify(value),stack:''};}function refreshButton(){button.textContent=`ERRORS ${errors.length}`;button.classList.toggle('has-errors',errors.length>0);}function record(entry){errors.push({timestamp:new Date().toISOString(),...entry});refreshButton();}window.reportStructureError=(error,context={})=>record({type:context.type??'caught_error',...normalizeError(error),...context});window.addEventListener('error',event=>{if(event instanceof ErrorEvent)record({type:'runtime_error',message:event.message,stack:event.error?.stack??'',source:event.filename,line:event.lineno,column:event.colno});else if(event.target?.src||event.target?.href)record({type:'resource_error',message:`Failed to load resource: ${event.target.src||event.target.href}`,source:event.target.src||event.target.href});},true);window.addEventListener('unhandledrejection',event=>record({type:'unhandled_rejection',...normalizeError(event.reason)}));function reportText(){return['STRUCTURE ERROR REPORT',`generated: ${new Date().toISOString()}`,`url: ${location.href}`,`user_agent: ${navigator.userAgent}`,`error_count: ${errors.length}`,'',...errors.flatMap((error,index)=>[`[${index+1}] ${error.timestamp} ${error.type}`,`message: ${error.message}`,error.source?`source: ${error.source}:${error.line??0}:${error.column??0}`:'',error.stack?`stack:\n${error.stack}`:'',''])].join('\n');}button.addEventListener('click',async()=>{if(!navigator.clipboard?.writeText)throw new Error('Clipboard API unavailable');await navigator.clipboard.writeText(reportText());button.textContent=`COPIED ${errors.length}`;setTimeout(refreshButton,900);});window.StructureErrorLog=errors;refreshButton();})();</script>
 
-  <script>
-    (() => {
-      const errors = [];
-      const button = document.querySelector('#errorReportButton');
-      if (!button) throw new Error('errorReportButton missing');
-      function normalizeError(value) {
-        if (value instanceof Error) return { message: value.message, stack: value.stack };
-        if (typeof value === 'string') return { message: value, stack: '' };
-        return { message: JSON.stringify(value), stack: '' };
-      }
-      function refreshButton() {
-        button.textContent = `ERRORS ${errors.length}`;
-        button.classList.toggle('has-errors', errors.length > 0);
-      }
-      function record(entry) {
-        errors.push({ timestamp: new Date().toISOString(), ...entry });
-        refreshButton();
-      }
-      window.reportStructureError = (error, context = {}) => record({ type: context.type ?? 'caught_error', ...normalizeError(error), ...context });
-      window.addEventListener('error', event => {
-        if (event instanceof ErrorEvent) record({ type: 'runtime_error', message: event.message, stack: event.error?.stack ?? '', source: event.filename, line: event.lineno, column: event.colno });
-        else if (event.target?.src || event.target?.href) record({ type: 'resource_error', message: `Failed to load resource: ${event.target.src || event.target.href}`, source: event.target.src || event.target.href });
-      }, true);
-      window.addEventListener('unhandledrejection', event => record({ type: 'unhandled_rejection', ...normalizeError(event.reason) }));
-      function reportText() {
-        return ['STRUCTURE ERROR REPORT', `generated: ${new Date().toISOString()}`, `url: ${location.href}`, `user_agent: ${navigator.userAgent}`, `error_count: ${errors.length}`, '', ...errors.flatMap((error, index) => [`[${index + 1}] ${error.timestamp} ${error.type}`, `message: ${error.message}`, error.source ? `source: ${error.source}:${error.line ?? 0}:${error.column ?? 0}` : '', error.stack ? `stack:\n${error.stack}` : '', ''])].join('\n');
-      }
-      button.addEventListener('click', async () => {
-        if (!navigator.clipboard?.writeText) throw new Error('Clipboard API unavailable');
-        await navigator.clipboard.writeText(reportText());
-        button.textContent = `COPIED ${errors.length}`;
-        setTimeout(refreshButton, 900);
-      });
-      window.StructureErrorLog = errors;
-      refreshButton();
-    })();
-  </script>
   <script src="/static/app.js"></script>
+  <script src="/static/scene_ui_3d.js"></script>
   <script src="/static/entity_editor.js"></script>
   <script src="/static/causal_projection.js"></script>
   <script src="/static/projection_visibility.js"></script>
@@ -240,25 +68,8 @@
   <script src="/static/abstraction_library.js"></script>
   <script src="/static/link_projection.js"></script>
   <script>
-    async function createBlankWorkspace() {
-      const blank = (await fetchJson('/api/starting-scene')).workspace;
-      blank.entities = [];
-      ws = blank;
-      assertWorkspace();
-      selected.clear();
-      activeEntityId = null;
-      lookAtEntityId = null;
-      hovered = null;
-      clearLink();
-      syncCatalog();
-      syncSettings();
-      renderProjectionControls();
-      syncEventRouteVisibility();
-      inspect();
-      updateButtons();
-      status('new blank workspace · unsaved');
-    }
-    $('#newWorkspace').onclick = () => createBlankWorkspace().catch(reportUiError);
+    async function createBlankWorkspace(){const blank=(await fetchJson('/api/starting-scene')).workspace;blank.entities=[];ws=blank;assertWorkspace();selected.clear();activeEntityId=null;lookAtEntityId=null;hovered=null;clearLink();if(window.StructureSceneProjection?.reset)window.StructureSceneProjection.reset();syncCatalog();syncSettings();renderProjectionControls();syncEventRouteVisibility();inspect();updateButtons();status('new blank workspace · unsaved');}
+    $('#newWorkspace').onclick=()=>createBlankWorkspace().catch(reportUiError);
   </script>
 </body>
 </html>
