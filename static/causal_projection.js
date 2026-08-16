@@ -20,15 +20,15 @@ function setPropertyPanelCollapsed(ownerId, collapsed) {
   if (collapsed) states[ownerId] = true; else delete states[ownerId];
 }
 function bindPropertyPanelControls() {
-  $('#propertyPanelDirection').addEventListener('input', event => { propertyPanelSettings().property_panel_direction = Number(event.target.value); syncPropertyPanelControls(); });
+  // Property panels are projection children of their Entity. Their orientation
+  // is derived from the camera-facing world plane, not authored manually.
+  $('#propertyPanelDirection').closest('.property-direction-control').hidden = true;
   $('#propertyPanelSize').addEventListener('input', event => { propertyPanelSettings().property_panel_size = Number(event.target.value); syncPropertyPanelControls(); });
   $('#showAllProps').addEventListener('click', () => { propertyPanelSettings().show_all_props = !propertyPanelSettings().show_all_props; syncPropertyPanelControls(); });
 }
 function syncPropertyPanelControls() {
   if (!ws) return;
   const settings = propertyPanelSettings();
-  $('#propertyPanelDirection').value = String(settings.property_panel_direction);
-  $('#propertyPanelDirectionValue').textContent = `${Math.round(settings.property_panel_direction)}°`;
   $('#propertyPanelSize').value = String(settings.property_panel_size);
   $('#propertyPanelSizeValue').textContent = `${Number(settings.property_panel_size).toFixed(2)}×`;
   $('#showAllProps').classList.toggle('active', settings.show_all_props);
@@ -72,14 +72,18 @@ function nodeClass(item) { return item.kind === 'entity' ? 'entity' : item.prope
 function propertyGroups(index) {
   const groups = new Map();
   for (const item of index.values()) {
-    if (item.kind !== 'property' || !['data', 'effect'].includes(item.propertyType)) continue;
+    // Link and Event Properties have dedicated projections. Every other
+    // Property is a child row of its owner's single Props projection instance.
+    if (item.kind !== 'property' || ['link', 'event'].includes(item.propertyType)) continue;
     if (!groups.has(item.owner.id)) groups.set(item.owner.id, []);
     groups.get(item.owner.id).push({ ref: item.ref, item });
   }
-  const order = { effect: 0, data: 1 };
+  const order = { effect: 0, data: 1, function: 2, type: 3, mount: 4 };
   for (const items of groups.values()) {
     items.sort((a, b) => {
-      const delta = order[a.item.propertyType] - order[b.item.propertyType];
+      const aOrder = order[a.item.propertyType] ?? 100;
+      const bOrder = order[b.item.propertyType] ?? 100;
+      const delta = aOrder - bOrder;
       return delta || displayName(a.item).localeCompare(displayName(b.item));
     });
   }
@@ -130,8 +134,19 @@ function triggerCausalProjection(eventRef) {
   causalProjection.rootEventRef = eventRef; causalProjection.graph = graph; causalProjection.playbackStartedAt = performance.now(); status(`fired: ${displayName(graph.index.get(eventRef))}`);
 }
 function projectedPoint(world) { const screen = project(world, viewProjection()); if (!screen) return null; const density = devicePixelRatio || 1; return { x: screen[0] / density, y: screen[1] / density, world }; }
-function propertyPanelBasis() { const angle = propertyPanelSettings().property_panel_direction * Math.PI / 180; return { x: [Math.cos(angle), Math.sin(angle), 0], down: [Math.sin(angle), -Math.cos(angle), 0] }; }
-function propertyPanelGeometry(owner) { const half = nodeHalfSize(); return { anchorWorld: [owner.position[0] - half, owner.position[1] - half, owner.position[2]], worldPerCssPixel: nodeMasterSize() / 44 * propertyPanelSettings().property_panel_size, basis: propertyPanelBasis() }; }
+function propertyPanelBasis() {
+  // Camera-facing basis makes the whole Props parent a single coherent
+  // world-space plane. Child rows inherit this same projected transform.
+  return { x: cameraRight(), down: V.mul(cameraUp(), -1) };
+}
+function propertyPanelGeometry(owner) {
+  const size = nodeMasterSize();
+  const half = nodeHalfSize();
+  const basis = propertyPanelBasis();
+  const gap = .18 * size;
+  const anchorWorld = V.add(owner.position, V.add(V.mul(basis.x, half + gap), V.mul(basis.down, -half)));
+  return { anchorWorld, worldPerCssPixel: size / 44 * propertyPanelSettings().property_panel_size, basis };
+}
 function propertyPanelLocalWorld(geometry, localX, localY) { return V.add(geometry.anchorWorld, V.add(V.mul(geometry.basis.x, localX * geometry.worldPerCssPixel), V.mul(geometry.basis.down, localY * geometry.worldPerCssPixel))); }
 function applyPropertyPanelTransform(panel, geometry) {
   const density = devicePixelRatio || 1, origin = project(geometry.anchorWorld, viewProjection()), xPoint = project(propertyPanelLocalWorld(geometry, 1, 0), viewProjection()), yPoint = project(propertyPanelLocalWorld(geometry, 0, 1), viewProjection());
@@ -164,7 +179,13 @@ function renderCausalProjection() {
   const elapsed=graph?performance.now()-causalProjection.playbackStartedAt:0,stepMs=Math.max(120,eventSettings().effect_travel_duration*350);
   causalSvg.setAttribute('width',String(innerWidth));causalSvg.setAttribute('height',String(innerHeight));causalSvg.setAttribute('viewBox',`0 0 ${innerWidth} ${innerHeight}`);causalSvg.querySelectorAll('.causal-edge').forEach(path=>path.remove());
   for(const [ownerId,items] of groups){const owner=items[0].item.owner;visibleOwners.add(ownerId);const panel=ensurePropertyPanel(owner,items),geometry=propertyPanelGeometry(owner);panel.hidden=false;if(!applyPropertyPanelTransform(panel,geometry)){panel.hidden=true;continue;}const panelAnchors=propertyPanelAnchors(panel,geometry);if(panelAnchors)panelPositions.set(ownerId,panelAnchors);for(const {ref} of items){const row=panel.querySelector(`.property-row[data-ref="${CSS.escape(ref)}"]`);if(!row)throw new Error(`Property row missing: ${ref}`);const depth=graphDepth.get(ref);row.classList.toggle('reached',depth!==undefined&&elapsed>=depth*stepMs);const anchors=propertyRowAnchors(panel,row,geometry);if(anchors)positions.set(ref,anchors);}}
-  for(const [ownerId,element] of causalProjection.panelElements)if(!visibleOwners.has(ownerId))element.hidden=true;
+  // A projection instance only exists while its canonical owner contributes
+  // projected Properties. Delete stale runtime instances instead of hiding them.
+  for(const [ownerId,element] of [...causalProjection.panelElements]){
+    if(visibleOwners.has(ownerId))continue;
+    element.remove();
+    causalProjection.panelElements.delete(ownerId);
+  }
   if(!graph){requestAnimationFrame(renderCausalProjection);return;}
   const rootAnchors=eventButtonAnchors(graph.rootRef);if(rootAnchors)positions.set(graph.rootRef,rootAnchors);
   for(const node of graph.nodes){if(node.ref===graph.rootRef)continue;const item=graph.index.get(node.ref);if(!item)throw new Error(`causal node unresolved: ${node.ref}`);if(item.propertyType!=='event')continue;const anchors=eventButtonAnchors(node.ref);if(anchors)positions.set(node.ref,anchors);const button=document.querySelector(`.event-button[data-event-id="${CSS.escape(node.ref)}"]`);if(button)button.classList.toggle('causal-reached',elapsed>=node.depth*stepMs);}
