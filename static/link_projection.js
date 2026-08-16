@@ -12,6 +12,12 @@ linkFlowSvg.setAttribute('aria-hidden', 'true');
 Object.assign(linkFlowSvg.style, { position: 'fixed', inset: '0', pointerEvents: 'none', zIndex: '9', overflow: 'visible' });
 document.body.appendChild(linkFlowSvg);
 
+function causalRuntime() {
+  const runtime = window.StructureCausalProjection;
+  if (!runtime || !runtime.state || !runtime.surface) throw new Error('StructureCausalProjection runtime contract missing');
+  return runtime;
+}
+
 function linkProjectionColor(property, variant) {
   const ruleset = rulesetMap().get(property.ruleset_ref);
   if (!ruleset) throw new Error(`Ruleset unresolved: ${property.ruleset_ref}`);
@@ -19,10 +25,6 @@ function linkProjectionColor(property, variant) {
   if (!colorSpace) throw new Error(`ColorSpace unresolved: ${ruleset.color_space_ref}`);
   const rgb = colorSpace.colors[variant];
   if (!Array.isArray(rgb) || rgb.length !== 3) throw new Error(`ColorSpace ${colorSpace.id}.${variant} must be [r,g,b]`);
-
-  // Material source is a transparent 100 px strip with one white pixel.
-  // Subtractive tint = white - (white - target), therefore every Link color
-  // comes from the same white source sample without per-color textures.
   const target = rgb.map(value => Number(value));
   const subtract = target.map(value => 1 - value);
   const tintedWhite = subtract.map(value => 1 - value);
@@ -50,7 +52,7 @@ function linkTypeOrder(types) {
 
 function propertyBoxBottom(entity) {
   let bottom = entity.position[1] - nodeHalfSize();
-  const panel = causalProjection.panelElements.get(entity.id);
+  const panel = causalRuntime().state.panelElements.get(entity.id);
   if (!panel || panel.hidden || !panel.offsetWidth || !panel.offsetHeight) return bottom;
   const geometry = propertyPanelGeometry(entity);
   const corners = [
@@ -77,7 +79,6 @@ function linkSlots() {
     groups(source.id).out.add(linkType);
     groups(target.id).in.add(linkType);
   }
-
   const spacing = linkSettings().anchor_spacing * nodeMasterSize();
   const gap = linkSettings().anchor_offset * nodeMasterSize();
   if (spacing <= 0 || gap <= 0) throw new Error('Link anchor spacing and offset must be positive');
@@ -87,14 +88,12 @@ function linkSlots() {
     const firstX = entity.position[0] - (ordered.length - 1) * spacing / 2;
     ordered.forEach((linkType, index) => ports.set(`${entity.id}\u0000${direction}\u0000${linkType}`, [firstX + index * spacing, y, entity.position[2]]));
   };
-
   for (const entity of assertWorkspace().entities) {
     const typed = byEntity.get(entity.id);
     if (!typed) continue;
     placeRow(entity, 'out', typed.out, entity.position[1] + nodeHalfSize() + gap);
     placeRow(entity, 'in', typed.in, propertyBoxBottom(entity) - gap);
   }
-
   const slots = new Map();
   for (const { property } of links) {
     const linkType = property.value.link_type_ref;
@@ -124,7 +123,6 @@ function renderGenericLinks(time) {
   linkFlowSvg.setAttribute('viewBox', `0 0 ${innerWidth} ${innerHeight}`);
   linkFlowSvg.replaceChildren();
   if (!ws) return;
-
   const slots = linkSlots();
   const period = LINK_FLOW_MASK_PIXELS * LINK_FLOW_REPEAT_SCALE;
   const whitePixel = Math.max(1, period / LINK_FLOW_MASK_PIXELS);
@@ -132,12 +130,10 @@ function renderGenericLinks(time) {
   const offset = -((time * .001 * linkSettings().base_flow_speed * period) % period);
   const width = linkSettings().flow_width;
   if (width <= 0) throw new Error('settings.link_visualization.flow_width must be positive');
-
   for (const { property } of activeLinkProperties()) {
     const start = cssPoint(slots.get(`${property.id}:out`));
     const end = cssPoint(slots.get(`${property.id}:in`));
     if (!start || !end) continue;
-
     const base = svgElement('path');
     base.setAttribute('d', `M ${start.x} ${start.y} L ${end.x} ${end.y}`);
     base.setAttribute('fill', 'none');
@@ -145,7 +141,6 @@ function renderGenericLinks(time) {
     base.setAttribute('stroke-width', String(Math.max(1, width * 8)));
     base.setAttribute('opacity', '.55');
     linkFlowSvg.appendChild(base);
-
     const flow = svgElement('path');
     flow.setAttribute('d', `M ${start.x} ${start.y} L ${end.x} ${end.y}`);
     flow.setAttribute('fill', 'none');
@@ -158,7 +153,6 @@ function renderGenericLinks(time) {
     flow.dataset.linkId = property.id;
     linkFlowSvg.appendChild(flow);
   }
-
   for (const [key, world] of linkProjection.ports) {
     const [entityId, direction, linkType] = key.split('\u0000');
     const point = cssPoint(world);
@@ -185,13 +179,15 @@ function causalFlowColor() {
   return `rgb(${colorSpace.colors.flow.map(value => Math.round(value * 255)).join(',')})`;
 }
 function renderEventFlow(time) {
-  causalSvg.querySelectorAll('.causal-flow-pulse').forEach(node => node.remove());
-  if (!ws || !causalProjection.graph || !causalProjection.playbackStartedAt) return;
-  const elapsed = time - causalProjection.playbackStartedAt;
+  const runtime = causalRuntime();
+  const surface = runtime.surface;
+  const state = runtime.state;
+  surface.querySelectorAll('.causal-flow-pulse').forEach(node => node.remove());
+  if (!ws || !state.graph || !state.playbackStartedAt) return;
+  const elapsed = time - state.playbackStartedAt;
   const stepMs = Math.max(120, eventSettings().effect_travel_duration * 350);
-  const edgeById = new Map(causalProjection.graph.edges.map(edge => [edge.id, edge]));
-
-  for (const path of causalSvg.querySelectorAll('.causal-edge')) {
+  const edgeById = new Map(state.graph.edges.map(edge => [edge.id, edge]));
+  for (const path of surface.querySelectorAll('.causal-edge')) {
     const ids = String(path.dataset.linkId).split(',');
     const edges = ids.map(id => edgeById.get(id)).filter(Boolean);
     if (!edges.length) throw new Error(`causal visual has no canonical edge: ${path.dataset.linkId}`);
@@ -213,7 +209,7 @@ function renderEventFlow(time) {
     pulse.setAttribute('fill', causalFlowColor());
     pulse.setAttribute('stroke', '#ffffff');
     pulse.setAttribute('stroke-width', '.6');
-    causalSvg.appendChild(pulse);
+    surface.appendChild(pulse);
   }
 }
 
