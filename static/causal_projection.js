@@ -1,6 +1,14 @@
 // Scene projection: every represented object in the view is a world-space 3D
 // instance. DOM is not used for Entity, Event, Property or causal-route
 // representation.
+//
+// Locked Entity-local layout:
+//   generic/Dependency OUT ports above
+//   Event list left (right edge -> Entity left edge, with gap)
+//   Props list below (top edge -> Entity bottom edge, with gap)
+//   generic/Dependency IN ports below the full Props list
+// Event causal input/output attaches to the left/right edge of the same Event
+// instance; canonical Events are never duplicated to make separate in/out lists.
 
 const causalProjection = {
   rootEventRef: null,
@@ -143,43 +151,66 @@ function eventListLayout(entity) {
   const totalHeight = events.length ? events.length * rowHeight + Math.max(0, events.length - 1) * rowGap : 0;
   const top = entity.position[1] + totalHeight / 2;
   const rightEdge = entity.position[0] - half - gap;
-  const rows = events.map((property, index) => ({
-    ref: property.id,
-    property,
-    center: [
+  const rows = events.map((property, index) => {
+    const center = [
       rightEdge - width / 2,
       top - rowHeight / 2 - index * (rowHeight + rowGap),
       entity.position[2],
-    ],
-    halfScale: [width / 2, rowHeight / 2, depth],
-    width,
-    height: rowHeight,
-  }));
+    ];
+    return {
+      ref: property.id,
+      property,
+      center,
+      leftAnchor: [center[0] - width / 2, center[1], center[2]],
+      rightAnchor: [center[0] + width / 2, center[1], center[2]],
+      halfScale: [width / 2, rowHeight / 2, depth],
+      width,
+      height: rowHeight,
+    };
+  });
   return { entity, rows, rightEdge };
 }
 
 function propsListLayout(entity, items) {
+  if (!items.length) return null;
   const master = nodeMasterSize();
   const scale = propertyPanelSettings().property_panel_size;
   const half = nodeHalfSize();
   const gap = .20 * master;
   const depth = .075 * master * scale;
+  const topEdge = entity.position[1] - half - gap;
   const collapsed = propertyPanelCollapsed(entity.id);
+
+  // Closed Props is only a tiny 3D reopen button, aligned under the Entity's
+  // right side. Expanded Props owns no title/header bar: only rows + tiny
+  // close button in the list's top-right corner.
   if (collapsed) {
-    const size = .28 * master * scale;
-    const leftEdge = entity.position[0] + half + gap;
-    const center = [leftEdge + size / 2, entity.position[1], entity.position[2]];
-    return { entity, collapsed, center, frameScale: [size / 2, size / 2, depth], rows: [], width: size, height: size };
+    const buttonSize = .24 * master * scale;
+    const center = [
+      entity.position[0] + half - buttonSize / 2,
+      topEdge - buttonSize / 2,
+      entity.position[2],
+    ];
+    return {
+      entity,
+      collapsed,
+      center,
+      frameScale: [buttonSize / 2, buttonSize / 2, depth],
+      rows: [],
+      width: buttonSize,
+      height: buttonSize,
+      toggleCenter: center,
+    };
   }
+
   const width = 1.62 * master * scale;
   const rowHeight = .25 * master * scale;
   const rowGap = .055 * master * scale;
-  const rowsHeight = items.length ? items.length * rowHeight + Math.max(0, items.length - 1) * rowGap : rowHeight;
   const padding = .10 * master * scale;
+  const rowsHeight = items.length * rowHeight + Math.max(0, items.length - 1) * rowGap;
   const height = rowsHeight + padding * 2;
-  const leftEdge = entity.position[0] + half + gap;
-  const center = [leftEdge + width / 2, entity.position[1], entity.position[2]];
-  const top = center[1] + height / 2 - padding;
+  const center = [entity.position[0], topEdge - height / 2, entity.position[2]];
+  const top = topEdge - padding;
   const rows = items.map(({ ref, item }, index) => ({
     ref,
     item,
@@ -188,17 +219,41 @@ function propsListLayout(entity, items) {
     width: width * .94,
     height: rowHeight * .84,
   }));
-  return { entity, collapsed, center, frameScale: [width / 2, height / 2, depth], rows, width, height };
+  const toggleSize = .18 * master * scale;
+  const toggleCenter = [
+    center[0] + width / 2 - padding - toggleSize / 2,
+    topEdge - padding - toggleSize / 2,
+    center[2] + depth + .012,
+  ];
+  return {
+    entity,
+    collapsed,
+    center,
+    frameScale: [width / 2, height / 2, depth],
+    rows,
+    width,
+    height,
+    toggleCenter,
+    toggleSize,
+  };
 }
 
-function refWorldPosition(ref, layouts, index) {
+function refWorldAnchor(ref, layouts, index, side = 'center') {
   const item = index.get(ref);
   if (!item) return null;
   if (item.kind === 'entity') return item.owner.position;
   const event = layouts.events.get(ref);
-  if (event) return event.center;
+  if (event) {
+    if (side === 'in') return event.leftAnchor;
+    if (side === 'out') return event.rightAnchor;
+    return event.center;
+  }
   const prop = layouts.properties.get(ref);
-  if (prop) return prop.center;
+  if (prop) {
+    if (side === 'in') return [prop.center[0] - prop.halfScale[0], prop.center[1], prop.center[2]];
+    if (side === 'out') return [prop.center[0] + prop.halfScale[0], prop.center[1], prop.center[2]];
+    return prop.center;
+  }
   return item.owner.position;
 }
 
@@ -235,7 +290,7 @@ function buildSceneLayouts(index) {
     const propsLayout = propsListLayout(entity, propsItems);
     entities.set(entity.id, { eventLayout, propsLayout });
     for (const row of eventLayout.rows) events.set(row.ref, row);
-    for (const row of propsLayout.rows) properties.set(row.ref, row);
+    if (propsLayout) for (const row of propsLayout.rows) properties.set(row.ref, row);
   }
   return { entities, events, properties };
 }
@@ -257,11 +312,11 @@ function drawSceneProjection3D() {
     const local = layouts.entities.get(entity.id);
     if (!local) continue;
 
-    // Entity label is a real world-space text plane above the Entity.
     const labelCenter = [entity.position[0], entity.position[1] + nodeHalfSize() + .28 * nodeMasterSize(), entity.position[2] + .012];
     drawSceneText3D(entity.name, labelCenter, 1.75 * nodeMasterSize(), .32 * nodeMasterSize(), selected.has(entity.id) ? [.62,.82,1] : [.94,.97,1]);
 
-    // EventList: list right edge is attached to Entity left edge with local gap.
+    // Event list is one owner-relative 3D child list to the left of Entity.
+    // Each Event has a left input anchor and right output anchor.
     for (const row of local.eventLayout.rows) {
       const depth = graphDepth.get(row.ref);
       const reached = depth !== undefined && elapsed >= depth * stepMs;
@@ -273,34 +328,40 @@ function drawSceneProjection3D() {
       causalProjection.eventHitTargets.push({ ref: row.ref, center: row.center, halfWidth: row.halfScale[0], halfHeight: row.halfScale[1] });
     }
 
-    // PropsList: one 3D child of Entity, rows are children of that list.
+    // Props list is centered directly below Entity. There is no header/control
+    // panel; only a tiny top-right close/reopen control.
     const props = local.propsLayout;
-    drawBox(props.center, props.frameScale, SCENE_COLORS.propsFrame, true);
-    if (props.collapsed) {
-      drawSceneText3D('+', [props.center[0],props.center[1],props.center[2]+props.frameScale[2]+.012], props.width*.6, props.height*.6, [.82,.88,.95]);
-      causalProjection.propertyHitTargets.push({ kind: 'toggle', ownerId: entity.id, center: props.center, halfWidth: props.frameScale[0], halfHeight: props.frameScale[1] });
-    } else {
-      for (const row of props.rows) {
-        const depth = graphDepth.get(row.ref);
-        const reached = depth !== undefined && elapsed >= depth * stepMs;
-        const base = SCENE_COLORS[row.item.propertyType] ?? SCENE_COLORS.generic;
-        const color = reached ? SCENE_COLORS.reached : base;
-        drawBox(row.center, row.halfScale, color);
-        drawBox(row.center, [row.halfScale[0]+.008,row.halfScale[1]+.008,row.halfScale[2]+.008], reached ? [.98,.58,.48] : SCENE_COLORS.outline, true);
-        drawSceneText3D(`${row.item.propertyType.toUpperCase()} · ${displayName(row.item)}`, [row.center[0],row.center[1],row.center[2]+row.halfScale[2]+.012], row.width*.90, row.height*.68, [.92,.95,.99]);
-        causalProjection.propertyHitTargets.push({ kind: 'property', ref: row.ref, center: row.center, halfWidth: row.halfScale[0], halfHeight: row.halfScale[1] });
+    if (props) {
+      if (props.collapsed) {
+        drawBox(props.center, props.frameScale, SCENE_COLORS.propsFrame, true);
+        drawSceneText3D('+', [props.center[0],props.center[1],props.center[2]+props.frameScale[2]+.012], props.width*.62, props.height*.62, [.82,.88,.95]);
+        causalProjection.propertyHitTargets.push({ kind: 'toggle', ownerId: entity.id, center: props.center, halfWidth: props.frameScale[0], halfHeight: props.frameScale[1] });
+      } else {
+        drawBox(props.center, props.frameScale, SCENE_COLORS.propsFrame, true);
+        for (const row of props.rows) {
+          const depth = graphDepth.get(row.ref);
+          const reached = depth !== undefined && elapsed >= depth * stepMs;
+          const base = SCENE_COLORS[row.item.propertyType] ?? SCENE_COLORS.generic;
+          const color = reached ? SCENE_COLORS.reached : base;
+          drawBox(row.center, row.halfScale, color);
+          drawBox(row.center, [row.halfScale[0]+.008,row.halfScale[1]+.008,row.halfScale[2]+.008], reached ? [.98,.58,.48] : SCENE_COLORS.outline, true);
+          drawSceneText3D(`${row.item.propertyType.toUpperCase()} · ${displayName(row.item)}`, [row.center[0],row.center[1],row.center[2]+row.halfScale[2]+.012], row.width*.90, row.height*.68, [.92,.95,.99]);
+          causalProjection.propertyHitTargets.push({ kind: 'property', ref: row.ref, center: row.center, halfWidth: row.halfScale[0], halfHeight: row.halfScale[1] });
+        }
+        const toggleHalf = props.toggleSize / 2;
+        drawBox(props.toggleCenter, [toggleHalf, toggleHalf, props.frameScale[2]*1.45], [.18,.22,.29]);
+        drawSceneText3D('×', [props.toggleCenter[0],props.toggleCenter[1],props.toggleCenter[2]+props.frameScale[2]*1.5], props.toggleSize*.72, props.toggleSize*.72, [.88,.92,.98]);
+        causalProjection.propertyHitTargets.push({ kind: 'toggle', ownerId: entity.id, center: props.toggleCenter, halfWidth: toggleHalf, halfHeight: toggleHalf });
       }
-      const toggleCenter = [props.center[0]+props.width/2-.12*nodeMasterSize(), props.center[1]+props.height/2-.12*nodeMasterSize(), props.center[2]+props.frameScale[2]+.012];
-      drawSceneText3D('−', toggleCenter, .20*nodeMasterSize(), .20*nodeMasterSize(), [.78,.84,.92]);
-      causalProjection.propertyHitTargets.push({ kind: 'toggle', ownerId: entity.id, center: toggleCenter, halfWidth: .14*nodeMasterSize(), halfHeight: .14*nodeMasterSize() });
     }
   }
 
-  // Causal routes are 3D world-space lines as well; no SVG/DOM scene path.
+  // Causal routes are world-space 3D lines. Incoming routes terminate on the
+  // left edge of Event/Property rows; outgoing routes originate at right edge.
   if (graph && viewSettings().event_routes_visible) {
     for (const edge of graph.edges) {
-      const from = refWorldPosition(edge.from, layouts, graph.index);
-      const to = refWorldPosition(edge.to, layouts, graph.index);
+      const from = refWorldAnchor(edge.from, layouts, graph.index, 'out');
+      const to = refWorldAnchor(edge.to, layouts, graph.index, 'in');
       if (!from || !to) continue;
       const state = causalPlaybackState(edge, elapsed, stepMs);
       const color = state.active ? SCENE_COLORS.causalActive : SCENE_COLORS.causal;
