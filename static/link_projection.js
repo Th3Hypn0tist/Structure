@@ -4,13 +4,38 @@
 
 const LINK_FLOW_MASK_PIXELS = 100;
 const LINK_FLOW_REPEAT_SCALE = 0.26;
-const linkProjection = { ports: new Map() };
+const LINK_TOUCH_RADIUS_PX = 10;
+const LINK_TOUCH_BOOST_MS = 480;
+const NODE_TOUCH_FLASH_MS = 360;
+const linkProjection = {
+  ports: new Map(),
+  flowPhases: new Map(),
+  boostUntil: new Map(),
+  hoveredLinkId: null,
+  flashEntityId: null,
+  flashStartedAt: 0,
+};
 
 const linkFlowSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
 linkFlowSvg.id = 'linkFlowLines';
 linkFlowSvg.setAttribute('aria-hidden', 'true');
 Object.assign(linkFlowSvg.style, { position: 'fixed', inset: '0', pointerEvents: 'none', zIndex: '9', overflow: 'visible' });
 document.body.appendChild(linkFlowSvg);
+
+const linkTouchFlash = document.createElement('div');
+linkTouchFlash.setAttribute('aria-hidden', 'true');
+Object.assign(linkTouchFlash.style, {
+  position: 'fixed',
+  display: 'none',
+  pointerEvents: 'none',
+  zIndex: '8',
+  background: '#ffffff',
+  border: '1px solid #ffffff',
+  borderRadius: '3px',
+  boxShadow: '0 0 18px #ffffff',
+  mixBlendMode: 'screen',
+});
+document.body.appendChild(linkTouchFlash);
 
 function causalRuntime() {
   const runtime = window.StructureCausalProjection;
@@ -116,6 +141,76 @@ function cssPoint(world) {
   return { x: screen[0] / density, y: screen[1] / density };
 }
 function svgElement(name) { return document.createElementNS('http://www.w3.org/2000/svg', name); }
+function pointSegmentDistance(px, py, start, end) {
+  const vx = end.x - start.x;
+  const vy = end.y - start.y;
+  const lengthSquared = vx * vx + vy * vy;
+  if (lengthSquared <= 1e-9) return Math.hypot(px - start.x, py - start.y);
+  const t = Math.max(0, Math.min(1, ((px - start.x) * vx + (py - start.y) * vy) / lengthSquared));
+  return Math.hypot(px - (start.x + vx * t), py - (start.y + vy * t));
+}
+function genericLinkAt(clientX, clientY) {
+  if (!ws) return null;
+  const slots = linkSlots();
+  let winner = null;
+  let best = LINK_TOUCH_RADIUS_PX;
+  for (const { property } of activeLinkProperties()) {
+    const start = cssPoint(slots.get(`${property.id}:out`));
+    const end = cssPoint(slots.get(`${property.id}:in`));
+    if (!start || !end) continue;
+    const distance = pointSegmentDistance(clientX, clientY, start, end);
+    if (distance < best) { best = distance; winner = property; }
+  }
+  return winner;
+}
+function activateGenericLinkTouch(property, time = performance.now()) {
+  const target = entityForCanonicalRef(property.value.parent_ref);
+  if (!target) throw new Error(`Link target unresolved for touch feedback: ${property.id}`);
+  linkProjection.boostUntil.set(property.id, time + LINK_TOUCH_BOOST_MS);
+  linkProjection.flashEntityId = target.id;
+  linkProjection.flashStartedAt = time;
+}
+function updateGenericLinkHover(clientX, clientY) {
+  const property = genericLinkAt(clientX, clientY);
+  const nextId = property?.id ?? null;
+  if (property && nextId !== linkProjection.hoveredLinkId) activateGenericLinkTouch(property);
+  linkProjection.hoveredLinkId = nextId;
+}
+function flowDashOffset(property, time, period) {
+  let state = linkProjection.flowPhases.get(property.id);
+  if (!state) {
+    state = { phase: 0, time };
+    linkProjection.flowPhases.set(property.id, state);
+  }
+  const dt = Math.max(0, Math.min(.05, (time - state.time) / 1000));
+  const active = time < (linkProjection.boostUntil.get(property.id) ?? 0);
+  const speed = active ? eventSettings().active_link_speed : linkSettings().base_flow_speed;
+  if (!Number.isFinite(speed) || speed < 0) throw new Error('Link flow speed must be a non-negative number');
+  state.phase = (state.phase + dt * speed * period) % period;
+  state.time = time;
+  return -state.phase;
+}
+function renderNodeTouchFlash(time) {
+  if (!linkProjection.flashEntityId) { linkTouchFlash.style.display = 'none'; return; }
+  const progress = (time - linkProjection.flashStartedAt) / NODE_TOUCH_FLASH_MS;
+  if (progress < 0 || progress >= 1) {
+    linkProjection.flashEntityId = null;
+    linkTouchFlash.style.display = 'none';
+    return;
+  }
+  const entity = assertWorkspace().entities.find(item => item.id === linkProjection.flashEntityId);
+  if (!entity) throw new Error(`Touch flash Entity unresolved: ${linkProjection.flashEntityId}`);
+  const bounds = entityScreenBounds(entity, viewProjection());
+  if (!bounds) { linkTouchFlash.style.display = 'none'; return; }
+  const density = devicePixelRatio || 1;
+  const pulse = Math.sin(Math.PI * progress);
+  linkTouchFlash.style.display = 'block';
+  linkTouchFlash.style.left = `${bounds.minX / density}px`;
+  linkTouchFlash.style.top = `${bounds.minY / density}px`;
+  linkTouchFlash.style.width = `${Math.max(1, (bounds.maxX - bounds.minX) / density)}px`;
+  linkTouchFlash.style.height = `${Math.max(1, (bounds.maxY - bounds.minY) / density)}px`;
+  linkTouchFlash.style.opacity = String(.62 * pulse);
+}
 
 function renderGenericLinks(time) {
   linkFlowSvg.setAttribute('width', String(innerWidth));
@@ -127,7 +222,6 @@ function renderGenericLinks(time) {
   const period = LINK_FLOW_MASK_PIXELS * LINK_FLOW_REPEAT_SCALE;
   const whitePixel = Math.max(1, period / LINK_FLOW_MASK_PIXELS);
   const transparentPixels = period - whitePixel;
-  const offset = -((time * .001 * linkSettings().base_flow_speed * period) % period);
   const width = linkSettings().flow_width;
   if (width <= 0) throw new Error('settings.link_visualization.flow_width must be positive');
   for (const { property } of activeLinkProperties()) {
@@ -148,7 +242,7 @@ function renderGenericLinks(time) {
     flow.setAttribute('stroke-width', String(Math.max(1.2, width * 9)));
     flow.setAttribute('stroke-linecap', 'round');
     flow.setAttribute('stroke-dasharray', `${whitePixel} ${transparentPixels}`);
-    flow.setAttribute('stroke-dashoffset', String(offset));
+    flow.setAttribute('stroke-dashoffset', String(flowDashOffset(property, time, period)));
     flow.setAttribute('opacity', '.95');
     flow.dataset.linkId = property.id;
     linkFlowSvg.appendChild(flow);
@@ -213,9 +307,17 @@ function renderEventFlow(time) {
   }
 }
 
+canvas.addEventListener('pointermove', event => updateGenericLinkHover(event.clientX, event.clientY), { passive: true });
+canvas.addEventListener('pointerleave', () => { linkProjection.hoveredLinkId = null; });
+canvas.addEventListener('pointerdown', event => {
+  const property = genericLinkAt(event.clientX, event.clientY);
+  if (property) activateGenericLinkTouch(property);
+}, { passive: true });
+
 function renderLinkProjection(time) {
   renderGenericLinks(time);
   renderEventFlow(time);
+  renderNodeTouchFlash(time);
   requestAnimationFrame(renderLinkProjection);
 }
 requestAnimationFrame(renderLinkProjection);
