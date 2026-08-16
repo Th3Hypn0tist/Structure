@@ -1,6 +1,6 @@
 // Canonical Event -> Effect -> target -> Event impact projection.
 // Projection instances are view-only and remain attached to their canonical owner Entities.
-// Only Entity labels are fixed-size camera billboards. Data/Effect panels are owner-relative world-space UI.
+// Only Entity labels are fixed-size camera billboards. Data/Effect panels are true Entity-child world planes.
 
 const causalProjection = {
   rootEventRef: null,
@@ -247,7 +247,6 @@ function renderCausalProjection() {
   const graphDepth = new Map((graph?.nodes || []).map(node => [node.ref, node.depth]));
   const positions = new Map();
   const visibleOwners = new Set();
-  const density = devicePixelRatio || 1;
   const elapsed = graph ? performance.now() - causalProjection.playbackStartedAt : 0;
   const stepMs = Math.max(120, Number(ws.settings.event_playback.effect_travel_duration || 1.2) * 350);
 
@@ -261,15 +260,16 @@ function renderCausalProjection() {
     if (!owner) continue;
     visibleOwners.add(ownerId);
     const world = propertyPanelWorldPoint(owner);
-    const screen = project(world, viewProjection());
     const panel = ensurePropertyPanel(owner, items);
-    if (!screen) { panel.hidden = true; continue; }
-
-    const scale = Math.max(.08, worldPixelsAt(world) / 44) * nodeMasterSize();
     panel.hidden = false;
-    panel.style.left = `${screen[0] / density}px`;
-    panel.style.top = `${screen[1] / density}px`;
-    panel.style.setProperty('--property-world-scale', String(scale));
+
+    // The entire panel is a true world-space child plane of the Entity.
+    // It shares the same fixed world XY orientation as Event controls instead of facing the camera.
+    const worldPerCssPixel = nodeMasterSize() / 44;
+    if (!applyWorldPlaneTransform(panel, world, worldPerCssPixel)) {
+      panel.hidden = true;
+      continue;
+    }
 
     for (const { ref } of items) {
       const row = panel.querySelector(`.property-row[data-ref="${CSS.escape(ref)}"]`);
