@@ -59,6 +59,16 @@ function resetEventProjection() {
 function bindResetEventsControl() {
   $('#resetEvents').addEventListener('click', resetEventProjection);
 }
+function exposeErrorReportControl() {
+  const toolbar = $('#toolbar');
+  const button = $('#errorReportButton');
+  button.title = 'Copy all captured runtime, resource, promise and reported errors to clipboard';
+  button.style.position = 'static';
+  button.style.right = '';
+  button.style.bottom = '';
+  button.style.zIndex = '';
+  toolbar.appendChild(button);
+}
 
 function genericLinkTypes() {
   const types = new Map();
@@ -132,4 +142,7 @@ function syncEventRouteVisibility() {
   svg.style.display = projectionVisibilitySettings().event_routes_visible ? '' : 'none';
 }
 
-window.addEventListener('load', bindResetEventsControl);
+window.addEventListener('load', () => {
+  bindResetEventsControl();
+  exposeErrorReportControl();
+});
