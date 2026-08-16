@@ -7,8 +7,11 @@
 //   Event list left (right edge -> Entity left edge, with gap)
 //   Props list below (top edge -> Entity bottom edge, with gap)
 //   generic/Dependency IN ports below the full Props list
-// Event causal input/output attaches to the left/right edge of the same Event
-// instance; canonical Events are never duplicated to make separate in/out lists.
+//
+// Event I/O is link-level projection state, not Event-row state. An Entity owns
+// exactly one shared Event IN port and one shared Event OUT port regardless of
+// how many Event Properties it contains. Individual Event rows remain buttons
+// in the Event list and never create their own input/output ports.
 
 const causalProjection = {
   rootEventRef: null,
@@ -151,24 +154,29 @@ function eventListLayout(entity) {
   const totalHeight = events.length ? events.length * rowHeight + Math.max(0, events.length - 1) * rowGap : 0;
   const top = entity.position[1] + totalHeight / 2;
   const rightEdge = entity.position[0] - half - gap;
-  const rows = events.map((property, index) => {
-    const center = [
+  const leftEdge = rightEdge - width;
+  const rows = events.map((property, index) => ({
+    ref: property.id,
+    property,
+    center: [
       rightEdge - width / 2,
       top - rowHeight / 2 - index * (rowHeight + rowGap),
       entity.position[2],
-    ];
-    return {
-      ref: property.id,
-      property,
-      center,
-      leftAnchor: [center[0] - width / 2, center[1], center[2]],
-      rightAnchor: [center[0] + width / 2, center[1], center[2]],
-      halfScale: [width / 2, rowHeight / 2, depth],
-      width,
-      height: rowHeight,
-    };
-  });
-  return { entity, rows, rightEdge };
+    ],
+    halfScale: [width / 2, rowHeight / 2, depth],
+    width,
+    height: rowHeight,
+  }));
+  return {
+    entity,
+    rows,
+    rightEdge,
+    leftEdge,
+    // One shared Event IN link port for the whole Entity/Event list.
+    inAnchor: [leftEdge - gap, entity.position[1], entity.position[2]],
+    // One shared Event OUT link port for the whole Entity, independent of Event count.
+    outAnchor: [entity.position[0] + half + gap, entity.position[1], entity.position[2]],
+  };
 }
 
 function propsListLayout(entity, items) {
@@ -181,9 +189,6 @@ function propsListLayout(entity, items) {
   const topEdge = entity.position[1] - half - gap;
   const collapsed = propertyPanelCollapsed(entity.id);
 
-  // Closed Props is only a tiny 3D reopen button, aligned under the Entity's
-  // right side. Expanded Props owns no title/header bar: only rows + tiny
-  // close button in the list's top-right corner.
   if (collapsed) {
     const buttonSize = .24 * master * scale;
     const center = [
@@ -238,14 +243,15 @@ function propsListLayout(entity, items) {
   };
 }
 
-function refWorldAnchor(ref, layouts, index, side = 'center') {
+function refWorldAnchor(ref, layouts, index, side = 'center', linkType = null) {
   const item = index.get(ref);
   if (!item) return null;
   if (item.kind === 'entity') return item.owner.position;
   const event = layouts.events.get(ref);
   if (event) {
-    if (side === 'in') return event.leftAnchor;
-    if (side === 'out') return event.rightAnchor;
+    const eventLayout = layouts.entities.get(item.owner.id)?.eventLayout;
+    if (linkType === 'event_input' && side === 'in') return eventLayout?.inAnchor ?? event.center;
+    if (linkType === 'event_output' && side === 'out') return eventLayout?.outAnchor ?? event.center;
     return event.center;
   }
   const prop = layouts.properties.get(ref);
@@ -315,8 +321,8 @@ function drawSceneProjection3D() {
     const labelCenter = [entity.position[0], entity.position[1] + nodeHalfSize() + .28 * nodeMasterSize(), entity.position[2] + .012];
     drawSceneText3D(entity.name, labelCenter, 1.75 * nodeMasterSize(), .32 * nodeMasterSize(), selected.has(entity.id) ? [.62,.82,1] : [.94,.97,1]);
 
-    // Event list is one owner-relative 3D child list to the left of Entity.
-    // Each Event has a left input anchor and right output anchor.
+    // Event rows are only Event instances. Shared Event I/O ports are rendered
+    // once per Entity below, regardless of the number of rows.
     for (const row of local.eventLayout.rows) {
       const depth = graphDepth.get(row.ref);
       const reached = depth !== undefined && elapsed >= depth * stepMs;
@@ -327,9 +333,12 @@ function drawSceneProjection3D() {
       drawSceneText3D(propertyDisplayName(row.property, entity), [row.center[0],row.center[1],row.center[2]+row.halfScale[2]+.012], row.width*.88, row.height*.68, [.98,.92,.82]);
       causalProjection.eventHitTargets.push({ ref: row.ref, center: row.center, halfWidth: row.halfScale[0], halfHeight: row.halfScale[1] });
     }
+    if (local.eventLayout.rows.length) {
+      const portRadius = .055 * nodeMasterSize();
+      drawBox(local.eventLayout.inAnchor, [portRadius, portRadius, portRadius], SCENE_COLORS.causal, true);
+      drawBox(local.eventLayout.outAnchor, [portRadius, portRadius, portRadius], SCENE_COLORS.causal);
+    }
 
-    // Props list is centered directly below Entity. There is no header/control
-    // panel; only a tiny top-right close/reopen control.
     const props = local.propsLayout;
     if (props) {
       if (props.collapsed) {
@@ -356,12 +365,13 @@ function drawSceneProjection3D() {
     }
   }
 
-  // Causal routes are world-space 3D lines. Incoming routes terminate on the
-  // left edge of Event/Property rows; outgoing routes originate at right edge.
+  // Canonical causal edges remain distinct, but all event_input edges terminate
+  // at the Entity's single shared Event IN port and all event_output edges begin
+  // at its single shared Event OUT port. Event count never multiplies I/O ports.
   if (graph && viewSettings().event_routes_visible) {
     for (const edge of graph.edges) {
-      const from = refWorldAnchor(edge.from, layouts, graph.index, 'out');
-      const to = refWorldAnchor(edge.to, layouts, graph.index, 'in');
+      const from = refWorldAnchor(edge.from, layouts, graph.index, 'out', edge.linkType);
+      const to = refWorldAnchor(edge.to, layouts, graph.index, 'in', edge.linkType);
       if (!from || !to) continue;
       const state = causalPlaybackState(edge, elapsed, stepMs);
       const color = state.active ? SCENE_COLORS.causalActive : SCENE_COLORS.causal;
