@@ -60,6 +60,38 @@ function propertyDisplayName(property, owner = null) {
   return humanizeCanonicalName(ref || property?.id || property?.property_type_ref || 'Property');
 }
 
+// Apply an actual world-plane transform to a DOM overlay. The plane is fixed to world XY,
+// so camera orbit changes its apparent angle/foreshortening instead of billboarding it.
+// `worldPerCssPixel` controls physical size in the scene.
+function applyWorldPlaneTransform(element, centerWorld, worldPerCssPixel) {
+  const vp = viewProjection();
+  const density = devicePixelRatio || 1;
+  const center = project(centerWorld, vp);
+  const xPoint = project(V.add(centerWorld, [worldPerCssPixel, 0, 0]), vp);
+  const yPoint = project(V.add(centerWorld, [0, -worldPerCssPixel, 0]), vp);
+  if (!center || !xPoint || !yPoint) return false;
+
+  const cx = center[0] / density;
+  const cy = center[1] / density;
+  const a = xPoint[0] / density - cx;
+  const b = xPoint[1] / density - cy;
+  const c = yPoint[0] / density - cx;
+  const d = yPoint[1] / density - cy;
+  const width = element.offsetWidth;
+  const height = element.offsetHeight;
+
+  const determinant = a * d - b * c;
+  if (Math.abs(determinant) < 0.00001 || !width || !height) return false;
+
+  const e = cx - a * width / 2 - c * height / 2;
+  const f = cy - b * width / 2 - d * height / 2;
+  element.style.left = '0px';
+  element.style.top = '0px';
+  element.style.transformOrigin = '0 0';
+  element.style.transform = `matrix(${a}, ${b}, ${c}, ${d}, ${e}, ${f})`;
+  return true;
+}
+
 function selectedEntityForEditor() {
   if (selected.size !== 1) return null;
   const id = [...selected][0];
@@ -212,12 +244,11 @@ function renderNodeOverlays() {
       }
     }
 
-    // Event controls are owner-relative world-space instances. They move and scale with the Entity.
+    // Event controls are true child planes of the Entity in world space, not camera-facing overlays.
     const events = (entity.properties || []).filter(property => property.property_type_ref === 'event');
     const eventSpacing = .34 * size;
     const eventStart = -(events.length - 1) * eventSpacing / 2;
-    const pxPerWorld = worldPixelsAt(entity.position);
-    const eventScale = Math.max(.18, Math.min(4, pxPerWorld * size / 42));
+    const worldPerCssPixel = size / 42;
 
     events.forEach((property, index) => {
       const button = ensureEventButton(entity, property);
@@ -230,16 +261,9 @@ function renderNodeOverlays() {
         entity.position[1] + eventStart + index * eventSpacing,
         entity.position[2],
       ];
-      const screen = project(world, vp);
-      if (!screen) {
-        button.hidden = true;
-        return;
-      }
-      button.hidden = false;
       button.textContent = propertyDisplayName(property, entity);
-      button.style.left = `${screen[0] / density}px`;
-      button.style.top = `${screen[1] / density}px`;
-      button.style.setProperty('--event-world-scale', String(eventScale));
+      button.hidden = false;
+      if (!applyWorldPlaneTransform(button, world, worldPerCssPixel)) button.hidden = true;
     });
   }
   requestAnimationFrame(renderNodeOverlays);
