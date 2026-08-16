@@ -49,6 +49,7 @@ class ArchitectureTests(unittest.TestCase):
         app = (ROOT / "app.py").read_text(encoding="utf-8")
         for name in [
             "app.js",
+            "scene_ui_3d.js",
             "entity_editor.js",
             "causal_projection.js",
             "projection_visibility.js",
@@ -66,7 +67,29 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn("${entity.id}\\u0000${direction}\\u0000${linkType}", source)
         self.assertIn("propertyBoxBottom(entity) - gap", source)
         self.assertIn("entity.position[1] + nodeHalfSize() + gap", source)
-        self.assertIn("LINK_FLOW_MASK_PIXELS = 100", source)
+
+    def test_link_projection_is_world_space_3d_not_svg_or_dom_scene_content(self):
+        source = (STATIC / "link_projection.js").read_text(encoding="utf-8")
+        self.assertIn("function drawGenericLinks3D(time)", source)
+        self.assertIn("drawLine(start, end, baseColor)", source)
+        self.assertIn("drawBox(pulse", source)
+        self.assertIn("drawBox(world", source)
+        self.assertNotIn("createElementNS", source)
+        self.assertNotIn("linkFlowSvg", source)
+        self.assertNotIn("linkEventFlashLayer", source)
+        self.assertNotIn("querySelectorAll('.causal-edge')", source)
+        self.assertNotIn("LINK_FLOW_MASK_PIXELS", source)
+
+    def test_scene_projection_is_world_space_3d_not_dom_scene_content(self):
+        source = (STATIC / "causal_projection.js").read_text(encoding="utf-8")
+        self.assertIn("function drawSceneProjection3D()", source)
+        self.assertIn("function eventListLayout(entity)", source)
+        self.assertIn("function propsListLayout(entity, items)", source)
+        self.assertIn("drawSceneText3D", source)
+        self.assertNotIn("document.createElement('button')", source)
+        self.assertNotIn("document.createElementNS", source)
+        self.assertNotIn(".event-button", source)
+        self.assertNotIn(".property-panel", source)
 
     def test_toolbar_and_right_controls_follow_current_layout_contract(self):
         html = (STATIC / "structure.html").read_text(encoding="utf-8")
