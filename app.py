@@ -18,6 +18,7 @@ STATIC = {
     "/static/app.js": ("app.js", "application/javascript; charset=utf-8"),
     "/static/entity_editor.js": ("entity_editor.js", "application/javascript; charset=utf-8"),
     "/static/causal_projection.js": ("causal_projection.js", "application/javascript; charset=utf-8"),
+    "/static/view_projection.js": ("view_projection.js", "application/javascript; charset=utf-8"),
     "/static/style.css": ("style.css", "text/css; charset=utf-8"),
 }
 
