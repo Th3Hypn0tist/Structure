@@ -40,6 +40,11 @@
       <input id="nodeMasterSize" type="range" min="0.35" max="2.50" step="0.05" value="1">
       <output id="nodeMasterSizeValue">1.00×</output>
     </label>
+    <label class="node-size-control property-direction-control">
+      <span>PROPS DIR</span>
+      <input id="propertyPanelDirection" type="range" min="-180" max="180" step="5" value="-90">
+      <output id="propertyPanelDirectionValue">-90°</output>
+    </label>
     <label class="view-toggle active"><input id="gridToggle" type="checkbox" checked><span>GRID</span></label>
     <label class="view-toggle active"><input id="snapToggle" type="checkbox" checked><span>SNAP</span></label>
   </div>
@@ -108,7 +113,7 @@
   </div>
 
   <button id="errorReportButton" class="error-report-button" type="button" title="Copy all captured errors to clipboard" aria-live="polite">ERRORS 0</button>
-  <div id="help">Double-click Entity: bind lookAt · move bound Entity: reference freezes · LMB drag empty: move reference · RMB drag: orbit · wheel: zoom · GRID/SNAP: top-right · Event button: fire causal chain</div>
+  <div id="help">Double-click Entity: bind lookAt · move bound Entity: reference freezes · LMB drag empty: move reference · RMB drag: orbit · wheel: zoom · PROPS DIR: Property panel direction · Event button: fire causal chain</div>
 
   <script>
     (() => {
