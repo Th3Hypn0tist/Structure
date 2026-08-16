@@ -12,6 +12,7 @@ const linkProjection = {
   boostUntil: new Map(),
   causalRunKey: null,
   causalTouchedLinks: new Set(),
+  genericReachedAt: new Map(),
   flashes: new Map(),
 };
 
@@ -151,40 +152,62 @@ function flowDashOffset(property, time, period) {
   state.time = time;
   return -state.phase;
 }
-function activateGenericLinkFromEvent(property, time) {
+function activateGenericLinkFromEvent(property, sourceReachedAt) {
   const target = entityForCanonicalRef(property.value.parent_ref);
   if (!target) throw new Error(`Generic Link target unresolved during Event playback: ${property.id}`);
-  linkProjection.boostUntil.set(property.id, time + LINK_EVENT_BOOST_MS);
-  linkProjection.flashes.set(target.id, { startedAt: time, color: brightenedLinkColor(property) });
+  const arrivalAt = sourceReachedAt + LINK_EVENT_BOOST_MS;
+  linkProjection.boostUntil.set(property.id, arrivalAt);
+  linkProjection.flashes.set(target.id, { startedAt: arrivalAt, color: brightenedLinkColor(property) });
+  return { target, arrivalAt };
+}
+function resetGenericEventFeedback() {
+  linkProjection.causalRunKey = null;
+  linkProjection.causalTouchedLinks.clear();
+  linkProjection.genericReachedAt.clear();
+  linkProjection.boostUntil.clear();
+  linkProjection.flashes.clear();
+}
+function registerGenericReach(entityId, reachedAt) {
+  const current = linkProjection.genericReachedAt.get(entityId);
+  if (current === undefined || reachedAt < current) {
+    linkProjection.genericReachedAt.set(entityId, reachedAt);
+    return true;
+  }
+  return false;
 }
 function syncGenericLinksFromCausalPlayback(time) {
   const state = causalRuntime().state;
   if (!ws || !state.graph || !state.playbackStartedAt) {
-    linkProjection.causalRunKey = null;
-    linkProjection.causalTouchedLinks.clear();
+    resetGenericEventFeedback();
     return;
   }
   const runKey = `${state.rootEventRef}\u0000${state.playbackStartedAt}`;
   if (linkProjection.causalRunKey !== runKey) {
+    resetGenericEventFeedback();
     linkProjection.causalRunKey = runKey;
-    linkProjection.causalTouchedLinks.clear();
   }
-  const elapsed = time - state.playbackStartedAt;
   const stepMs = Math.max(120, eventSettings().effect_travel_duration * 350);
-  const reachedOwners = new Set();
   for (const node of state.graph.nodes) {
-    if (elapsed < node.depth * stepMs) continue;
+    const reachedAt = state.playbackStartedAt + node.depth * stepMs;
+    if (time < reachedAt) continue;
     const item = state.graph.index.get(node.ref);
     if (!item) throw new Error(`Causal node unresolved during generic Link feedback: ${node.ref}`);
-    reachedOwners.add(item.owner.id);
+    registerGenericReach(item.owner.id, reachedAt);
   }
-  for (const { property } of activeLinkProperties()) {
-    if (linkProjection.causalTouchedLinks.has(property.id)) continue;
-    const source = entityForCanonicalRef(property.value.child_ref);
-    if (!source) throw new Error(`Generic Link source unresolved during Event playback: ${property.id}`);
-    if (!reachedOwners.has(source.id)) continue;
-    linkProjection.causalTouchedLinks.add(property.id);
-    activateGenericLinkFromEvent(property, time);
+  let propagated = true;
+  while (propagated) {
+    propagated = false;
+    for (const { property } of activeLinkProperties()) {
+      if (linkProjection.causalTouchedLinks.has(property.id)) continue;
+      const source = entityForCanonicalRef(property.value.child_ref);
+      if (!source) throw new Error(`Generic Link source unresolved during Event playback: ${property.id}`);
+      const sourceReachedAt = linkProjection.genericReachedAt.get(source.id);
+      if (sourceReachedAt === undefined || time < sourceReachedAt) continue;
+      linkProjection.causalTouchedLinks.add(property.id);
+      const { target, arrivalAt } = activateGenericLinkFromEvent(property, sourceReachedAt);
+      registerGenericReach(target.id, arrivalAt);
+      propagated = true;
+    }
   }
 }
 function renderNodeEventFlashes(time) {
@@ -192,7 +215,8 @@ function renderNodeEventFlashes(time) {
   const density = devicePixelRatio || 1;
   for (const [entityId, flash] of [...linkProjection.flashes]) {
     const progress = (time - flash.startedAt) / NODE_EVENT_FLASH_MS;
-    if (progress < 0 || progress >= 1) { linkProjection.flashes.delete(entityId); continue; }
+    if (progress < 0) continue;
+    if (progress >= 1) { linkProjection.flashes.delete(entityId); continue; }
     const entity = assertWorkspace().entities.find(item => item.id === entityId);
     if (!entity) throw new Error(`Event flash Entity unresolved: ${entityId}`);
     const bounds = entityScreenBounds(entity, viewProjection());
