@@ -68,6 +68,22 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn("entity.position[1] + nodeHalfSize() + gap", source)
         self.assertIn("LINK_FLOW_MASK_PIXELS = 100", source)
 
+    def test_toolbar_and_right_controls_follow_current_layout_contract(self):
+        html = (STATIC / "structure.html").read_text(encoding="utf-8")
+        css = (STATIC / "style.css").read_text(encoding="utf-8")
+        self.assertIn('href="https://aigm.fi"', html)
+        self.assertIn('id="rightControls"', html)
+        self.assertLess(html.index('id="gridToggle"'), html.index('>VIEW</summary>'))
+        self.assertLess(html.index('id="snapToggle"'), html.index('>VIEW</summary>'))
+        self.assertIn('<details class="right-control-group" open>', html)
+        self.assertIn('>VIEW</summary>', html)
+        self.assertIn('>VISIBILITY</summary>', html)
+        self.assertIn('background:#000', css)
+        self.assertIn('flex-wrap:wrap', css)
+        self.assertIn('top:var(--toolbar-clearance)', css)
+        self.assertIn('.structure-brand-logo{display:block;width:auto;height:33px', css)
+        self.assertIn('font-variant-caps:small-caps', css)
+
 
 if __name__ == "__main__":
     unittest.main()
