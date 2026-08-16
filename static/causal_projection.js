@@ -1,21 +1,12 @@
 // Canonical Event -> Effect -> target -> Event impact projection.
-// This is presentation only: traversal follows explicit canonical Link Properties.
-
-const CAUSAL_LINK_TYPES = new Set([
-  'event_effect',
-  'effect_target',
-  'event_condition',
-  'event_input',
-  'event_read',
-  'event_cause',
-  'event_output',
-]);
+// Projection instances are view-only and remain attached to their canonical owner Entities.
 
 const causalProjection = {
   rootEventRef: null,
   maxDepth: 8,
   nodeElements: new Map(),
   graph: null,
+  playbackStartedAt: 0,
 };
 
 const causalSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -37,13 +28,7 @@ document.body.appendChild(causalNodes);
 function canonicalIndex() {
   const index = new Map();
   for (const entity of ws.entities) {
-    index.set(entity.id, {
-      ref: entity.id,
-      kind: 'entity',
-      entity,
-      owner: entity,
-      object: entity,
-    });
+    index.set(entity.id, { ref: entity.id, kind: 'entity', entity, owner: entity, object: entity });
     for (const property of entity.properties || []) {
       index.set(property.id, {
         ref: property.id,
@@ -59,27 +44,21 @@ function canonicalIndex() {
 }
 
 function canonicalLinks() {
-  return ws.entities.flatMap(owner =>
-    (owner.properties || [])
-      .filter(property => property.property_type_ref === 'link')
-      .map(property => ({ owner, property, value: property.value || {} }))
-  );
+  return ws.entities.flatMap(owner => (owner.properties || [])
+    .filter(property => property.property_type_ref === 'link')
+    .map(property => ({ owner, property, value: property.value || {} })));
 }
 
 function causalOutgoing(ref, index) {
   const current = index.get(ref);
   if (!current) return [];
-
   const type = current.kind === 'entity' ? 'entity' : current.propertyType;
   const allowed = type === 'event'
     ? new Set(['event_effect', 'event_output'])
     : type === 'effect'
       ? new Set(['effect_target'])
       : new Set(['event_condition', 'event_input', 'event_read', 'event_cause']);
-
-  return canonicalLinks().filter(({ value }) =>
-    value.parent_ref === ref && allowed.has(value.link_type_ref)
-  );
+  return canonicalLinks().filter(({ value }) => value.parent_ref === ref && allowed.has(value.link_type_ref));
 }
 
 function buildCausalGraph(rootRef, maxDepth = 8) {
@@ -95,43 +74,30 @@ function buildCausalGraph(rootRef, maxDepth = 8) {
   while (queue.length) {
     const current = queue.shift();
     if (current.depth >= maxDepth) continue;
-
     for (const { property, value } of causalOutgoing(current.ref, index)) {
       const targetRef = value.child_ref;
       if (!index.has(targetRef)) continue;
       const edgeKey = `${property.id}:${current.ref}:${targetRef}`;
       if (seenEdges.has(edgeKey)) continue;
       seenEdges.add(edgeKey);
-
       const cycle = current.path.has(targetRef);
-      edges.push({
-        id: property.id,
-        from: current.ref,
-        to: targetRef,
-        linkType: value.link_type_ref,
-        cycle,
-      });
-
       const nextDepth = current.depth + 1;
+      edges.push({ id: property.id, from: current.ref, to: targetRef, linkType: value.link_type_ref, depth: nextDepth, cycle });
       const existing = nodes.get(targetRef);
       if (!existing || nextDepth < existing.depth) nodes.set(targetRef, { ref: targetRef, depth: nextDepth });
       if (cycle) continue;
-
       const nextPath = new Set(current.path);
       nextPath.add(targetRef);
       queue.push({ ref: targetRef, depth: nextDepth, path: nextPath });
     }
   }
 
-  const result = { rootRef, index, nodes: [...nodes.values()], edges };
-  causalProjection.graph = result;
-  return result;
+  return { rootRef, index, nodes: [...nodes.values()], edges };
 }
 
 function displayName(item) {
   if (!item) return 'missing';
   if (item.kind === 'entity') return item.entity.name || item.entity.id;
-
   const property = item.object;
   const value = property.value || {};
   if (property.property_type_ref === 'event') return value.event_type_ref || property.id;
@@ -139,11 +105,7 @@ function displayName(item) {
   if (property.property_type_ref === 'function') return value.function_type_ref || property.id;
   return property.id;
 }
-
-function ownerName(item) {
-  return item?.owner?.name || item?.owner?.id || '';
-}
-
+function ownerName(item) { return item?.owner?.name || item?.owner?.id || ''; }
 function nodeClass(item) {
   if (!item) return 'missing';
   if (item.kind === 'entity') return 'entity';
@@ -161,12 +123,7 @@ function ensureCausalNode(ref, item) {
       event.stopPropagation();
       const fresh = canonicalIndex().get(ref);
       if (!fresh) return;
-
-      if (fresh.propertyType === 'event') {
-        openCausalProjection(ref);
-        return;
-      }
-
+      if (fresh.propertyType === 'event') { triggerCausalProjection(ref); return; }
       if (fresh.owner) {
         selected = new Set([fresh.owner.id]);
         setActiveEntity(fresh.owner.id);
@@ -178,7 +135,6 @@ function ensureCausalNode(ref, item) {
     causalNodes.appendChild(element);
     causalProjection.nodeElements.set(ref, element);
   }
-
   element.className = `causal-node ${nodeClass(item)}`;
   element.innerHTML = `<strong>${displayName(item)}</strong><small>${nodeClass(item).toUpperCase()} · ${ownerName(item)}</small>`;
   return element;
@@ -187,106 +143,142 @@ function ensureCausalNode(ref, item) {
 function clearCausalProjection() {
   causalProjection.rootEventRef = null;
   causalProjection.graph = null;
+  causalProjection.playbackStartedAt = 0;
   for (const element of causalProjection.nodeElements.values()) element.hidden = true;
+  document.querySelectorAll('.event-button.causal-reached').forEach(button => button.classList.remove('causal-reached'));
   causalSvg.querySelectorAll('.causal-edge').forEach(path => path.remove());
 }
 
-function openCausalProjection(eventRef) {
-  if (causalProjection.rootEventRef === eventRef) {
-    clearCausalProjection();
-    status('causal projection closed');
-    return;
-  }
-
+function triggerCausalProjection(eventRef) {
+  document.querySelectorAll('.event-button.causal-reached').forEach(button => button.classList.remove('causal-reached'));
+  const graph = buildCausalGraph(eventRef, causalProjection.maxDepth);
+  if (!graph) { status(`Event ${eventRef} has no resolvable causal root`); return; }
   causalProjection.rootEventRef = eventRef;
-  buildCausalGraph(eventRef, causalProjection.maxDepth);
-  status(`impact: ${eventRef}`);
+  causalProjection.graph = graph;
+  causalProjection.playbackStartedAt = performance.now();
+  const eventItem = graph.index.get(eventRef);
+  status(`fired: ${eventItem?.object?.value?.event_type_ref || eventRef}`);
 }
 
-function rootEventButton() {
-  if (!causalProjection.rootEventRef) return null;
-  return document.querySelector(`.event-button[data-event-id="${CSS.escape(causalProjection.rootEventRef)}"]`);
+function eventButtonRect(ref) {
+  const button = document.querySelector(`.event-button[data-event-id="${CSS.escape(ref)}"]`);
+  if (!button || button.hidden) return null;
+  const rect = button.getBoundingClientRect();
+  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+}
+
+function graphOwnerStacks(graph) {
+  const groups = new Map();
+  for (const node of graph.nodes) {
+    if (node.ref === graph.rootRef) continue;
+    const item = graph.index.get(node.ref);
+    if (!item || item.propertyType === 'event') continue;
+    const ownerId = item.owner.id;
+    const lane = item.propertyType === 'effect' ? 'right' : 'left';
+    const key = `${ownerId}:${lane}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(node.ref);
+  }
+  for (const refs of groups.values()) refs.sort();
+  return groups;
+}
+
+function causalWorldPoint(item, ref, graph, groups) {
+  const owner = item.owner;
+  const size = nodeMasterSize();
+  const lane = item.propertyType === 'effect' ? 'right' : 'left';
+  const refs = groups.get(`${owner.id}:${lane}`) || [ref];
+  const index = Math.max(0, refs.indexOf(ref));
+  const spacing = .42 * size;
+  const y = owner.position[1] - (refs.length - 1) * spacing / 2 + index * spacing;
+  const x = lane === 'right'
+    ? owner.position[0] + nodeHalfSize() + .78 * size
+    : owner.position[0] - nodeHalfSize() - 1.35 * size;
+  return [x, y, owner.position[2]];
 }
 
 function renderCausalProjection() {
-  const graph = causalProjection.rootEventRef
-    ? buildCausalGraph(causalProjection.rootEventRef, causalProjection.maxDepth)
-    : null;
-  const rootButton = rootEventButton();
-
+  const graph = causalProjection.rootEventRef ? buildCausalGraph(causalProjection.rootEventRef, causalProjection.maxDepth) : null;
+  causalProjection.graph = graph;
   causalSvg.setAttribute('width', String(innerWidth));
   causalSvg.setAttribute('height', String(innerHeight));
   causalSvg.setAttribute('viewBox', `0 0 ${innerWidth} ${innerHeight}`);
   causalSvg.querySelectorAll('.causal-edge').forEach(path => path.remove());
 
-  if (!graph || !rootButton || rootButton.hidden) {
+  if (!graph) {
     for (const element of causalProjection.nodeElements.values()) element.hidden = true;
     requestAnimationFrame(renderCausalProjection);
     return;
   }
 
-  const rootRect = rootButton.getBoundingClientRect();
-  const rootPoint = {
-    x: rootRect.right + 5,
-    y: rootRect.top + rootRect.height / 2,
-  };
-
-  const layers = new Map();
-  for (const node of graph.nodes) {
-    if (node.depth === 0) continue;
-    if (!layers.has(node.depth)) layers.set(node.depth, []);
-    layers.get(node.depth).push(node.ref);
+  const positions = new Map();
+  const rootRect = eventButtonRect(graph.rootRef);
+  if (!rootRect) {
+    for (const element of causalProjection.nodeElements.values()) element.hidden = true;
+    requestAnimationFrame(renderCausalProjection);
+    return;
   }
-
-  for (const refs of layers.values()) refs.sort();
-  const positions = new Map([[graph.rootRef, rootPoint]]);
+  positions.set(graph.rootRef, rootRect);
+  const groups = graphOwnerStacks(graph);
   const visibleRefs = new Set();
-  const columnWidth = 148;
-  const rowHeight = 50;
+  const density = devicePixelRatio || 1;
+  const elapsed = performance.now() - causalProjection.playbackStartedAt;
+  const stepMs = Math.max(120, Number(ws.settings.event_playback.effect_travel_duration || 1.2) * 350);
 
-  for (const [depth, refs] of [...layers.entries()].sort((a, b) => a[0] - b[0])) {
-    const startY = rootPoint.y - ((refs.length - 1) * rowHeight) / 2;
-    refs.forEach((ref, index) => {
-      const item = graph.index.get(ref);
-      const element = ensureCausalNode(ref, item);
-      visibleRefs.add(ref);
-      element.hidden = false;
-      element.style.left = `${rootPoint.x + depth * columnWidth}px`;
-      element.style.top = `${startY + index * rowHeight}px`;
+  for (const node of graph.nodes) {
+    if (node.ref === graph.rootRef) continue;
+    const item = graph.index.get(node.ref);
+    if (!item) continue;
 
-      const width = element.offsetWidth || 132;
-      const height = element.offsetHeight || 36;
-      positions.set(ref, {
-        x: rootPoint.x + depth * columnWidth,
-        y: startY + index * rowHeight,
-        left: rootPoint.x + depth * columnWidth - width / 2,
-        right: rootPoint.x + depth * columnWidth + width / 2,
-        top: startY + index * rowHeight - height / 2,
-        bottom: startY + index * rowHeight + height / 2,
-      });
-    });
+    if (item.propertyType === 'event') {
+      const rect = eventButtonRect(node.ref);
+      if (rect) positions.set(node.ref, rect);
+      const eventButton = document.querySelector(`.event-button[data-event-id="${CSS.escape(node.ref)}"]`);
+      if (eventButton) eventButton.classList.toggle('causal-reached', elapsed >= node.depth * stepMs);
+      continue;
+    }
+
+    const world = causalWorldPoint(item, node.ref, graph, groups);
+    const screen = project(world, viewProjection());
+    const element = ensureCausalNode(node.ref, item);
+    visibleRefs.add(node.ref);
+    if (!screen) { element.hidden = true; continue; }
+
+    const scale = Math.max(.08, worldPixelsAt(world) / 44) * nodeMasterSize();
+    element.hidden = false;
+    element.style.left = `${screen[0] / density}px`;
+    element.style.top = `${screen[1] / density}px`;
+    element.style.setProperty('--causal-world-scale', String(scale));
+    element.classList.toggle('reached', elapsed >= node.depth * stepMs);
+
+    const rect = element.getBoundingClientRect();
+    positions.set(node.ref, { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom });
   }
 
-  for (const [ref, element] of causalProjection.nodeElements) {
-    if (!visibleRefs.has(ref)) element.hidden = true;
-  }
+  for (const [ref, element] of causalProjection.nodeElements) if (!visibleRefs.has(ref)) element.hidden = true;
 
   const svgNS = 'http://www.w3.org/2000/svg';
   for (const edge of graph.edges) {
     const from = positions.get(edge.from);
     const to = positions.get(edge.to);
     if (!from || !to) continue;
-
-    const x1 = edge.from === graph.rootRef ? from.x : from.right;
+    const x1 = from.right ?? from.x;
     const y1 = from.y;
-    const x2 = to.left;
+    const x2 = to.left ?? to.x;
     const y2 = to.y;
-    const bend = Math.max(28, (x2 - x1) * .45);
+    const bend = Math.max(24, Math.abs(x2 - x1) * .35);
+    const direction = x2 >= x1 ? 1 : -1;
     const path = document.createElementNS(svgNS, 'path');
-    path.setAttribute('class', `causal-edge ${edge.linkType}${edge.cycle ? ' cycle' : ''}`);
-    path.setAttribute('d', `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`);
+    const activeAt = Math.max(0, edge.depth - 1) * stepMs;
+    const reached = elapsed >= activeAt + stepMs * .75;
+    const active = elapsed >= activeAt && elapsed < activeAt + stepMs * .9;
+    path.setAttribute('class', `causal-edge ${edge.linkType}${edge.cycle ? ' cycle' : ''}${active ? ' active' : ''}${reached ? ' reached' : ''}`);
+    path.setAttribute('d', `M ${x1} ${y1} C ${x1 + direction * bend} ${y1}, ${x2 - direction * bend} ${y2}, ${x2} ${y2}`);
     path.setAttribute('marker-end', 'url(#causalArrow)');
     path.dataset.linkId = edge.id;
+    const sourceItem = graph.index.get(edge.from);
+    const sourceWorld = sourceItem?.owner?.position || [0, 0, 0];
+    path.style.strokeWidth = `${Math.max(.7, Math.min(5, worldPixelsAt(sourceWorld) / 24))}px`;
     causalSvg.appendChild(path);
   }
 
@@ -297,27 +289,25 @@ async function loadStartingScene() {
   const response = await fetch('/api/starting-scene');
   const payload = await response.json();
   if (!payload.ok) throw new Error(payload.error);
-
   ws = payload.workspace;
   ensureWorkspace();
   syncCatalog();
   syncSettings();
   selected.clear();
   activeEntityId = null;
+  lookAtEntityId = null;
   clearLink();
+  clearCausalProjection();
   inspect();
   updateButtons();
-  causalProjection.rootEventRef = 'EVENT_NEW_ORDER';
-  buildCausalGraph(causalProjection.rootEventRef, causalProjection.maxDepth);
-  status('starter scene: New Order');
+  status('starter scene: click NEW ORDER to fire');
 }
 
-// Capture phase is intentional: the Event button's own pulse handler stops bubbling.
 document.addEventListener('click', event => {
   const button = event.target.closest?.('.event-button');
   if (!button) return;
   const eventRef = button.dataset.eventId;
-  if (eventRef) openCausalProjection(eventRef);
+  if (eventRef) triggerCausalProjection(eventRef);
 }, true);
 
 window.addEventListener('keydown', event => {
