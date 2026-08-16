@@ -53,24 +53,50 @@
     <h3>Entity</h3>
     <div id="entityEditorEmpty">Select one Entity to edit</div>
     <div id="entityEditorFields" hidden>
-      <div class="entity-id-row">ID <code id="entityId"></code></div>
-      <label>Name <input id="entityName" type="text"></label>
-      <label>Description <textarea id="entityDescription" rows="5"></textarea></label>
-      <label class="contract-field">Human-readable contract
-        <textarea id="entityHumanContract" rows="14" placeholder="Write the contract once in human language. Machine-readable form is generated downstream from this source."></textarea>
-      </label>
-      <div class="machine-status">
-        <strong>Machine-readable</strong>
-        <span id="machineContractStatus">not generated</span>
-        <small>Derived only. Never edited here. Direction: human-readable → machine-readable.</small>
-      </div>
+      <section class="entity-info-section" data-info-section="identity">
+        <button class="entity-info-heading" type="button" data-info-section-toggle="identity" aria-expanded="true">Identity</button>
+        <div class="entity-info-body">
+          <div class="entity-id-row">ID <code id="entityId"></code></div>
+          <label>Name <input id="entityName" type="text"></label>
+        </div>
+      </section>
+
+      <section class="entity-info-section" data-info-section="description">
+        <button class="entity-info-heading" type="button" data-info-section-toggle="description" aria-expanded="true">Description</button>
+        <div class="entity-info-body">
+          <label><textarea id="entityDescription" rows="5"></textarea></label>
+        </div>
+      </section>
+
+      <section class="entity-info-section" data-info-section="contract">
+        <button class="entity-info-heading" type="button" data-info-section-toggle="contract" aria-expanded="true">Human-readable contract</button>
+        <div class="entity-info-body">
+          <label class="contract-field">
+            <textarea id="entityHumanContract" rows="14" placeholder="Write the contract once in human language. Machine-readable form is generated downstream from this source."></textarea>
+          </label>
+        </div>
+      </section>
+
+      <section class="entity-info-section" data-info-section="machine">
+        <button class="entity-info-heading" type="button" data-info-section-toggle="machine" aria-expanded="true">Machine-readable</button>
+        <div class="entity-info-body">
+          <div class="machine-status">
+            <span id="machineContractStatus">not generated</span>
+            <small>Derived only. Never edited here. Direction: human-readable → machine-readable.</small>
+          </div>
+        </div>
+      </section>
+
+      <section class="entity-info-section" data-info-section="relations">
+        <button class="entity-info-heading" type="button" data-info-section-toggle="relations" aria-expanded="true">Selection / Relations</button>
+        <div class="entity-info-body">
+          <div id="selection">No selection</div>
+        </div>
+      </section>
     </div>
   </aside>
 
-  <aside id="inspector">
-    <h3>Selection / Relations</h3>
-    <div id="selection">No selection</div>
-  </aside>
+  <aside id="projectionControls" aria-label="Projection visibility"></aside>
 
   <aside id="settings" hidden>
     <h3>Camera Defaults</h3>

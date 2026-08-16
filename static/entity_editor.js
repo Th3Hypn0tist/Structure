@@ -138,6 +138,52 @@ function selectedEntityForEditor() {
   return entity ? ensureAuthoringFields(entity) : null;
 }
 
+function infoPanelSettings() {
+  ws.settings ??= {};
+  ws.settings.view_defaults ??= {};
+  ws.settings.view_defaults.entity_info_collapsed ??= {};
+  return ws.settings.view_defaults.entity_info_collapsed;
+}
+
+function infoSectionCollapsed(entityId, section) {
+  if (!entityId) return false;
+  return Boolean(infoPanelSettings()[entityId]?.[section]);
+}
+
+function setInfoSectionCollapsed(entityId, section, collapsed) {
+  if (!entityId) return;
+  const states = infoPanelSettings();
+  states[entityId] ??= {};
+  if (collapsed) states[entityId][section] = true;
+  else delete states[entityId][section];
+  if (!Object.keys(states[entityId]).length) delete states[entityId];
+}
+
+function syncInfoSections() {
+  const entity = selectedEntityForEditor();
+  const entityId = entity?.id || null;
+  for (const section of document.querySelectorAll('.entity-info-section[data-info-section]')) {
+    const key = section.dataset.infoSection;
+    const collapsed = infoSectionCollapsed(entityId, key);
+    section.classList.toggle('collapsed', collapsed);
+    const button = section.querySelector('.entity-info-heading');
+    if (button) button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  }
+}
+
+for (const button of document.querySelectorAll('[data-info-section-toggle]')) {
+  button.addEventListener('click', event => {
+    event.preventDefault();
+    const sectionKey = button.dataset.infoSectionToggle;
+    const section = button.closest('.entity-info-section');
+    const entity = selectedEntityForEditor();
+    const collapsed = !section.classList.contains('collapsed');
+    section.classList.toggle('collapsed', collapsed);
+    button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    if (entity) setInfoSectionCollapsed(entity.id, sectionKey, collapsed);
+  });
+}
+
 function machineContractStatus(entity) {
   const machine = entity.contract.machine;
   if (machine.status === 'synchronized' && machine.generated_from_human_revision === entity.contract.human_revision) {
@@ -164,6 +210,7 @@ function renderEntityEditor() {
     editor.hidden = true;
     empty.hidden = false;
     empty.textContent = selected.size > 1 ? `${selected.size} Entities selected` : 'Select one Entity to edit';
+    syncInfoSections();
     return;
   }
   empty.hidden = true;
@@ -174,6 +221,7 @@ function renderEntityEditor() {
   $('#entityDescription').value = entity.description;
   $('#entityHumanContract').value = entity.contract.human;
   $('#machineContractStatus').textContent = machineContractStatus(entity);
+  syncInfoSections();
 }
 
 const baseInspect = inspect;
