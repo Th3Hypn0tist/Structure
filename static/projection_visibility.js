@@ -107,10 +107,6 @@ function renderProjectionControls() {
   const rulesets = rulesetMap();
   const colorSpaces = colorSpaceMap();
   root.replaceChildren();
-  const heading = document.createElement('div');
-  heading.className = 'projection-controls-heading';
-  heading.textContent = 'VISIBILITY';
-  root.appendChild(heading);
   for (const [linkType, ruleset] of genericLinkTypes()) {
     const colorSpace = colorSpaces.get(ruleset.color_space_ref);
     if (!colorSpace) throw new Error(`ColorSpace unresolved: ${ruleset.color_space_ref}`);
