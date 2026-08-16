@@ -34,6 +34,16 @@
     <span id="status">ready</span>
   </header>
 
+  <div id="viewControls" aria-label="View controls">
+    <label class="node-size-control">
+      <span>NODE SIZE</span>
+      <input id="nodeMasterSize" type="range" min="0.35" max="2.50" step="0.05" value="1">
+      <output id="nodeMasterSizeValue">1.00×</output>
+    </label>
+    <label class="view-toggle active"><input id="gridToggle" type="checkbox" checked><span>GRID</span></label>
+    <label class="view-toggle active"><input id="snapToggle" type="checkbox" checked><span>SNAP</span></label>
+  </div>
+
   <aside id="entityEditor">
     <h3>Entity</h3>
     <div id="entityEditorEmpty">Select one Entity to edit</div>
@@ -97,9 +107,8 @@
     </div>
   </div>
 
-  <div id="help">Double-click Entity: bind lookAt · move bound Entity: reference freezes in place · LMB drag empty: move reference point · RMB drag: orbit · wheel: local Z zoom · LMB node: select · Ctrl/Shift+LMB: multi-select · gizmo: move selection</div>
+  <div id="help">Double-click Entity: bind lookAt · move bound Entity: reference freezes · LMB drag empty: move reference · RMB drag: orbit · wheel: zoom · GRID/SNAP: top-right · Event button: fire causal chain</div>
   <script src="/static/app.js"></script>
-  <script src="/static/camera_reference_model.js"></script>
   <script src="/static/entity_editor.js"></script>
   <script src="/static/causal_projection.js"></script>
 </body>
