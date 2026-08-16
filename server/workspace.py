@@ -53,7 +53,6 @@ DEFAULT_WORKSPACE: dict[str, Any] = {
             "grid_visible": True,
             "snap_to_grid": True,
             "grid_size": 1.0,
-            "property_panel_direction": 0.0,
             "property_panel_size": 1.0,
             "property_panel_collapsed": {},
             "show_all_props": False,
@@ -158,7 +157,7 @@ def _validate_settings(settings: dict[str, Any], ruleset_index: dict[str, dict[s
     selected_ruleset = view.get("ruleset_ref")
     if selected_ruleset != "ALL" and selected_ruleset not in ruleset_index:
         raise ValueError(f"settings.view_defaults.ruleset_ref does not resolve: {selected_ruleset}")
-    for field in ("node_master_size", "grid_size", "property_panel_direction", "property_panel_size"):
+    for field in ("node_master_size", "grid_size", "property_panel_size"):
         view[field] = _require_number(view, field, "settings.view_defaults")
     for field in ("grid_visible", "snap_to_grid", "show_all_props", "event_routes_visible"):
         if not isinstance(view.get(field), bool):
