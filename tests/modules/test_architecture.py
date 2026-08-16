@@ -91,6 +91,19 @@ class ArchitectureTests(unittest.TestCase):
         self.assertNotIn(".event-button", source)
         self.assertNotIn(".property-panel", source)
 
+    def test_cw_export_uses_canonical_semantic_source_only(self):
+        source = (STATIC / "abstraction_library.js").read_text(encoding="utf-8")
+        html = (STATIC / "structure.html").read_text(encoding="utf-8")
+        self.assertIn('id="exportCw"', html)
+        self.assertIn("function canonicalSemanticPayload()", source)
+        self.assertIn("entities: structuredClone(source.entities)", source)
+        self.assertIn("rulesets: structuredClone(source.rulesets)", source)
+        self.assertIn("color_spaces: structuredClone(source.color_spaces)", source)
+        self.assertIn("function cwExportDocument()", source)
+        self.assertNotIn("camera: structuredClone", source)
+        self.assertNotIn("settings: structuredClone", source)
+        self.assertIn("Structure_CW_", source)
+
     def test_toolbar_and_right_controls_follow_current_layout_contract(self):
         html = (STATIC / "structure.html").read_text(encoding="utf-8")
         css = (STATIC / "style.css").read_text(encoding="utf-8")
