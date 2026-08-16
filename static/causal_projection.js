@@ -1,11 +1,11 @@
 // Canonical Event -> Effect -> target -> Event impact projection.
 // Projection instances are view-only and remain attached to their canonical owner Entities.
-// Only Entity labels are camera billboards; Data/Effect labels scale and move with their owner Entity.
+// Only Entity labels are fixed-size camera billboards. Property panels are owner-relative world-space UI.
 
 const causalProjection = {
   rootEventRef: null,
   maxDepth: 8,
-  nodeElements: new Map(),
+  panelElements: new Map(),
   graph: null,
   playbackStartedAt: 0,
 };
@@ -25,6 +25,34 @@ document.body.appendChild(causalSvg);
 const causalNodes = document.createElement('div');
 causalNodes.id = 'causalNodes';
 document.body.appendChild(causalNodes);
+
+function propertyPanelSettings() {
+  ws.settings ??= {};
+  ws.settings.view_defaults ??= {};
+  const view = ws.settings.view_defaults;
+  view.property_panel_direction ??= -90;
+  view.property_panel_distance ??= 1.35;
+  return view;
+}
+
+function syncPropertyPanelDirectionControl() {
+  const input = document.querySelector('#propertyPanelDirection');
+  const output = document.querySelector('#propertyPanelDirectionValue');
+  if (!input || !output) return;
+  const value = Number(propertyPanelSettings().property_panel_direction ?? -90);
+  input.value = String(value);
+  output.textContent = `${Math.round(value)}°`;
+}
+
+const propertyDirectionInput = document.querySelector('#propertyPanelDirection');
+if (propertyDirectionInput) {
+  propertyDirectionInput.addEventListener('input', event => {
+    const value = Number(event.target.value);
+    propertyPanelSettings().property_panel_direction = value;
+    const output = document.querySelector('#propertyPanelDirectionValue');
+    if (output) output.textContent = `${Math.round(value)}°`;
+  });
+}
 
 function canonicalIndex() {
   const index = new Map();
@@ -101,47 +129,80 @@ function displayName(item) {
   if (item.kind === 'entity') return item.entity.name || item.entity.id;
   return propertyDisplayName(item.object, item.owner);
 }
-function ownerName(item) { return item?.owner?.name || item?.owner?.id || ''; }
+
 function nodeClass(item) {
   if (!item) return 'missing';
   if (item.kind === 'entity') return 'entity';
   return item.propertyType || 'property';
 }
 
-function ensureCausalNode(ref, item) {
-  let element = causalProjection.nodeElements.get(ref);
-  if (!element) {
-    element = document.createElement('button');
-    element.type = 'button';
-    element.className = 'causal-node';
-    element.dataset.ref = ref;
-    element.onclick = event => {
-      event.stopPropagation();
-      const fresh = canonicalIndex().get(ref);
-      if (!fresh) return;
-      if (fresh.propertyType === 'event') { triggerCausalProjection(ref); return; }
-      if (fresh.owner) {
-        selected = new Set([fresh.owner.id]);
-        setActiveEntity(fresh.owner.id);
-        inspect();
-        updateButtons();
-      }
-      status(`${fresh.propertyType || fresh.kind}: ${displayName(fresh)}`);
-    };
-    causalNodes.appendChild(element);
-    causalProjection.nodeElements.set(ref, element);
+function graphPropertyGroups(graph) {
+  const groups = new Map();
+  for (const node of graph.nodes) {
+    if (node.ref === graph.rootRef) continue;
+    const item = graph.index.get(node.ref);
+    if (!item || item.propertyType === 'event') continue;
+    if (!groups.has(item.owner.id)) groups.set(item.owner.id, []);
+    groups.get(item.owner.id).push({ node, item });
   }
-  element.className = `causal-node ${nodeClass(item)}`;
-  element.dataset.ownerEntityId = item?.owner?.id || '';
-  element.innerHTML = `<strong>${displayName(item)}</strong><small>${nodeClass(item).toUpperCase()} · ${ownerName(item)}</small>`;
-  return element;
+  for (const items of groups.values()) {
+    items.sort((a, b) => {
+      const order = { effect: 0, data: 1, function: 2 };
+      const typeOrder = (order[a.item.propertyType] ?? 9) - (order[b.item.propertyType] ?? 9);
+      return typeOrder || displayName(a.item).localeCompare(displayName(b.item));
+    });
+  }
+  return groups;
+}
+
+function ensurePropertyPanel(owner, items) {
+  let panel = causalProjection.panelElements.get(owner.id);
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.className = 'property-panel';
+    panel.dataset.ownerEntityId = owner.id;
+    causalNodes.appendChild(panel);
+    causalProjection.panelElements.set(owner.id, panel);
+  }
+
+  const wanted = new Set(items.map(({ node }) => node.ref));
+  for (const row of [...panel.querySelectorAll('.property-row')]) {
+    if (!wanted.has(row.dataset.ref)) row.remove();
+  }
+
+  for (const { node, item } of items) {
+    let row = panel.querySelector(`.property-row[data-ref="${CSS.escape(node.ref)}"]`);
+    if (!row) {
+      row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'property-row';
+      row.dataset.ref = node.ref;
+      row.addEventListener('click', event => {
+        event.stopPropagation();
+        const fresh = canonicalIndex().get(row.dataset.ref);
+        if (!fresh) return;
+        if (fresh.owner) {
+          selected = new Set([fresh.owner.id]);
+          setActiveEntity(fresh.owner.id);
+          inspect();
+          updateButtons();
+        }
+        status(`${fresh.propertyType || fresh.kind}: ${displayName(fresh)}`);
+      });
+      panel.appendChild(row);
+    }
+    row.className = `property-row ${nodeClass(item)}`;
+    row.innerHTML = `<span class="property-type">${nodeClass(item).toUpperCase()}</span><strong>${displayName(item)}</strong>`;
+  }
+
+  return panel;
 }
 
 function clearCausalProjection() {
   causalProjection.rootEventRef = null;
   causalProjection.graph = null;
   causalProjection.playbackStartedAt = 0;
-  for (const element of causalProjection.nodeElements.values()) element.hidden = true;
+  for (const element of causalProjection.panelElements.values()) element.hidden = true;
   document.querySelectorAll('.event-button.causal-reached').forEach(button => button.classList.remove('causal-reached'));
   causalSvg.querySelectorAll('.causal-edge').forEach(path => path.remove());
 }
@@ -164,34 +225,19 @@ function eventButtonRect(ref) {
   return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
 }
 
-function graphOwnerStacks(graph) {
-  const groups = new Map();
-  for (const node of graph.nodes) {
-    if (node.ref === graph.rootRef) continue;
-    const item = graph.index.get(node.ref);
-    if (!item || item.propertyType === 'event') continue;
-    const ownerId = item.owner.id;
-    const lane = item.propertyType === 'effect' ? 'right' : 'left';
-    const key = `${ownerId}:${lane}`;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(node.ref);
-  }
-  for (const refs of groups.values()) refs.sort();
-  return groups;
+function propertyPanelWorldPoint(owner) {
+  const settings = propertyPanelSettings();
+  const angle = Number(settings.property_panel_direction ?? -90) * Math.PI / 180;
+  const distance = Number(settings.property_panel_distance ?? 1.35) * nodeMasterSize();
+  return [
+    owner.position[0] + Math.cos(angle) * distance,
+    owner.position[1] + Math.sin(angle) * distance,
+    owner.position[2],
+  ];
 }
 
-function causalWorldPoint(item, ref, graph, groups) {
-  const owner = item.owner;
-  const size = nodeMasterSize();
-  const lane = item.propertyType === 'effect' ? 'right' : 'left';
-  const refs = groups.get(`${owner.id}:${lane}`) || [ref];
-  const index = Math.max(0, refs.indexOf(ref));
-  const spacing = .42 * size;
-  const y = owner.position[1] - (refs.length - 1) * spacing / 2 + index * spacing;
-  const x = lane === 'right'
-    ? owner.position[0] + nodeHalfSize() + .78 * size
-    : owner.position[0] - nodeHalfSize() - 1.35 * size;
-  return [x, y, owner.position[2]];
+function rectPoint(rect) {
+  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
 }
 
 function renderCausalProjection() {
@@ -203,7 +249,7 @@ function renderCausalProjection() {
   causalSvg.querySelectorAll('.causal-edge').forEach(path => path.remove());
 
   if (!graph) {
-    for (const element of causalProjection.nodeElements.values()) element.hidden = true;
+    for (const element of causalProjection.panelElements.values()) element.hidden = true;
     requestAnimationFrame(renderCausalProjection);
     return;
   }
@@ -211,13 +257,14 @@ function renderCausalProjection() {
   const positions = new Map();
   const rootRect = eventButtonRect(graph.rootRef);
   if (!rootRect) {
-    for (const element of causalProjection.nodeElements.values()) element.hidden = true;
+    for (const element of causalProjection.panelElements.values()) element.hidden = true;
     requestAnimationFrame(renderCausalProjection);
     return;
   }
   positions.set(graph.rootRef, rootRect);
-  const groups = graphOwnerStacks(graph);
-  const visibleRefs = new Set();
+
+  const groups = graphPropertyGroups(graph);
+  const visibleOwners = new Set();
   const density = devicePixelRatio || 1;
   const elapsed = performance.now() - causalProjection.playbackStartedAt;
   const stepMs = Math.max(120, Number(ws.settings.event_playback.effect_travel_duration || 1.2) * 350);
@@ -225,36 +272,40 @@ function renderCausalProjection() {
   for (const node of graph.nodes) {
     if (node.ref === graph.rootRef) continue;
     const item = graph.index.get(node.ref);
-    if (!item) continue;
-
-    if (item.propertyType === 'event') {
-      const rect = eventButtonRect(node.ref);
-      if (rect) positions.set(node.ref, rect);
-      const eventButton = document.querySelector(`.event-button[data-event-id="${CSS.escape(node.ref)}"]`);
-      if (eventButton) eventButton.classList.toggle('causal-reached', elapsed >= node.depth * stepMs);
-      continue;
-    }
-
-    // Data/Effect/Function are projected from an owner-relative world point.
-    // Their labels are part of the same world-scaled instance; they do not billboard independently.
-    const world = causalWorldPoint(item, node.ref, graph, groups);
-    const screen = project(world, viewProjection());
-    const element = ensureCausalNode(node.ref, item);
-    visibleRefs.add(node.ref);
-    if (!screen) { element.hidden = true; continue; }
-
-    const scale = Math.max(.08, worldPixelsAt(world) / 44) * nodeMasterSize();
-    element.hidden = false;
-    element.style.left = `${screen[0] / density}px`;
-    element.style.top = `${screen[1] / density}px`;
-    element.style.setProperty('--causal-world-scale', String(scale));
-    element.classList.toggle('reached', elapsed >= node.depth * stepMs);
-
-    const rect = element.getBoundingClientRect();
-    positions.set(node.ref, { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom });
+    if (!item || item.propertyType !== 'event') continue;
+    const rect = eventButtonRect(node.ref);
+    if (rect) positions.set(node.ref, rect);
+    const eventButton = document.querySelector(`.event-button[data-event-id="${CSS.escape(node.ref)}"]`);
+    if (eventButton) eventButton.classList.toggle('causal-reached', elapsed >= node.depth * stepMs);
   }
 
-  for (const [ref, element] of causalProjection.nodeElements) if (!visibleRefs.has(ref)) element.hidden = true;
+  for (const [ownerId, items] of groups) {
+    const owner = items[0]?.item?.owner;
+    if (!owner) continue;
+    visibleOwners.add(ownerId);
+    const world = propertyPanelWorldPoint(owner);
+    const screen = project(world, viewProjection());
+    const panel = ensurePropertyPanel(owner, items);
+    if (!screen) { panel.hidden = true; continue; }
+
+    const scale = Math.max(.08, worldPixelsAt(world) / 44) * nodeMasterSize();
+    panel.hidden = false;
+    panel.style.left = `${screen[0] / density}px`;
+    panel.style.top = `${screen[1] / density}px`;
+    panel.style.setProperty('--property-world-scale', String(scale));
+
+    for (const { node } of items) {
+      const row = panel.querySelector(`.property-row[data-ref="${CSS.escape(node.ref)}"]`);
+      if (!row) continue;
+      const reached = elapsed >= node.depth * stepMs;
+      row.classList.toggle('reached', reached);
+      positions.set(node.ref, rectPoint(row.getBoundingClientRect()));
+    }
+  }
+
+  for (const [ownerId, element] of causalProjection.panelElements) {
+    if (!visibleOwners.has(ownerId)) element.hidden = true;
+  }
 
   const svgNS = 'http://www.w3.org/2000/svg';
   for (const edge of graph.edges) {
@@ -290,8 +341,10 @@ async function loadStartingScene() {
   if (!payload.ok) throw new Error(payload.error);
   ws = payload.workspace;
   ensureWorkspace();
+  propertyPanelSettings();
   syncCatalog();
   syncSettings();
+  syncPropertyPanelDirectionControl();
   selected.clear();
   activeEntityId = null;
   lookAtEntityId = null;
@@ -313,5 +366,10 @@ window.addEventListener('keydown', event => {
   if (event.key === 'Escape' && causalProjection.rootEventRef) clearCausalProjection();
 });
 
+propertyPanelSettings();
+syncPropertyPanelDirectionControl();
 requestAnimationFrame(renderCausalProjection);
-loadStartingScene().catch(error => status(`starter scene error: ${error.message}`));
+loadStartingScene().catch(error => {
+  window.reportStructureError?.(error, { type: 'starting_scene_error' });
+  status(`starter scene error: ${error.message}`);
+});
