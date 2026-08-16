@@ -1,334 +1,137 @@
-// View-only projection policy. Canonical links remain untouched.
-// Generic scene links are aggregated by Entity pair + link type; causal links render only as Event routes.
+// Event Rule Editor. Ruleset semantic_roles are the editor schema. Every edit
+// writes canonical Properties; there is no parallel Event rule model.
 
-const GENERIC_EXCLUDED_LINK_TYPES = new Set([
-  'event_read',
-  'event_input',
-  'event_output',
-  'event_effect',
-  'event_cause',
-  'event_condition',
-  'effect_target',
-]);
-
-function projectionVisibilitySettings() {
-  ws.settings ??= {};
-  ws.settings.view_defaults ??= {};
-  const view = ws.settings.view_defaults;
-  view.hidden_link_types ??= {};
-  view.event_routes_visible ??= true;
-  return view;
-}
-
-function isLinkTypeVisible(linkType) {
-  return !projectionVisibilitySettings().hidden_link_types?.[linkType];
-}
-
-function setLinkTypeVisible(linkType, visible) {
-  const hidden = projectionVisibilitySettings().hidden_link_types;
-  if (visible) delete hidden[linkType];
-  else hidden[linkType] = true;
-}
-
-function projectedGenericLinkProperties() {
-  const grouped = new Map();
-  for (const item of linkProperties()) {
-    const property = item.property;
-    const value = property.value || {};
-    const linkType = value.link_type_ref || 'relation';
-    if (GENERIC_EXCLUDED_LINK_TYPES.has(linkType)) continue;
-    if (!isLinkTypeVisible(linkType)) continue;
-    if (ws.view.ruleset_ref !== 'ALL' && property.ruleset_ref !== ws.view.ruleset_ref) continue;
-
-    const parentEntity = entityForCanonicalRef(value.parent_ref);
-    const childEntity = entityForCanonicalRef(value.child_ref);
-    if (!parentEntity || !childEntity) continue;
-
-    const key = `${parentEntity.id}\u0000${childEntity.id}\u0000${linkType}`;
-    if (!grouped.has(key)) grouped.set(key, item);
-  }
-  return [...grouped.values()];
-}
-
-activeLinkProperties = projectedGenericLinkProperties;
-
-visibleEntityIds = function visibleEntityIds() {
-  if (ws.view.ruleset_ref === 'ALL') return new Set(ws.entities.map(entity => entity.id));
-  const selectedRuleset = rulesetMap().get(ws.view.ruleset_ref);
-  if (GENERIC_EXCLUDED_LINK_TYPES.has(selectedRuleset?.link_type_ref)) {
-    return new Set(ws.entities.map(entity => entity.id));
-  }
-
-  const ids = new Set();
-  for (const { property } of activeLinkProperties()) {
-    const parent = entityForCanonicalRef(property.value.parent_ref);
-    const child = entityForCanonicalRef(property.value.child_ref);
-    if (parent) ids.add(parent.id);
-    if (child) ids.add(child.id);
-  }
-  return ids;
-};
-
-function resetEventProjection() {
-  clearCausalProjection();
-  document.querySelectorAll('.event-button.pulse').forEach(button => button.classList.remove('pulse'));
-  status('events reset');
-}
-
-function ensureResetEventsControl() {
-  const showAll = document.querySelector('#showAllProps');
-  if (!showAll || document.querySelector('#resetEvents')) return;
-  const button = document.createElement('button');
-  button.id = 'resetEvents';
-  button.type = 'button';
-  button.className = 'show-all-props-control reset-events-control';
-  button.textContent = 'RESET EVENTS';
-  button.title = 'Clear active Event route, Event highlights and reached Property state';
-  button.addEventListener('click', resetEventProjection);
-  showAll.after(button);
-}
-
-function genericLinkTypes() {
-  const types = new Map();
-  for (const ruleset of ws.rulesets || []) {
-    if (ruleset.property_type_ref !== 'link') continue;
-    const linkType = ruleset.link_type_ref;
-    if (!linkType || GENERIC_EXCLUDED_LINK_TYPES.has(linkType) || types.has(linkType)) continue;
-    types.set(linkType, ruleset);
-  }
-  return [...types.entries()];
-}
-
-function projectionToggle(label, checked, swatch, onChange) {
-  const row = document.createElement('label');
-  row.className = 'projection-toggle';
-  const input = document.createElement('input');
-  input.type = 'checkbox';
-  input.checked = checked;
-  const marker = document.createElement('span');
-  marker.className = 'projection-toggle-marker';
-  if (swatch) marker.style.background = swatch;
-  const text = document.createElement('span');
-  text.textContent = label;
-  input.addEventListener('change', () => onChange(input.checked));
-  row.append(input, marker, text);
-  return row;
-}
-
-function cssColor(rgb) {
-  if (!Array.isArray(rgb) || rgb.length < 3) return '#77879b';
-  return `rgb(${rgb.slice(0, 3).map(value => Math.round(Math.max(0, Math.min(1, value)) * 255)).join(',')})`;
-}
-
-function renderProjectionControls() {
-  const root = document.querySelector('#projectionControls');
-  if (!root) return;
-  const settings = projectionVisibilitySettings();
-  const rulesets = rulesetMap();
-  const colorSpaces = colorSpaceMap();
-
-  root.replaceChildren();
-  const heading = document.createElement('div');
-  heading.className = 'projection-controls-heading';
-  heading.textContent = 'VISIBILITY';
-  root.appendChild(heading);
-
-  for (const [linkType, ruleset] of genericLinkTypes()) {
-    const color = cssColor(colorSpaces.get(ruleset.color_space_ref)?.colors?.flow || colorSpaces.get(ruleset.color_space_ref)?.colors?.base);
-    root.appendChild(projectionToggle(
-      ruleset.name || humanizeCanonicalName(linkType),
-      isLinkTypeVisible(linkType),
-      color,
-      visible => setLinkTypeVisible(linkType, visible),
-    ));
-  }
-
-  const causalColor = cssColor(colorSpaces.get(rulesets.get('RULESET_LINK_EVENT_EFFECT')?.color_space_ref)?.colors?.flow || [1, .48, .30]);
-  root.appendChild(projectionToggle(
-    'Event routes',
-    Boolean(settings.event_routes_visible),
-    causalColor,
-    visible => {
-      settings.event_routes_visible = visible;
-      syncEventRouteVisibility();
-    },
-  ));
-}
-
-function syncEventRouteVisibility() {
-  const visible = Boolean(projectionVisibilitySettings().event_routes_visible);
-  if (typeof causalSvg !== 'undefined') causalSvg.style.display = visible ? '' : 'none';
-}
-
-// Event Rule Editor ---------------------------------------------------------
-// Ruleset semantic_roles are the editor schema. The editor never creates a
-// parallel Event object: every edit writes the same canonical Properties that
-// the server validates and the causal projection reads.
 const eventRuleEditor = { eventRef: null };
 
 function eventRuleEscape(value) {
-  return String(value ?? '')
+  return String(value)
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;');
 }
-
 function eventRuleIndex() {
   const index = new Map();
-  for (const entity of ws.entities || []) {
-    index.set(entity.id, { ref: entity.id, kind: 'entity', type: 'entity', owner: entity, object: entity, label: entity.name || entity.id });
-    for (const property of entity.properties || []) {
-      index.set(property.id, {
-        ref: property.id,
-        kind: 'property',
-        type: property.property_type_ref,
-        owner: entity,
-        object: property,
-        label: propertyDisplayName(property, entity),
-      });
+  for (const entity of assertWorkspace().entities) {
+    index.set(entity.id, { ref: entity.id, kind: 'entity', type: 'entity', owner: entity, object: entity, label: entity.name });
+    for (const property of entity.properties) {
+      index.set(property.id, { ref: property.id, kind: 'property', type: property.property_type_ref, owner: entity, object: property, label: propertyDisplayName(property, entity) });
     }
   }
   return index;
 }
-
 function eventRuleLinks() {
-  return (ws.entities || []).flatMap(owner => (owner.properties || [])
+  return assertWorkspace().entities.flatMap(owner => owner.properties
     .filter(property => property.property_type_ref === 'link')
-    .map(property => ({ owner, property, value: property.value || {} })));
+    .map(property => ({ owner, property, value: property.value })));
 }
-
 function eventRuleRulesets(role) {
-  return (ws.rulesets || []).filter(ruleset => {
+  return assertWorkspace().rulesets.filter(ruleset => {
     if (ruleset.property_type_ref !== 'link') return false;
-    const roles = ruleset.semantic_roles || {};
+    const roles = ruleset.semantic_roles;
+    if (!roles) throw new Error(`Link Ruleset ${ruleset.id} has no semantic_roles`);
     return roles.parent_ref === role || roles.child_ref === role;
   });
 }
-
 function eventRuleEndpointField(ruleset, role) {
-  const roles = ruleset.semantic_roles || {};
+  const roles = ruleset.semantic_roles;
   if (roles.parent_ref === role) return 'parent_ref';
   if (roles.child_ref === role) return 'child_ref';
-  return null;
+  throw new Error(`Ruleset ${ruleset.id} does not contain semantic role ${role}`);
 }
-
 function eventRuleOtherField(field) {
-  return field === 'parent_ref' ? 'child_ref' : 'parent_ref';
+  if (field === 'parent_ref') return 'child_ref';
+  if (field === 'child_ref') return 'parent_ref';
+  throw new Error(`invalid endpoint field: ${field}`);
 }
-
 function eventRuleOtherRole(ruleset, role) {
   const endpoint = eventRuleEndpointField(ruleset, role);
-  return endpoint ? ruleset.semantic_roles?.[eventRuleOtherField(endpoint)] : null;
+  return ruleset.semantic_roles[eventRuleOtherField(endpoint)];
 }
-
 function eventRuleSubjectLinks(ruleset, role, subjectRef) {
   const endpoint = eventRuleEndpointField(ruleset, role);
-  if (!endpoint) return [];
   return eventRuleLinks().filter(({ property, value }) => property.ruleset_ref === ruleset.id && value[endpoint] === subjectRef);
 }
-
 function eventRulePropertyRecord(ref, type) {
   const item = eventRuleIndex().get(ref);
   if (!item || item.kind !== 'property' || item.type !== type) return null;
   return { owner: item.owner, property: item.object };
 }
-
-function eventRuleEventRulesets() {
-  return eventRuleRulesets('event');
-}
-
+function eventRuleEventRulesets() { return eventRuleRulesets('event'); }
 function eventRuleEffectLinkRulesets() {
-  return eventRuleEventRulesets().filter(ruleset =>
-    ruleset.semantic_roles?.parent_ref === 'event' && ruleset.semantic_roles?.child_ref === 'effect');
+  return eventRuleEventRulesets().filter(ruleset => ruleset.semantic_roles.parent_ref === 'event' && ruleset.semantic_roles.child_ref === 'effect');
 }
-
 function eventRuleEffectTargetRulesets() {
-  return eventRuleRulesets('effect').filter(ruleset =>
-    ruleset.semantic_roles?.parent_ref !== 'event' && ruleset.semantic_roles?.child_ref !== 'event');
+  return eventRuleRulesets('effect').filter(ruleset => ruleset.semantic_roles.parent_ref !== 'event' && ruleset.semantic_roles.child_ref !== 'event');
 }
-
 function eventRuleCandidates(ruleset, role, subjectRef) {
   const index = eventRuleIndex();
   const endpoint = eventRuleEndpointField(ruleset, role);
   const other = eventRuleOtherField(endpoint);
   const targetRole = eventRuleOtherRole(ruleset, role);
   const used = new Set(eventRuleSubjectLinks(ruleset, role, subjectRef).map(({ value }) => value[other]));
-  let candidates = [...index.values()].filter(item =>
-    item.ref !== subjectRef && !(item.kind === 'property' && item.type === 'link') && !used.has(item.ref));
+  let candidates = [...index.values()].filter(item => item.ref !== subjectRef && !(item.kind === 'property' && item.type === 'link') && !used.has(item.ref));
   if (targetRole === 'event') candidates = candidates.filter(item => item.kind === 'property' && item.type === 'event');
   if (targetRole === 'effect') candidates = candidates.filter(item => item.kind === 'property' && item.type === 'effect');
-  candidates.sort((left, right) =>
-    (left.owner.name || left.owner.id).localeCompare(right.owner.name || right.owner.id) || left.label.localeCompare(right.label));
+  candidates.sort((left, right) => left.owner.name.localeCompare(right.owner.name) || left.label.localeCompare(right.label));
   return candidates;
 }
-
 function eventRuleTargetHtml(ref) {
   const item = eventRuleIndex().get(ref);
-  if (!item) return `<code>${eventRuleEscape(ref)}</code>`;
-  const prefix = item.kind === 'entity' ? '' : `${eventRuleEscape(item.owner.name || item.owner.id)} › `;
+  if (!item) throw new Error(`canonical target unresolved: ${ref}`);
+  const prefix = item.kind === 'entity' ? '' : `${eventRuleEscape(item.owner.name)} › `;
   const type = item.kind === 'entity' ? 'ENTITY' : String(item.type).toUpperCase();
   return `<span class="event-rule-target"><strong>${prefix}${eventRuleEscape(item.label)}</strong><small>${eventRuleEscape(type)}</small></span>`;
 }
-
 function eventRuleOptions(ruleset, role, subjectRef) {
   return ['<option value="">Select canonical target…</option>', ...eventRuleCandidates(ruleset, role, subjectRef).map(item => {
-    const prefix = item.kind === 'entity' ? '' : `${item.owner.name || item.owner.id} › `;
+    const prefix = item.kind === 'entity' ? '' : `${item.owner.name} › `;
     const type = item.kind === 'entity' ? 'ENTITY' : String(item.type).toUpperCase();
     return `<option value="${eventRuleEscape(item.ref)}">${eventRuleEscape(prefix + item.label)} [${eventRuleEscape(type)}]</option>`;
   })].join('');
 }
-
 function eventRuleRelationHtml(entry, ruleset, role) {
-  const endpoint = eventRuleEndpointField(ruleset, role);
-  const targetRef = entry.value[eventRuleOtherField(endpoint)];
-  const parameters = eventRuleEscape(JSON.stringify(entry.value.properties || {}, null, 2));
+  const targetRef = entry.value[eventRuleOtherField(eventRuleEndpointField(ruleset, role))];
+  const parameters = eventRuleEscape(JSON.stringify(entry.value.properties, null, 2));
   return `<div class="event-rule-relation">
     <div class="event-rule-relation-main">${eventRuleTargetHtml(targetRef)}<button class="event-rule-remove" data-event-rule-remove="${eventRuleEscape(entry.property.id)}">×</button></div>
     <details><summary>parameters</summary><textarea data-event-rule-parameters="${eventRuleEscape(entry.property.id)}">${parameters}</textarea><button data-event-rule-apply-parameters="${eventRuleEscape(entry.property.id)}">Apply</button></details>
   </div>`;
 }
-
 function eventRuleGroupHtml(ruleset, role, subjectRef) {
   const relations = eventRuleSubjectLinks(ruleset, role, subjectRef);
   return `<section class="event-rule-group">
-    <header><span>${eventRuleEscape(ruleset.name || ruleset.id)}</span><b>${relations.length}</b></header>
+    <header><span>${eventRuleEscape(ruleset.name)}</span><b>${relations.length}</b></header>
     ${relations.length ? relations.map(entry => eventRuleRelationHtml(entry, ruleset, role)).join('') : '<div class="event-rule-empty">No contract yet</div>'}
     <div class="event-rule-add"><select data-event-rule-select="${eventRuleEscape(ruleset.id)}" data-role="${role}" data-subject="${eventRuleEscape(subjectRef)}">${eventRuleOptions(ruleset, role, subjectRef)}</select><button data-event-rule-add="${eventRuleEscape(ruleset.id)}" data-role="${role}" data-subject="${eventRuleEscape(subjectRef)}">+</button></div>
   </section>`;
 }
-
 function eventRuleSummary(eventRef) {
   const incoming = eventRuleEventRulesets().filter(ruleset => eventRuleEndpointField(ruleset, 'event') === 'child_ref')
     .reduce((count, ruleset) => count + eventRuleSubjectLinks(ruleset, 'event', eventRef).length, 0);
-  const effects = eventRuleEffectLinkRulesets()
-    .reduce((count, ruleset) => count + eventRuleSubjectLinks(ruleset, 'event', eventRef).length, 0);
-  const outgoing = eventRuleEventRulesets().filter(ruleset =>
-    eventRuleEndpointField(ruleset, 'event') === 'parent_ref' && eventRuleOtherRole(ruleset, 'event') !== 'effect')
+  const effects = eventRuleEffectLinkRulesets().reduce((count, ruleset) => count + eventRuleSubjectLinks(ruleset, 'event', eventRef).length, 0);
+  const outgoing = eventRuleEventRulesets().filter(ruleset => eventRuleEndpointField(ruleset, 'event') === 'parent_ref' && eventRuleOtherRole(ruleset, 'event') !== 'effect')
     .reduce((count, ruleset) => count + eventRuleSubjectLinks(ruleset, 'event', eventRef).length, 0);
   return { incoming, effects, outgoing };
 }
-
 function eventRuleEffectHtml(entry, ruleset) {
-  const eventField = eventRuleEndpointField(ruleset, 'event');
-  const effectRef = entry.value[eventRuleOtherField(eventField)];
+  const effectRef = entry.value[eventRuleOtherField(eventRuleEndpointField(ruleset, 'event'))];
   const record = eventRulePropertyRecord(effectRef, 'effect');
-  if (!record) return '';
+  if (!record) throw new Error(`Effect unresolved: ${effectRef}`);
   const property = record.property;
   return `<article class="event-rule-effect">
     <header><span><strong>${eventRuleEscape(propertyDisplayName(property, record.owner))}</strong><code>${eventRuleEscape(property.id)}</code></span><button class="event-rule-remove" data-event-rule-remove="${eventRuleEscape(entry.property.id)}">×</button></header>
-    <div class="event-rule-effect-fields"><label>Name<input data-event-rule-effect-name="${eventRuleEscape(property.id)}" value="${eventRuleEscape(property.name || '')}"></label><label>Type<input data-event-rule-effect-type="${eventRuleEscape(property.id)}" value="${eventRuleEscape(property.value?.effect_type_ref || '')}"></label></div>
-    <div class="event-rule-effect-targets">${eventRuleEffectTargetRulesets().map(targetRuleset => eventRuleGroupHtml(targetRuleset, 'effect', property.id)).join('') || '<div class="event-rule-empty">No Effect target Ruleset</div>'}</div>
+    <div class="event-rule-effect-fields"><label>Name<input data-event-rule-effect-name="${eventRuleEscape(property.id)}" value="${eventRuleEscape(property.name ?? '')}"></label><label>Type<input data-event-rule-effect-type="${eventRuleEscape(property.id)}" value="${eventRuleEscape(property.value.effect_type_ref)}"></label></div>
+    <div class="event-rule-effect-targets">${eventRuleEffectTargetRulesets().map(targetRuleset => eventRuleGroupHtml(targetRuleset, 'effect', property.id)).join('')}</div>
   </article>`;
 }
-
 function eventRuleEffectComposer(eventRef) {
   const rulesets = eventRuleEffectLinkRulesets();
-  if (!rulesets.length) return '<div class="event-rule-empty">No Event → Effect Ruleset</div>';
+  if (rulesets.length !== 1) throw new Error(`Event editor requires exactly one Event → Effect Ruleset, found ${rulesets.length}`);
   const ruleset = rulesets[0];
   const existing = eventRuleCandidates(ruleset, 'event', eventRef).filter(item => item.kind === 'property' && item.type === 'effect');
   return `<div class="event-rule-composer">
-    <small>Link existing Effect</small><div class="event-rule-add"><select id="eventRuleExistingEffect"><option value="">Select Effect…</option>${existing.map(item => `<option value="${eventRuleEscape(item.ref)}">${eventRuleEscape(item.owner.name || item.owner.id)} › ${eventRuleEscape(item.label)}</option>`).join('')}</select><button data-event-rule-link-effect="${eventRuleEscape(ruleset.id)}">+</button></div>
+    <small>Link existing Effect</small><div class="event-rule-add"><select id="eventRuleExistingEffect"><option value="">Select Effect…</option>${existing.map(item => `<option value="${eventRuleEscape(item.ref)}">${eventRuleEscape(item.owner.name)} › ${eventRuleEscape(item.label)}</option>`).join('')}</select><button data-event-rule-link-effect="${eventRuleEscape(ruleset.id)}">+</button></div>
     <small>Create Effect</small><div class="event-rule-new-effect"><input id="eventRuleNewEffectName" placeholder="Name"><input id="eventRuleNewEffectType" placeholder="Effect type"><button data-event-rule-create-effect="${eventRuleEscape(ruleset.id)}">Create + link</button></div>
   </div>`;
 }
@@ -345,11 +148,10 @@ function ensureEventRuleStyles() {
   `;
   document.head.appendChild(style);
 }
-
 function ensureEventRuleSection() {
   if (document.querySelector('#eventRuleSection')) return;
   const relations = document.querySelector('.entity-info-section[data-info-section="relations"]');
-  if (!relations) return;
+  if (!relations) throw new Error('relations section missing');
   const section = document.createElement('section');
   section.id = 'eventRuleSection';
   section.className = 'entity-info-section';
@@ -365,27 +167,21 @@ function ensureEventRuleSection() {
     if (entity) setInfoSectionCollapsed(entity.id, 'event-rules', collapsed);
   });
 }
-
 function renderEventRuleSection() {
-  ensureEventRuleSection();
   const section = document.querySelector('#eventRuleSection');
   const list = document.querySelector('#eventRuleList');
-  if (!section || !list) return;
+  if (!section || !list || !ws) return;
   const entity = selectedEntityForEditor();
-  if (!entity) {
-    list.innerHTML = '<div class="event-rule-empty">Select one Entity</div>';
-    return;
-  }
+  if (!entity) { list.innerHTML = '<div class="event-rule-empty">Select one Entity</div>'; return; }
   const collapsed = infoSectionCollapsed(entity.id, 'event-rules');
   section.classList.toggle('collapsed', collapsed);
-  section.querySelector('.entity-info-heading')?.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-  const events = (entity.properties || []).filter(property => property.property_type_ref === 'event');
+  section.querySelector('.entity-info-heading').setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  const events = entity.properties.filter(property => property.property_type_ref === 'event');
   list.innerHTML = events.length ? events.map(property => {
     const summary = eventRuleSummary(property.id);
     return `<button class="event-rule-list-button" data-event-rule-open="${eventRuleEscape(property.id)}"><span><strong>${eventRuleEscape(propertyDisplayName(property, entity))}</strong><code>${eventRuleEscape(property.id)}</code></span><small>${summary.incoming} in · ${summary.effects} effects · ${summary.outgoing} out</small><b>EDIT</b></button>`;
   }).join('') : '<div class="event-rule-empty">No Event Properties</div>';
 }
-
 function ensureEventRuleModal() {
   if (document.querySelector('#eventRuleEditor')) return;
   const modal = document.createElement('div');
@@ -393,139 +189,94 @@ function ensureEventRuleModal() {
   modal.hidden = true;
   document.body.appendChild(modal);
 }
-
 function renderEventRuleModal() {
-  ensureEventRuleModal();
-  const modal = document.querySelector('#eventRuleEditor');
+  const modal = $('#eventRuleEditor');
   const record = eventRulePropertyRecord(eventRuleEditor.eventRef, 'event');
-  if (!modal || !record) {
-    closeEventRuleEditor();
-    return;
-  }
+  if (!record) throw new Error(`Event unresolved: ${eventRuleEditor.eventRef}`);
   const property = record.property;
   const summary = eventRuleSummary(property.id);
   const incomingRulesets = eventRuleEventRulesets().filter(ruleset => eventRuleEndpointField(ruleset, 'event') === 'child_ref');
-  const outgoingRulesets = eventRuleEventRulesets().filter(ruleset =>
-    eventRuleEndpointField(ruleset, 'event') === 'parent_ref' && eventRuleOtherRole(ruleset, 'event') !== 'effect');
-  const effects = eventRuleEffectLinkRulesets().flatMap(ruleset =>
-    eventRuleSubjectLinks(ruleset, 'event', property.id).map(entry => ({ ruleset, entry })));
-
+  const outgoingRulesets = eventRuleEventRulesets().filter(ruleset => eventRuleEndpointField(ruleset, 'event') === 'parent_ref' && eventRuleOtherRole(ruleset, 'event') !== 'effect');
+  const effects = eventRuleEffectLinkRulesets().flatMap(ruleset => eventRuleSubjectLinks(ruleset, 'event', property.id).map(entry => ({ ruleset, entry })));
   modal.innerHTML = `<div class="event-rule-shell">
     <header class="event-rule-head"><div><span class="event-rule-kicker">EVENT RULE EDITOR</span><h2>${eventRuleEscape(propertyDisplayName(property, record.owner))}</h2><code>${eventRuleEscape(property.id)}</code></div><div class="event-rule-counts"><span>${summary.incoming} IN</span><span>${summary.effects} EFFECTS</span><span>${summary.outgoing} OUT</span></div><div class="event-rule-actions"><button data-event-rule-fire="${eventRuleEscape(property.id)}">▶ Fire</button><button data-event-rule-close>Close</button></div></header>
     <div class="event-rule-flow">
-      <section class="event-rule-column"><div class="event-rule-title"><b>IN</b><span>What may reach or qualify this Event</span></div>${incomingRulesets.map(ruleset => eventRuleGroupHtml(ruleset, 'event', property.id)).join('') || '<div class="event-rule-empty">No incoming Event Rulesets</div>'}</section>
-      <section class="event-rule-column core"><div class="event-rule-title"><b>EVENT</b><span>Canonical Event Property</span></div><div class="event-rule-core"><label>Name<input data-event-rule-event-name value="${eventRuleEscape(property.name || '')}" placeholder="${eventRuleEscape(propertyDisplayName(property, record.owner))}"></label><label>Type<input data-event-rule-event-type value="${eventRuleEscape(property.value?.event_type_ref || '')}"></label><small>owner <code>${eventRuleEscape(record.owner.id)}</code></small></div><div class="event-rule-effects-heading"><span>EFFECTS</span><b>${effects.length}</b></div>${effects.length ? effects.map(({ entry, ruleset }) => eventRuleEffectHtml(entry, ruleset)).join('') : '<div class="event-rule-empty">No Effect contract yet</div>'}${eventRuleEffectComposer(property.id)}</section>
-      <section class="event-rule-column"><div class="event-rule-title"><b>OUT</b><span>What this Event exposes directly</span></div>${outgoingRulesets.map(ruleset => eventRuleGroupHtml(ruleset, 'event', property.id)).join('') || '<div class="event-rule-empty">No direct outgoing Event Rulesets</div>'}</section>
+      <section class="event-rule-column"><div class="event-rule-title"><b>IN</b><span>What may reach or qualify this Event</span></div>${incomingRulesets.map(ruleset => eventRuleGroupHtml(ruleset, 'event', property.id)).join('')}</section>
+      <section class="event-rule-column core"><div class="event-rule-title"><b>EVENT</b><span>Canonical Event Property</span></div><div class="event-rule-core"><label>Name<input data-event-rule-event-name value="${eventRuleEscape(property.name ?? '')}" placeholder="${eventRuleEscape(propertyDisplayName(property, record.owner))}"></label><label>Type<input data-event-rule-event-type value="${eventRuleEscape(property.value.event_type_ref)}"></label><small>owner <code>${eventRuleEscape(record.owner.id)}</code></small></div><div class="event-rule-effects-heading"><span>EFFECTS</span><b>${effects.length}</b></div>${effects.length ? effects.map(({ entry, ruleset }) => eventRuleEffectHtml(entry, ruleset)).join('') : '<div class="event-rule-empty">No Effect contract yet</div>'}${eventRuleEffectComposer(property.id)}</section>
+      <section class="event-rule-column"><div class="event-rule-title"><b>OUT</b><span>What this Event exposes directly</span></div>${outgoingRulesets.map(ruleset => eventRuleGroupHtml(ruleset, 'event', property.id)).join('')}</section>
     </div>
   </div>`;
   modal.hidden = false;
 }
-
 function openEventRuleEditor(eventRef) {
-  if (!eventRulePropertyRecord(eventRef, 'event')) return;
+  if (!eventRulePropertyRecord(eventRef, 'event')) throw new Error(`Event unresolved: ${eventRef}`);
   eventRuleEditor.eventRef = eventRef;
   renderEventRuleModal();
 }
-
 function closeEventRuleEditor() {
   eventRuleEditor.eventRef = null;
-  const modal = document.querySelector('#eventRuleEditor');
-  if (modal) {
-    modal.hidden = true;
-    modal.innerHTML = '';
-  }
+  const modal = $('#eventRuleEditor');
+  modal.hidden = true;
+  modal.innerHTML = '';
 }
-
-function refreshEventRuleEditor(message = '') {
-  if (message) status(message);
+function refreshEventRuleEditor(message) {
+  status(message);
   inspect();
-  renderEventRuleSection();
   if (eventRuleEditor.eventRef) renderEventRuleModal();
 }
-
 function removeEventRuleLink(linkId) {
-  for (const entity of ws.entities || []) {
-    const count = (entity.properties || []).length;
-    entity.properties = (entity.properties || []).filter(property => property.id !== linkId);
-    if (entity.properties.length !== count) {
+  for (const entity of assertWorkspace().entities) {
+    const index = entity.properties.findIndex(property => property.id === linkId);
+    if (index >= 0) {
+      entity.properties.splice(index, 1);
       refreshEventRuleEditor(`removed ${linkId}`);
       return;
     }
   }
+  throw new Error(`Link unresolved: ${linkId}`);
 }
-
 function createEventRuleLink(rulesetId, role, subjectRef, targetRef) {
   const ruleset = rulesetMap().get(rulesetId);
   const subject = eventRuleIndex().get(subjectRef);
-  if (!ruleset || !subject || !targetRef) return;
+  if (!ruleset) throw new Error(`Ruleset unresolved: ${rulesetId}`);
+  if (!subject) throw new Error(`subject unresolved: ${subjectRef}`);
+  if (!eventRuleIndex().has(targetRef)) throw new Error(`target unresolved: ${targetRef}`);
   const subjectField = eventRuleEndpointField(ruleset, role);
-  if (!subjectField) return;
   const targetField = eventRuleOtherField(subjectField);
   const value = { link_type_ref: ruleset.link_type_ref, parent_ref: null, child_ref: null, properties: {} };
   value[subjectField] = subjectRef;
   value[targetField] = targetRef;
-  const duplicate = eventRuleLinks().some(entry =>
-    entry.property.ruleset_ref === ruleset.id && entry.value.parent_ref === value.parent_ref && entry.value.child_ref === value.child_ref);
-  if (duplicate) {
-    status(`${ruleset.name || ruleset.id}: contract already exists`);
-    return;
-  }
-  subject.owner.properties ??= [];
-  subject.owner.properties.push({
-    id: nextId('LINK'),
-    property_type_ref: 'link',
-    ruleset_ref: ruleset.id,
-    status: 'unlocked',
-    value,
-    metadata: { workspace_entity_ref: subject.owner.id },
-  });
-  refreshEventRuleEditor(`created ${ruleset.name || ruleset.id}`);
+  const duplicate = eventRuleLinks().some(entry => entry.property.ruleset_ref === ruleset.id && entry.value.parent_ref === value.parent_ref && entry.value.child_ref === value.child_ref);
+  if (duplicate) { status(`${ruleset.name}: contract already exists`); return; }
+  subject.owner.properties.push({ id: nextId('LINK'), property_type_ref: 'link', ruleset_ref: ruleset.id, status: 'unlocked', value });
+  refreshEventRuleEditor(`created ${ruleset.name}`);
 }
-
 function applyEventRuleParameters(linkId, text) {
   const entry = eventRuleLinks().find(({ property }) => property.id === linkId);
-  if (!entry) return;
-  try {
-    const parameters = text.trim() ? JSON.parse(text) : {};
-    if (!parameters || Array.isArray(parameters) || typeof parameters !== 'object') throw new Error('JSON object required');
-    entry.value.properties = parameters;
-    refreshEventRuleEditor(`updated ${linkId}`);
-  } catch (error) {
-    window.reportStructureError?.(error, { type: 'event_rule_parameters', context: linkId });
-    status(`invalid parameters: ${error.message}`);
-  }
+  if (!entry) throw new Error(`Link unresolved: ${linkId}`);
+  const parameters = text.trim() ? JSON.parse(text) : {};
+  if (!parameters || Array.isArray(parameters) || typeof parameters !== 'object') throw new Error('JSON object required');
+  entry.value.properties = parameters;
+  refreshEventRuleEditor(`updated ${linkId}`);
 }
-
 function createEventRuleEffect(rulesetId) {
   const event = eventRulePropertyRecord(eventRuleEditor.eventRef, 'event');
-  const effectRuleset = (ws.rulesets || []).find(ruleset => ruleset.property_type_ref === 'effect');
+  const effectRulesets = assertWorkspace().rulesets.filter(ruleset => ruleset.property_type_ref === 'effect');
+  if (effectRulesets.length !== 1) throw new Error(`exactly one Effect Ruleset required, found ${effectRulesets.length}`);
   const linkRuleset = rulesetMap().get(rulesetId);
-  const name = document.querySelector('#eventRuleNewEffectName')?.value.trim() || '';
-  const type = document.querySelector('#eventRuleNewEffectType')?.value.trim() || '';
-  if (!event || !effectRuleset || !linkRuleset || !type) {
-    status('Effect type is required');
-    return;
-  }
+  if (!event || !linkRuleset) throw new Error('Event or Event Effect Ruleset unresolved');
+  const name = $('#eventRuleNewEffectName').value.trim();
+  const type = $('#eventRuleNewEffectType').value.trim();
+  if (!type) { status('Effect type is required'); return; }
   const effectId = nextId('EFFECT');
-  const effect = {
-    id: effectId,
-    property_type_ref: 'effect',
-    ruleset_ref: effectRuleset.id,
-    status: 'unlocked',
-    value: { effect_type_ref: type, properties: {} },
-    metadata: { workspace_entity_ref: event.owner.id },
-  };
+  const effect = { id: effectId, property_type_ref: 'effect', ruleset_ref: effectRulesets[0].id, status: 'unlocked', value: { effect_type_ref: type, properties: {} } };
   if (name) effect.name = name;
   event.owner.properties.push(effect);
-
   const eventField = eventRuleEndpointField(linkRuleset, 'event');
   const linkValue = { link_type_ref: linkRuleset.link_type_ref, parent_ref: null, child_ref: null, properties: {} };
   linkValue[eventField] = eventRuleEditor.eventRef;
   linkValue[eventRuleOtherField(eventField)] = effectId;
-  event.owner.properties.push({
-    id: nextId('LINK'), property_type_ref: 'link', ruleset_ref: linkRuleset.id, status: 'unlocked',
-    value: linkValue, metadata: { workspace_entity_ref: event.owner.id },
-  });
+  event.owner.properties.push({ id: nextId('LINK'), property_type_ref: 'link', ruleset_ref: linkRuleset.id, status: 'unlocked', value: linkValue });
   refreshEventRuleEditor(`created Effect ${name || effectId}`);
 }
 
@@ -534,95 +285,61 @@ function bindEventRuleEditor() {
     const open = event.target.closest?.('[data-event-rule-open]');
     if (open) { openEventRuleEditor(open.dataset.eventRuleOpen); return; }
     if (event.target.closest?.('[data-event-rule-close]')) { closeEventRuleEditor(); return; }
-
     const remove = event.target.closest?.('[data-event-rule-remove]');
     if (remove) { removeEventRuleLink(remove.dataset.eventRuleRemove); return; }
-
     const add = event.target.closest?.('[data-event-rule-add]');
     if (add) {
       const selector = `select[data-event-rule-select="${CSS.escape(add.dataset.eventRuleAdd)}"][data-role="${CSS.escape(add.dataset.role)}"][data-subject="${CSS.escape(add.dataset.subject)}"]`;
-      const targetRef = document.querySelector(selector)?.value || '';
+      const targetRef = document.querySelector(selector).value;
       if (targetRef) createEventRuleLink(add.dataset.eventRuleAdd, add.dataset.role, add.dataset.subject, targetRef);
       return;
     }
-
     const apply = event.target.closest?.('[data-event-rule-apply-parameters]');
-    if (apply) {
-      const linkId = apply.dataset.eventRuleApplyParameters;
-      const textarea = document.querySelector(`textarea[data-event-rule-parameters="${CSS.escape(linkId)}"]`);
-      if (textarea) applyEventRuleParameters(linkId, textarea.value);
-      return;
-    }
-
+    if (apply) { applyEventRuleParameters(apply.dataset.eventRuleApplyParameters, document.querySelector(`textarea[data-event-rule-parameters="${CSS.escape(apply.dataset.eventRuleApplyParameters)}"]`).value); return; }
     const linkEffect = event.target.closest?.('[data-event-rule-link-effect]');
-    if (linkEffect) {
-      const targetRef = document.querySelector('#eventRuleExistingEffect')?.value || '';
-      if (targetRef) createEventRuleLink(linkEffect.dataset.eventRuleLinkEffect, 'event', eventRuleEditor.eventRef, targetRef);
-      return;
-    }
-
+    if (linkEffect) { const targetRef = $('#eventRuleExistingEffect').value; if (targetRef) createEventRuleLink(linkEffect.dataset.eventRuleLinkEffect, 'event', eventRuleEditor.eventRef, targetRef); return; }
     const createEffect = event.target.closest?.('[data-event-rule-create-effect]');
     if (createEffect) { createEventRuleEffect(createEffect.dataset.eventRuleCreateEffect); return; }
-
     const fire = event.target.closest?.('[data-event-rule-fire]');
     if (fire) { triggerCausalProjection(fire.dataset.eventRuleFire); return; }
-
     const modal = document.querySelector('#eventRuleEditor');
     if (modal && event.target === modal) closeEventRuleEditor();
   });
-
   document.addEventListener('change', event => {
+    if (!eventRuleEditor.eventRef) return;
     const eventRecord = eventRulePropertyRecord(eventRuleEditor.eventRef, 'event');
-    if (event.target.matches?.('[data-event-rule-event-name]') && eventRecord) {
+    if (!eventRecord) throw new Error(`Event unresolved: ${eventRuleEditor.eventRef}`);
+    if (event.target.matches?.('[data-event-rule-event-name]')) {
       const value = event.target.value.trim();
-      if (value) eventRecord.property.name = value;
-      else delete eventRecord.property.name;
-      renderEventRuleSection();
-      renderEventRuleModal();
-      return;
+      if (value) eventRecord.property.name = value; else delete eventRecord.property.name;
+      renderEventRuleSection(); renderEventRuleModal(); return;
     }
-    if (event.target.matches?.('[data-event-rule-event-type]') && eventRecord) {
+    if (event.target.matches?.('[data-event-rule-event-type]')) {
       const value = event.target.value.trim();
       if (!value) { status('Event type is required'); renderEventRuleModal(); return; }
-      eventRecord.property.value.event_type_ref = value;
-      renderEventRuleModal();
-      return;
+      eventRecord.property.value.event_type_ref = value; renderEventRuleModal(); return;
     }
-
     const effectName = event.target.closest?.('[data-event-rule-effect-name]');
     if (effectName) {
       const record = eventRulePropertyRecord(effectName.dataset.eventRuleEffectName, 'effect');
-      if (record) {
-        const value = effectName.value.trim();
-        if (value) record.property.name = value;
-        else delete record.property.name;
-        renderEventRuleModal();
-      }
-      return;
+      if (!record) throw new Error(`Effect unresolved: ${effectName.dataset.eventRuleEffectName}`);
+      const value = effectName.value.trim();
+      if (value) record.property.name = value; else delete record.property.name;
+      renderEventRuleModal(); return;
     }
-
     const effectType = event.target.closest?.('[data-event-rule-effect-type]');
     if (effectType) {
       const record = eventRulePropertyRecord(effectType.dataset.eventRuleEffectType, 'effect');
+      if (!record) throw new Error(`Effect unresolved: ${effectType.dataset.eventRuleEffectType}`);
       const value = effectType.value.trim();
-      if (record && value) { record.property.value.effect_type_ref = value; renderEventRuleModal(); }
-      else if (record) { status('Effect type is required'); renderEventRuleModal(); }
+      if (!value) { status('Effect type is required'); renderEventRuleModal(); return; }
+      record.property.value.effect_type_ref = value; renderEventRuleModal();
     }
   });
-
-  window.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && eventRuleEditor.eventRef) closeEventRuleEditor();
-  });
-
-  const selection = document.querySelector('#selection');
-  if (selection) new MutationObserver(renderEventRuleSection).observe(selection, { childList: true, subtree: true, characterData: true });
+  window.addEventListener('keydown', event => { if (event.key === 'Escape' && eventRuleEditor.eventRef) closeEventRuleEditor(); });
 }
 
-ensureResetEventsControl();
-renderProjectionControls();
-syncEventRouteVisibility();
 ensureEventRuleStyles();
 ensureEventRuleSection();
 ensureEventRuleModal();
 bindEventRuleEditor();
-renderEventRuleSection();

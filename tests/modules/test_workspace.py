@@ -5,86 +5,58 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from server.workspace import DEFAULT_WORKSPACE, WorkspaceStore
+from server.workspace import DEFAULT_WORKSPACE, WORKSPACE_VERSION, WorkspaceStore
 
 
 class WorkspaceTests(unittest.TestCase):
-    def test_default_workspace_camera_contract(self):
-        camera = DEFAULT_WORKSPACE["settings"]["camera_defaults"]
-        self.assertEqual(camera["fov"], 60.0)
-        self.assertEqual(camera["wheel_zoom_speed"], 0.15)
-        self.assertEqual(camera["drag_pan_speed"], 0.01)
-        self.assertEqual(camera["near_clip"], 0.05)
-        self.assertEqual(camera["far_clip"], 1000.0)
-
     def test_workspace_round_trip(self):
         with tempfile.TemporaryDirectory() as directory:
             store = WorkspaceStore(str(Path(directory) / "workspace.json"))
             workspace = copy.deepcopy(DEFAULT_WORKSPACE)
-            workspace["entities"].append(
-                {
-                    "id": "ENTITY_A",
-                    "name": "A",
-                    "entity_type_ref": "entity",
-                    "status": "unlocked",
-                    "position": [1, 2, 3],
-                    "properties": [],
-                }
-            )
-
+            workspace["entities"].append({"id": "ENTITY_A", "name": "A", "position": [1, 2, 3], "properties": []})
             saved = store.save(workspace)
-            loaded = store.load()
+            self.assertEqual(saved, store.load())
 
-            self.assertEqual(saved, loaded)
-            self.assertEqual(loaded["entities"][0]["position"], [1.0, 2.0, 3.0])
+    def test_only_name_is_required_semantic_authoring_fact(self):
+        workspace = copy.deepcopy(DEFAULT_WORKSPACE)
+        workspace["entities"] = [{"id": "ENTITY_A", "name": "A", "position": [0, 0, 0], "properties": []}]
+        WorkspaceStore("unused")._validate(workspace)
 
-    def test_workspace_rejects_fov_outside_contract(self):
-        for fov in (14.99, 170.01):
-            with self.subTest(fov=fov), tempfile.TemporaryDirectory() as directory:
-                store = WorkspaceStore(str(Path(directory) / "workspace.json"))
-                workspace = copy.deepcopy(DEFAULT_WORKSPACE)
-                workspace["camera"]["fov"] = fov
+    def test_legacy_entity_type_field_fails_loudly(self):
+        workspace = copy.deepcopy(DEFAULT_WORKSPACE)
+        workspace["entities"] = [{"id": "ENTITY_A", "name": "A", "entity_type_ref": "service", "position": [0, 0, 0], "properties": []}]
+        with self.assertRaisesRegex(ValueError, "removed legacy field entity_type_ref"):
+            WorkspaceStore("unused")._validate(workspace)
 
-                with self.assertRaisesRegex(ValueError, "15..170"):
-                    store.save(workspace)
+    def test_old_workspace_version_is_not_migrated(self):
+        workspace = copy.deepcopy(DEFAULT_WORKSPACE)
+        workspace["version"] = "0.2.0"
+        with self.assertRaisesRegex(ValueError, f"exactly {WORKSPACE_VERSION}"):
+            WorkspaceStore("unused")._validate(workspace)
 
-    def test_workspace_accepts_link_and_event_properties(self):
+    def test_removed_top_level_view_fails_loudly(self):
+        workspace = copy.deepcopy(DEFAULT_WORKSPACE)
+        workspace["view"] = {"ruleset_ref": "ALL"}
+        with self.assertRaisesRegex(ValueError, "workspace.view is removed"):
+            WorkspaceStore("unused")._validate(workspace)
+
+    def test_missing_workspace_file_is_not_replaced_by_starter(self):
         with tempfile.TemporaryDirectory() as directory:
             store = WorkspaceStore(str(Path(directory) / "workspace.json"))
-            workspace = copy.deepcopy(DEFAULT_WORKSPACE)
-            workspace["entities"] = [
-                {
-                    "id": "PARENT",
-                    "position": [0, 0, 0],
-                    "properties": [],
-                },
-                {
-                    "id": "CHILD",
-                    "position": [1, 0, 0],
-                    "properties": [
-                        {
-                            "id": "LINK_0001",
-                            "property_type_ref": "link",
-                            "ruleset_ref": "RULESET_LINK_DEPENDENCY",
-                            "value": {
-                                "link_type_ref": "dependency",
-                                "parent_ref": "PARENT",
-                                "child_ref": "CHILD",
-                                "properties": {},
-                            },
-                        },
-                        {
-                            "id": "EVENT_0001",
-                            "property_type_ref": "event",
-                            "ruleset_ref": "RULESET_EVENT",
-                            "value": {"event_type_ref": "changed", "properties": {}},
-                        },
-                    ],
-                },
-            ]
+            with self.assertRaises(FileNotFoundError):
+                store.load()
 
-            validated = store.save(workspace)
-            self.assertEqual(len(validated["entities"][1]["properties"]), 2)
+    def test_missing_settings_do_not_receive_fallbacks(self):
+        workspace = copy.deepcopy(DEFAULT_WORKSPACE)
+        del workspace["settings"]["view_defaults"]
+        with self.assertRaisesRegex(ValueError, "settings.view_defaults"):
+            WorkspaceStore("unused")._validate(workspace)
+
+    def test_active_ruleset_must_resolve(self):
+        workspace = copy.deepcopy(DEFAULT_WORKSPACE)
+        workspace["settings"]["view_defaults"]["ruleset_ref"] = "MISSING"
+        with self.assertRaisesRegex(ValueError, "ruleset_ref does not resolve"):
+            WorkspaceStore("unused")._validate(workspace)
 
 
 if __name__ == "__main__":

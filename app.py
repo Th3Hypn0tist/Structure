@@ -5,31 +5,36 @@ import os
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from server.abstractions import AbstractionLibrary
 from server.test_runner import run_startup_suite
-from server.workspace import WorkspaceStore, starting_workspace
+from server.workspace import WORKSPACE_VERSION, WorkspaceStore, starting_workspace
 
 BASE_DIR = os.path.dirname(__file__)
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 HOST = os.environ.get("STRUCTURE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("STRUCTURE_PORT", "8765"))
 STORE = WorkspaceStore(os.path.join(BASE_DIR, "workspace.json"))
+ABSTRACTIONS = AbstractionLibrary(os.path.join(BASE_DIR, "library", "abstractions"))
 STATIC = {
     "/": ("structure.html", "text/html; charset=utf-8"),
     "/static/app.js": ("app.js", "application/javascript; charset=utf-8"),
     "/static/entity_editor.js": ("entity_editor.js", "application/javascript; charset=utf-8"),
     "/static/causal_projection.js": ("causal_projection.js", "application/javascript; charset=utf-8"),
-    "/static/view_projection.js": ("view_projection.js", "application/javascript; charset=utf-8"),
+    "/static/projection_visibility.js": ("projection_visibility.js", "application/javascript; charset=utf-8"),
+    "/static/event_rule_editor.js": ("event_rule_editor.js", "application/javascript; charset=utf-8"),
+    "/static/abstraction_library.js": ("abstraction_library.js", "application/javascript; charset=utf-8"),
+    "/static/link_projection.js": ("link_projection.js", "application/javascript; charset=utf-8"),
     "/static/style.css": ("style.css", "text/css; charset=utf-8"),
 }
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "Structure/0.2.0"
+    server_version = f"Structure/{WORKSPACE_VERSION}"
 
     def _body(self) -> dict:
         size = int(self.headers.get("Content-Length", "0") or 0)
         if not size:
-            return {}
+            raise ValueError("request body is required")
         payload = json.loads(self.rfile.read(size).decode("utf-8"))
         if not isinstance(payload, dict):
             raise ValueError("JSON body must be an object")
@@ -62,12 +67,19 @@ class Handler(BaseHTTPRequestHandler):
                 filename, content_type = STATIC[path]
                 return self._file(filename, content_type)
             if path == "/api/health":
-                return self._json({"ok": True, "service": "Structure", "version": "0.2.0"})
+                return self._json({"ok": True, "service": "Structure", "version": WORKSPACE_VERSION})
             if path == "/api/workspace":
                 return self._json({"ok": True, "workspace": STORE.load()})
             if path == "/api/starting-scene":
                 return self._json({"ok": True, "workspace": STORE._validate(starting_workspace())})
+            if path == "/api/abstractions":
+                return self._json({"ok": True, "abstractions": ABSTRACTIONS.list()})
+            if path.startswith("/api/abstractions/"):
+                abstraction_id = urllib.parse.unquote(path.removeprefix("/api/abstractions/"))
+                return self._json({"ok": True, "abstraction": ABSTRACTIONS.get(abstraction_id)})
             return self._json({"ok": False, "error": "not_found"}, 404)
+        except FileNotFoundError as exc:
+            return self._json({"ok": False, "error": str(exc)}, 404)
         except Exception as exc:
             return self._json({"ok": False, "error": str(exc)}, 400)
 
@@ -77,7 +89,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/workspace":
                 workspace = STORE.save(self._body())
                 return self._json({"ok": True, "workspace": workspace})
+            if path == "/api/abstractions":
+                abstraction = ABSTRACTIONS.publish(self._body())
+                return self._json({"ok": True, "abstraction": abstraction}, 201)
             return self._json({"ok": False, "error": "not_found"}, 404)
+        except FileExistsError as exc:
+            return self._json({"ok": False, "error": str(exc)}, 409)
         except Exception as exc:
             return self._json({"ok": False, "error": str(exc)}, 400)
 
@@ -87,7 +104,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     run_startup_suite()
-    print(f"Structure 0.2.0 -> http://{HOST}:{PORT}")
+    print(f"Structure {WORKSPACE_VERSION} -> http://{HOST}:{PORT}")
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
 
 

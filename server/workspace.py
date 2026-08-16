@@ -6,21 +6,16 @@ import os
 import tempfile
 from typing import Any
 
-from server.semantics import (
-    DEFAULT_COLOR_SPACES,
-    DEFAULT_RULESETS,
-    validate_color_spaces,
-    validate_properties,
-    validate_rulesets,
-)
+from server.semantics import DEFAULT_COLOR_SPACES, DEFAULT_RULESETS, validate_color_spaces, validate_properties, validate_rulesets
 from server.starting_scene import starting_entities
 
+WORKSPACE_VERSION = "0.3.0"
+
 DEFAULT_WORKSPACE: dict[str, Any] = {
-    "version": "0.2.0",
+    "version": WORKSPACE_VERSION,
     "entities": [],
     "rulesets": copy.deepcopy(DEFAULT_RULESETS),
     "color_spaces": copy.deepcopy(DEFAULT_COLOR_SPACES),
-    "view": {"ruleset_ref": "ALL"},
     "camera": {
         "position": [0.0, 1.5, 16.0],
         "reference": [0.0, 0.0, 0.0],
@@ -49,12 +44,22 @@ DEFAULT_WORKSPACE: dict[str, Any] = {
             "flow_width": 0.18,
         },
         "event_playback": {
-            "base_link_speed": 0.15,
             "active_link_speed": 2.0,
             "effect_travel_duration": 1.2,
-            "next_event_delay": 0.25,
-            "fade_out_duration": 0.4,
-            "global_playback_speed": 1.0,
+        },
+        "view_defaults": {
+            "ruleset_ref": "ALL",
+            "node_master_size": 1.0,
+            "grid_visible": True,
+            "snap_to_grid": True,
+            "grid_size": 1.0,
+            "property_panel_direction": 0.0,
+            "property_panel_size": 1.0,
+            "property_panel_collapsed": {},
+            "show_all_props": False,
+            "entity_info_collapsed": {},
+            "hidden_link_types": {},
+            "event_routes_visible": True,
         },
     },
 }
@@ -66,53 +71,101 @@ def starting_workspace() -> dict[str, Any]:
     return workspace
 
 
-def _default_contract() -> dict[str, Any]:
-    return {
-        "human": "",
-        "human_revision": 0,
-        "machine": {
-            "status": "not_generated",
-            "generated_from_human_revision": None,
-            "data": None,
-        },
-    }
+def _require_object(parent: dict[str, Any], field: str, context: str) -> dict[str, Any]:
+    value = parent.get(field)
+    if not isinstance(value, dict):
+        raise ValueError(f"{context}.{field} must be an object")
+    return value
 
 
-def _validate_entity_authoring(entity: dict[str, Any], entity_id: str) -> None:
-    name = entity.setdefault("name", entity_id)
-    description = entity.setdefault("description", "")
-    if not isinstance(name, str):
-        raise ValueError(f"entity {entity_id} name must be a string")
-    if not isinstance(description, str):
-        raise ValueError(f"entity {entity_id} description must be a string")
+def _require_array(parent: dict[str, Any], field: str, context: str) -> list[Any]:
+    value = parent.get(field)
+    if not isinstance(value, list):
+        raise ValueError(f"{context}.{field} must be an array")
+    return value
 
-    contract = entity.setdefault("contract", _default_contract())
-    if not isinstance(contract, dict):
-        raise ValueError(f"entity {entity_id} contract must be an object")
 
-    human = contract.setdefault("human", "")
-    revision = contract.setdefault("human_revision", 0)
-    machine = contract.setdefault("machine", _default_contract()["machine"])
-    if not isinstance(human, str):
-        raise ValueError(f"entity {entity_id} contract.human must be a string")
-    if not isinstance(revision, int) or revision < 0:
-        raise ValueError(f"entity {entity_id} contract.human_revision must be a non-negative integer")
-    if not isinstance(machine, dict):
-        raise ValueError(f"entity {entity_id} contract.machine must be an object")
+def _require_number(parent: dict[str, Any], field: str, context: str) -> float:
+    value = parent.get(field)
+    if not isinstance(value, (int, float)):
+        raise ValueError(f"{context}.{field} must be numeric")
+    return float(value)
 
-    status = machine.setdefault("status", "not_generated" if not human else "needs_generation")
-    generated_from = machine.setdefault("generated_from_human_revision", None)
-    machine.setdefault("data", None)
-    if status not in {"not_generated", "needs_generation", "synchronized"}:
-        raise ValueError(f"entity {entity_id} contract.machine.status is invalid: {status}")
-    if generated_from is not None and (not isinstance(generated_from, int) or generated_from < 0):
-        raise ValueError(
-            f"entity {entity_id} contract.machine.generated_from_human_revision must be null or non-negative integer"
-        )
-    if status == "synchronized" and generated_from != revision:
-        raise ValueError(
-            f"entity {entity_id} synchronized machine contract must match current human revision"
-        )
+
+def _require_vector(parent: dict[str, Any], field: str, context: str) -> list[float]:
+    value = parent.get(field)
+    if not (isinstance(value, list) and len(value) == 3 and all(isinstance(item, (int, float)) for item in value)):
+        raise ValueError(f"{context}.{field} must be [x,y,z]")
+    return [float(item) for item in value]
+
+
+def _validate_entity(entity: dict[str, Any]) -> None:
+    entity_id = entity.get("id")
+    if not isinstance(entity_id, str) or not entity_id:
+        raise ValueError("each entity requires non-empty id")
+    if "entity_type_ref" in entity:
+        raise ValueError(f"entity {entity_id} uses removed legacy field entity_type_ref; declare TYPE as a Property")
+    name = entity.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError(f"entity {entity_id} requires non-empty name")
+    entity["position"] = _require_vector(entity, "position", f"entity {entity_id}")
+    properties = _require_array(entity, "properties", f"entity {entity_id}")
+    if "description" in entity and not isinstance(entity["description"], str):
+        raise ValueError(f"entity {entity_id}.description must be a string")
+    if "contract" in entity:
+        contract = _require_object(entity, "contract", f"entity {entity_id}")
+        human = contract.get("human")
+        if human is not None and not isinstance(human, str):
+            raise ValueError(f"entity {entity_id}.contract.human must be a string")
+        revision = contract.get("human_revision")
+        if revision is not None and (not isinstance(revision, int) or revision < 0):
+            raise ValueError(f"entity {entity_id}.contract.human_revision must be a non-negative integer")
+        machine = contract.get("machine")
+        if machine is not None:
+            if not isinstance(machine, dict):
+                raise ValueError(f"entity {entity_id}.contract.machine must be an object")
+            status = machine.get("status")
+            if status not in {None, "not_generated", "needs_generation", "synchronized"}:
+                raise ValueError(f"entity {entity_id}.contract.machine.status is invalid: {status}")
+            generated_from = machine.get("generated_from_human_revision")
+            if generated_from is not None and (not isinstance(generated_from, int) or generated_from < 0):
+                raise ValueError(f"entity {entity_id}.contract.machine.generated_from_human_revision must be null or non-negative integer")
+            if status == "synchronized" and generated_from != revision:
+                raise ValueError(f"entity {entity_id} synchronized machine contract must match current human revision")
+    for prop in properties:
+        if not isinstance(prop, dict):
+            raise ValueError(f"entity {entity_id} property must be an object")
+
+
+def _validate_settings(settings: dict[str, Any], ruleset_index: dict[str, dict[str, Any]]) -> None:
+    camera = _require_object(settings, "camera_defaults", "settings")
+    for field in ("position", "reference"):
+        camera[field] = _require_vector(camera, field, "settings.camera_defaults")
+    for field in ("yaw", "pitch", "fov", "movement_speed", "mouse_sensitivity", "wheel_zoom_speed", "drag_pan_speed", "near_clip", "far_clip"):
+        camera[field] = _require_number(camera, field, "settings.camera_defaults")
+    if not 15.0 <= camera["fov"] <= 170.0:
+        raise ValueError("settings.camera_defaults.fov must be within 15..170 degrees")
+
+    links = _require_object(settings, "link_visualization", "settings")
+    for field in ("anchor_spacing", "anchor_offset", "base_flow_speed", "flow_width"):
+        links[field] = _require_number(links, field, "settings.link_visualization")
+
+    event = _require_object(settings, "event_playback", "settings")
+    for field in ("active_link_speed", "effect_travel_duration"):
+        event[field] = _require_number(event, field, "settings.event_playback")
+
+    view = _require_object(settings, "view_defaults", "settings")
+    selected_ruleset = view.get("ruleset_ref")
+    if selected_ruleset != "ALL" and selected_ruleset not in ruleset_index:
+        raise ValueError(f"settings.view_defaults.ruleset_ref does not resolve: {selected_ruleset}")
+    for field in ("node_master_size", "grid_size", "property_panel_direction", "property_panel_size"):
+        view[field] = _require_number(view, field, "settings.view_defaults")
+    for field in ("grid_visible", "snap_to_grid", "show_all_props", "event_routes_visible"):
+        if not isinstance(view.get(field), bool):
+            raise ValueError(f"settings.view_defaults.{field} must be boolean")
+    for field in ("property_panel_collapsed", "entity_info_collapsed", "hidden_link_types"):
+        if not isinstance(view.get(field), dict):
+            raise ValueError(f"settings.view_defaults.{field} must be an object")
 
 
 class WorkspaceStore:
@@ -121,7 +174,7 @@ class WorkspaceStore:
 
     def load(self) -> dict[str, Any]:
         if not os.path.exists(self.path):
-            return self._validate(starting_workspace())
+            raise FileNotFoundError(f"workspace not found: {self.path}")
         with open(self.path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
         return self._validate(data)
@@ -143,77 +196,36 @@ class WorkspaceStore:
     def _validate(self, data: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(data, dict):
             raise ValueError("workspace must be an object")
+        if data.get("version") != WORKSPACE_VERSION:
+            raise ValueError(f"workspace.version must be exactly {WORKSPACE_VERSION}; no legacy migration is performed")
 
-        entities = data.setdefault("entities", [])
-        if not isinstance(entities, list):
-            raise ValueError("workspace.entities must be an array")
+        entities = _require_array(data, "entities", "workspace")
+        rulesets = _require_array(data, "rulesets", "workspace")
+        color_spaces = _require_array(data, "color_spaces", "workspace")
+        camera = _require_object(data, "camera", "workspace")
+        settings = _require_object(data, "settings", "workspace")
+        if "view" in data:
+            raise ValueError("workspace.view is removed; active projection belongs to settings.view_defaults.ruleset_ref")
 
         seen: set[str] = set()
         for entity in entities:
             if not isinstance(entity, dict):
                 raise ValueError("each entity must be an object")
-            entity_id = entity.get("id")
-            if not isinstance(entity_id, str) or not entity_id:
-                raise ValueError("each entity requires non-empty id")
-            if entity_id in seen:
-                raise ValueError(f"duplicate entity id: {entity_id}")
-            seen.add(entity_id)
-
-            entity.setdefault("entity_type_ref", "entity")
-            entity.setdefault("status", "unlocked")
-            _validate_entity_authoring(entity, entity_id)
-
-            position = entity.get("position", [0, 0, 0])
-            if not (
-                isinstance(position, list)
-                and len(position) == 3
-                and all(isinstance(value, (int, float)) for value in position)
-            ):
-                raise ValueError(f"entity {entity_id} position must be [x,y,z]")
-            entity["position"] = [float(value) for value in position]
-            entity.setdefault("properties", [])
-            if not isinstance(entity["properties"], list):
-                raise ValueError(f"entity {entity_id} properties must be an array")
-
-        color_spaces = data.setdefault("color_spaces", copy.deepcopy(DEFAULT_COLOR_SPACES))
-        rulesets = data.setdefault("rulesets", copy.deepcopy(DEFAULT_RULESETS))
-        if not isinstance(color_spaces, list) or not isinstance(rulesets, list):
-            raise ValueError("workspace rulesets and color_spaces must be arrays")
+            _validate_entity(entity)
+            if entity["id"] in seen:
+                raise ValueError(f"duplicate entity id: {entity['id']}")
+            seen.add(entity["id"])
 
         color_index = validate_color_spaces(color_spaces)
         ruleset_index = validate_rulesets(rulesets, color_index)
         validate_properties(entities, ruleset_index)
 
-        view = data.setdefault("view", {"ruleset_ref": "ALL"})
-        selected_ruleset = view.get("ruleset_ref", "ALL")
-        if selected_ruleset != "ALL" and selected_ruleset not in ruleset_index:
-            raise ValueError(f"view.ruleset_ref does not resolve: {selected_ruleset}")
-
-        camera = data.setdefault("camera", copy.deepcopy(DEFAULT_WORKSPACE["camera"]))
-        fov = float(camera.get("fov", 60.0))
-        if not 15.0 <= fov <= 170.0:
+        camera["position"] = _require_vector(camera, "position", "camera")
+        camera["reference"] = _require_vector(camera, "reference", "camera")
+        for field in ("yaw", "pitch", "fov"):
+            camera[field] = _require_number(camera, field, "camera")
+        if not 15.0 <= camera["fov"] <= 170.0:
             raise ValueError("camera.fov must be within 15..170 degrees")
-        camera["fov"] = fov
-        for field in ("position", "reference"):
-            vector = camera.get(field)
-            if vector is not None:
-                if not (
-                    isinstance(vector, list)
-                    and len(vector) == 3
-                    and all(isinstance(value, (int, float)) for value in vector)
-                ):
-                    raise ValueError(f"camera.{field} must be [x,y,z]")
-                camera[field] = [float(value) for value in vector]
 
-        settings = data.setdefault("settings", copy.deepcopy(DEFAULT_WORKSPACE["settings"]))
-        for key, default in DEFAULT_WORKSPACE["settings"].items():
-            settings.setdefault(key, copy.deepcopy(default))
-        camera_defaults = settings.setdefault(
-            "camera_defaults",
-            copy.deepcopy(DEFAULT_WORKSPACE["settings"]["camera_defaults"]),
-        )
-        for key, default in DEFAULT_WORKSPACE["settings"]["camera_defaults"].items():
-            camera_defaults.setdefault(key, copy.deepcopy(default))
-
-        data["version"] = "0.2.0"
+        _validate_settings(settings, ruleset_index)
         return data

@@ -41,6 +41,8 @@ DEFAULT_RULESETS: list[dict[str, Any]] = [
     _link_ruleset("RULESET_LINK_EVENT_CAUSE", "Event Cause", "event_cause", "cause_source", "event", "COLORSPACE_CAUSAL"),
     _link_ruleset("RULESET_LINK_EVENT_CONDITION", "Event Condition", "event_condition", "condition_source", "event", "COLORSPACE_CAUSAL"),
     _link_ruleset("RULESET_LINK_EFFECT_TARGET", "Effect Target", "effect_target", "effect", "effect_target", "COLORSPACE_CAUSAL"),
+    {"id": "RULESET_TYPE", "name": "Type", "property_type_ref": "type"},
+    {"id": "RULESET_MOUNT", "name": "Mounted Abstraction", "property_type_ref": "mount"},
     {"id": "RULESET_EVENT", "name": "Event", "property_type_ref": "event"},
     {"id": "RULESET_EFFECT", "name": "Effect", "property_type_ref": "effect"},
     {"id": "RULESET_DATA", "name": "Data", "property_type_ref": "data"},
@@ -72,28 +74,27 @@ def validate_color_spaces(color_spaces: list[dict[str, Any]]) -> dict[str, dict[
             value = colors.get(key)
             if not (isinstance(value, list) and len(value) == 3 and all(isinstance(component, (int, float)) for component in value)):
                 raise ValueError(f"color space {color_space['id']}.{key} must be [r,g,b]")
-            colors[key] = [float(component) for component in value]
+            if any(component < 0 or component > 1 for component in value):
+                raise ValueError(f"color space {color_space['id']}.{key} components must be within 0..1")
     return index
 
 
 def validate_rulesets(rulesets: list[dict[str, Any]], color_spaces: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     index = index_by_id(rulesets, "ruleset")
+    supported = {"type", "mount", "event", "effect", "data", "function"}
     for ruleset in rulesets:
         property_type_ref = ruleset.get("property_type_ref")
         if property_type_ref == "link":
-            for field in ("link_type_ref", "semantic_roles", "property_owner"):
+            for field in ("link_type_ref", "semantic_roles", "property_owner", "color_space_ref"):
                 if field not in ruleset:
                     raise ValueError(f"link ruleset {ruleset['id']} requires {field}")
             roles = ruleset["semantic_roles"]
             if not isinstance(roles, dict) or not roles.get("parent_ref") or not roles.get("child_ref"):
                 raise ValueError(f"link ruleset {ruleset['id']} requires parent_ref and child_ref semantic roles")
-            color_space_ref = ruleset.get("color_space_ref")
-            if color_space_ref not in color_spaces:
-                raise ValueError(f"ruleset {ruleset['id']} color_space_ref does not resolve: {color_space_ref}")
-        elif property_type_ref in {"event", "effect", "data", "function"}:
-            continue
-        else:
-            raise ValueError(f"MVP ruleset {ruleset['id']} has unsupported property_type_ref: {property_type_ref}")
+            if ruleset["color_space_ref"] not in color_spaces:
+                raise ValueError(f"ruleset {ruleset['id']} color_space_ref does not resolve: {ruleset['color_space_ref']}")
+        elif property_type_ref not in supported:
+            raise ValueError(f"ruleset {ruleset['id']} has unsupported property_type_ref: {property_type_ref}")
     return index
 
 
@@ -102,12 +103,26 @@ def _property_type(ref: str, property_index: dict[str, tuple[str, dict[str, Any]
     return item[1].get("property_type_ref") if item else None
 
 
+def declared_type(entity: dict[str, Any]) -> str | None:
+    matches = [prop for prop in entity.get("properties", []) if prop.get("property_type_ref") == "type"]
+    if not matches:
+        return None
+    if len(matches) > 1:
+        raise ValueError(f"entity {entity.get('id')} has multiple Type Properties")
+    value = matches[0].get("value")
+    if not isinstance(value, dict):
+        raise ValueError(f"type property {matches[0].get('id')} value must be an object")
+    type_ref = value.get("type_ref")
+    return type_ref if isinstance(type_ref, str) and type_ref else None
+
+
 def validate_properties(entities: list[dict[str, Any]], rulesets: dict[str, dict[str, Any]]) -> None:
     entity_ids = {entity["id"] for entity in entities}
     property_index: dict[str, tuple[str, dict[str, Any]]] = {}
 
     for entity in entities:
-        for prop in entity.get("properties", []):
+        type_count = 0
+        for prop in entity["properties"]:
             if not isinstance(prop, dict):
                 raise ValueError(f"entity {entity['id']} property must be an object")
             prop_id = prop.get("id")
@@ -115,7 +130,11 @@ def validate_properties(entities: list[dict[str, Any]], rulesets: dict[str, dict
                 raise ValueError(f"entity {entity['id']} property requires non-empty id")
             if prop_id in entity_ids or prop_id in property_index:
                 raise ValueError(f"Entity/Property canonical identity collision: {prop_id}")
+            if prop.get("property_type_ref") == "type":
+                type_count += 1
             property_index[prop_id] = (entity["id"], prop)
+        if type_count > 1:
+            raise ValueError(f"entity {entity['id']} has multiple Type Properties")
 
     canonical_ids = entity_ids | set(property_index)
     for owner_id, prop in property_index.values():
@@ -129,12 +148,25 @@ def validate_properties(entities: list[dict[str, Any]], rulesets: dict[str, dict
         ruleset = rulesets[ruleset_ref]
         if ruleset.get("property_type_ref") != property_type_ref:
             raise ValueError(f"property {prop_id} type {property_type_ref} does not match ruleset {ruleset_ref}")
-        prop.setdefault("status", "unlocked")
         value = prop.get("value")
         if not isinstance(value, dict):
             raise ValueError(f"property {prop_id} value must be an object")
 
-        if property_type_ref == "link":
+        if property_type_ref == "type":
+            type_ref = value.get("type_ref")
+            if not isinstance(type_ref, str) or not type_ref:
+                raise ValueError(f"type property {prop_id} requires type_ref")
+            if not isinstance(value.get("properties"), dict):
+                raise ValueError(f"type property {prop_id} value.properties must be an object")
+
+        elif property_type_ref == "mount":
+            abstraction_ref = value.get("abstraction_ref")
+            if not isinstance(abstraction_ref, str) or not abstraction_ref:
+                raise ValueError(f"mount property {prop_id} requires abstraction_ref")
+            if not isinstance(value.get("properties"), dict):
+                raise ValueError(f"mount property {prop_id} value.properties must be an object")
+
+        elif property_type_ref == "link":
             parent_ref = value.get("parent_ref")
             child_ref = value.get("child_ref")
             if parent_ref not in canonical_ids:
@@ -143,10 +175,9 @@ def validate_properties(entities: list[dict[str, Any]], rulesets: dict[str, dict
                 raise ValueError(f"property {prop_id} child_ref does not resolve: {child_ref}")
             if value.get("link_type_ref") != ruleset.get("link_type_ref"):
                 raise ValueError(f"property {prop_id} link_type_ref does not match ruleset {ruleset_ref}")
-            if value.get("target_ref") is not None or value.get("dependency_type") is not None:
+            if "target_ref" in value or "dependency_type" in value:
                 raise ValueError(f"property {prop_id} duplicates canonical endpoint semantics")
-            value.setdefault("properties", {})
-            if not isinstance(value["properties"], dict):
+            if not isinstance(value.get("properties"), dict):
                 raise ValueError(f"property {prop_id} value.properties must be an object")
 
             link_type_ref = value["link_type_ref"]
@@ -168,8 +199,7 @@ def validate_properties(entities: list[dict[str, Any]], rulesets: dict[str, dict
             for forbidden in ("reads", "inputs", "outputs", "effects", "causes", "conditions", "targets"):
                 if forbidden in value:
                     raise ValueError(f"event property {prop_id} embeds authoritative directed reference: {forbidden}")
-            value.setdefault("properties", {})
-            if not isinstance(value["properties"], dict):
+            if not isinstance(value.get("properties"), dict):
                 raise ValueError(f"event property {prop_id} value.properties must be an object")
 
         elif property_type_ref == "effect":
@@ -178,29 +208,33 @@ def validate_properties(entities: list[dict[str, Any]], rulesets: dict[str, dict
                 raise ValueError(f"effect property {prop_id} requires effect_type_ref")
             if "target_ref" in value or "targets" in value:
                 raise ValueError(f"effect property {prop_id} embeds authoritative target reference")
-            value.setdefault("properties", {})
-            if not isinstance(value["properties"], dict):
+            if not isinstance(value.get("properties"), dict):
                 raise ValueError(f"effect property {prop_id} value.properties must be an object")
 
         elif property_type_ref == "data":
             data_type_ref = value.get("data_type_ref")
             if not isinstance(data_type_ref, str) or not data_type_ref:
                 raise ValueError(f"data property {prop_id} requires data_type_ref")
-            value.setdefault("properties", {})
-            if not isinstance(value["properties"], dict):
+            if not isinstance(value.get("properties"), dict):
                 raise ValueError(f"data property {prop_id} value.properties must be an object")
 
         elif property_type_ref == "function":
             function_type_ref = value.get("function_type_ref")
             if not isinstance(function_type_ref, str) or not function_type_ref:
                 raise ValueError(f"function property {prop_id} requires function_type_ref")
-            value.setdefault("properties", {})
-            if not isinstance(value["properties"], dict):
+            if not isinstance(value.get("properties"), dict):
                 raise ValueError(f"function property {prop_id} value.properties must be an object")
             for field in ("input_refs", "output_refs"):
-                refs = value.get(field, [])
+                refs = value.get(field)
+                if refs is None:
+                    continue
                 if not isinstance(refs, list) or any(ref not in canonical_ids for ref in refs):
                     raise ValueError(f"function property {prop_id} {field} must resolve canonical identities")
 
-        prop.setdefault("metadata", {})
-        prop["metadata"].setdefault("workspace_entity_ref", owner_id)
+        metadata = prop.get("metadata")
+        if metadata is not None:
+            if not isinstance(metadata, dict):
+                raise ValueError(f"property {prop_id} metadata must be an object")
+            workspace_entity_ref = metadata.get("workspace_entity_ref")
+            if workspace_entity_ref is not None and workspace_entity_ref != owner_id:
+                raise ValueError(f"property {prop_id} metadata.workspace_entity_ref must equal canonical owner {owner_id}")
