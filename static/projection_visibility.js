@@ -137,9 +137,9 @@ function renderProjectionControls() {
 }
 function syncEventRouteVisibility() {
   if (!ws) return;
-  const svg = document.querySelector('#causalLines');
-  if (!svg) throw new Error('required causal projection surface missing: #causalLines');
-  svg.style.display = projectionVisibilitySettings().event_routes_visible ? '' : 'none';
+  const runtime = window.StructureCausalProjection;
+  if (!runtime || !runtime.surface) throw new Error('StructureCausalProjection runtime contract missing');
+  runtime.surface.style.display = projectionVisibilitySettings().event_routes_visible ? '' : 'none';
 }
 
 window.addEventListener('load', () => {
