@@ -58,6 +58,12 @@ class WorkspaceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "ruleset_ref does not resolve"):
             WorkspaceStore("unused")._validate(workspace)
 
+    def test_property_panel_orientation_is_projection_derived(self):
+        view = DEFAULT_WORKSPACE["settings"]["view_defaults"]
+        self.assertNotIn("property_panel_direction", view)
+        workspace = copy.deepcopy(DEFAULT_WORKSPACE)
+        WorkspaceStore("unused")._validate(workspace)
+
 
 if __name__ == "__main__":
     unittest.main()
