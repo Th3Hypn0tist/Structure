@@ -1,5 +1,6 @@
 // Canonical Event -> Effect -> target -> Event impact projection.
 // Projection instances are view-only and remain attached to their canonical owner Entities.
+// Only Entity labels are camera billboards; Data/Effect labels scale and move with their owner Entity.
 
 const causalProjection = {
   rootEventRef: null,
@@ -96,14 +97,9 @@ function buildCausalGraph(rootRef, maxDepth = 8) {
 }
 
 function displayName(item) {
-  if (!item) return 'missing';
+  if (!item) return 'Missing';
   if (item.kind === 'entity') return item.entity.name || item.entity.id;
-  const property = item.object;
-  const value = property.value || {};
-  if (property.property_type_ref === 'event') return value.event_type_ref || property.id;
-  if (property.property_type_ref === 'effect') return value.effect_type_ref || property.id;
-  if (property.property_type_ref === 'function') return value.function_type_ref || property.id;
-  return property.id;
+  return propertyDisplayName(item.object, item.owner);
 }
 function ownerName(item) { return item?.owner?.name || item?.owner?.id || ''; }
 function nodeClass(item) {
@@ -130,12 +126,13 @@ function ensureCausalNode(ref, item) {
         inspect();
         updateButtons();
       }
-      status(`${fresh.propertyType || fresh.kind}: ${ref}`);
+      status(`${fresh.propertyType || fresh.kind}: ${displayName(fresh)}`);
     };
     causalNodes.appendChild(element);
     causalProjection.nodeElements.set(ref, element);
   }
   element.className = `causal-node ${nodeClass(item)}`;
+  element.dataset.ownerEntityId = item?.owner?.id || '';
   element.innerHTML = `<strong>${displayName(item)}</strong><small>${nodeClass(item).toUpperCase()} · ${ownerName(item)}</small>`;
   return element;
 }
@@ -157,7 +154,7 @@ function triggerCausalProjection(eventRef) {
   causalProjection.graph = graph;
   causalProjection.playbackStartedAt = performance.now();
   const eventItem = graph.index.get(eventRef);
-  status(`fired: ${eventItem?.object?.value?.event_type_ref || eventRef}`);
+  status(`fired: ${displayName(eventItem)}`);
 }
 
 function eventButtonRect(ref) {
@@ -238,6 +235,8 @@ function renderCausalProjection() {
       continue;
     }
 
+    // Data/Effect/Function are projected from an owner-relative world point.
+    // Their labels are part of the same world-scaled instance; they do not billboard independently.
     const world = causalWorldPoint(item, node.ref, graph, groups);
     const screen = project(world, viewProjection());
     const element = ensureCausalNode(node.ref, item);
