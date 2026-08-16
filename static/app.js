@@ -263,6 +263,59 @@ function resize() {
   const width = Math.floor(canvas.clientWidth*density), height = Math.floor(canvas.clientHeight*density);
   if (canvas.width !== width || canvas.height !== height) { canvas.width=width; canvas.height=height; }
 }
+function fitWorkspaceToView() {
+  const entities = assertWorkspace().entities;
+  if (!entities.length) throw new Error('fit to view requires at least one Entity');
+  resize();
+  if (canvas.width <= 0 || canvas.height <= 0) throw new Error('fit to view requires a non-zero viewport');
+
+  const half = nodeHalfSize();
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (const entity of entities) {
+    for (let axis = 0; axis < 3; axis++) {
+      min[axis] = Math.min(min[axis], entity.position[axis] - half);
+      max[axis] = Math.max(max[axis], entity.position[axis] + half);
+    }
+  }
+  const center = [0, 1, 2].map(axis => (min[axis] + max[axis]) / 2);
+  const camera = assertWorkspace().camera;
+  const backward = V.norm(V.sub(camera.position, camera.reference));
+  const forward = V.mul(backward, -1);
+  let right = V.cross(forward, [0, 1, 0]);
+  if (V.length(right) <= 1e-6) right = [1, 0, 0];
+  else right = V.norm(right);
+  const up = V.norm(V.cross(right, forward));
+  const verticalHalfFov = camera.fov * Math.PI / 360;
+  const horizontalHalfFov = Math.atan(Math.tan(verticalHalfFov) * (canvas.width / canvas.height));
+  const tanVertical = Math.tan(verticalHalfFov);
+  const tanHorizontal = Math.tan(horizontalHalfFov);
+  if (tanVertical <= 0 || tanHorizontal <= 0) throw new Error('fit to view requires a valid camera FOV');
+
+  let distance = 0;
+  let nearestOffset = -Infinity;
+  let farthestOffset = Infinity;
+  for (const x of [min[0], max[0]]) for (const y of [min[1], max[1]]) for (const z of [min[2], max[2]]) {
+    const offset = V.sub([x, y, z], center);
+    const lateral = Math.abs(V.dot(offset, right));
+    const vertical = Math.abs(V.dot(offset, up));
+    const towardCamera = V.dot(offset, backward);
+    distance = Math.max(distance, towardCamera + lateral / tanHorizontal, towardCamera + vertical / tanVertical);
+    nearestOffset = Math.max(nearestOffset, towardCamera);
+    farthestOffset = Math.min(farthestOffset, towardCamera);
+  }
+
+  const padding = 1.18;
+  const nearClip = requiredNumber(cameraSettings(), 'near_clip', 'settings.camera_defaults');
+  const farClip = requiredNumber(cameraSettings(), 'far_clip', 'settings.camera_defaults');
+  distance = Math.max(distance * padding, nearestOffset + nearClip * 2);
+  if (distance - farthestOffset >= farClip) throw new Error('fit to view exceeds camera far_clip');
+
+  lookAtEntityId = null;
+  camera.reference = center;
+  camera.position = V.add(center, V.mul(backward, distance));
+  syncCameraAnglesToActive();
+}
 function entityScreenBounds(entity, vp) {
   const scale=nodeHalfSize(), points=[];
   for (const x of [-scale,scale]) for (const y of [-scale,scale]) for (const z of [-scale,scale]) { const p=project([entity.position[0]+x,entity.position[1]+y,entity.position[2]+z],vp); if(p) points.push(p); }
@@ -323,7 +376,7 @@ function deleteSelectedEntities(){const removed=new Set(selected),canonical=new 
 function syncCatalog(){const rulesets=assertWorkspace().rulesets.filter(r=>r.property_type_ref==='link');$('#rulesetView').innerHTML=['<option value="ALL">All Link Rulesets</option>',...rulesets.map(r=>`<option value="${r.id}">${r.name}</option>`)].join('');$('#rulesetView').value=viewSettings().ruleset_ref;}
 function syncSettings(){const camera=cameraSettings(),links=linkSettings(),events=eventSettings(),view=viewSettings();$('#fov').value=assertWorkspace().camera.fov;$('#fovValue').value=`${Math.round(assertWorkspace().camera.fov)}°`;$('#moveSpeed').value=camera.movement_speed;$('#mouseSensitivity').value=camera.mouse_sensitivity;$('#wheelZoomSpeed').value=camera.wheel_zoom_speed;$('#dragPanSpeed').value=camera.drag_pan_speed;$('#anchorSpacing').value=links.anchor_spacing;$('#anchorOffset').value=links.anchor_offset;$('#baseLinkSpeed').value=links.base_flow_speed;$('#activeLinkSpeed').value=events.active_link_speed;$('#effectTravel').value=events.effect_travel_duration;$('#nodeMasterSize').value=view.node_master_size;$('#nodeMasterSizeValue').textContent=`${Number(view.node_master_size).toFixed(2)}×`;$('#gridToggle').checked=view.grid_visible;$('#snapToggle').checked=view.snap_to_grid;for(const id of ['gridToggle','snapToggle'])$(`#${id}`).closest('.view-toggle').classList.toggle('active',$(`#${id}`).checked);}
 async function fetchJson(url,options){const response=await fetch(url,options);const payload=await response.json();if(!payload.ok)throw new Error(payload.error);return payload;}
-async function loadStartingScene(){ws=(await fetchJson('/api/starting-scene')).workspace;assertWorkspace();selected.clear();activeEntityId=null;lookAtEntityId=null;clearLink();syncCatalog();syncSettings();renderProjectionControls();syncEventRouteVisibility();inspect();updateButtons();status('starter scene loaded');}
+async function loadStartingScene(){ws=(await fetchJson('/api/starting-scene')).workspace;assertWorkspace();selected.clear();activeEntityId=null;lookAtEntityId=null;clearLink();fitWorkspaceToView();syncCatalog();syncSettings();renderProjectionControls();syncEventRouteVisibility();inspect();updateButtons();status('starter scene loaded · fit to view');}
 async function saveWorkspace(){ws=(await fetchJson('/api/workspace',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(assertWorkspace())})).workspace;assertWorkspace();syncCatalog();syncSettings();inspect();status('saved');}
 async function loadWorkspace(){ws=(await fetchJson('/api/workspace')).workspace;assertWorkspace();lookAtEntityId=null;selected.clear();activeEntityId=null;clearLink();syncCatalog();syncSettings();renderProjectionControls();syncEventRouteVisibility();inspect();updateButtons();status('loaded');}
 function reportUiError(error){window.reportStructureError(error,{type:'ui_action_error'});status(`error: ${error.message}`);}
