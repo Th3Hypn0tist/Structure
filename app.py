@@ -21,6 +21,7 @@ STATIC = {
     "/static/app.js": ("app.js", "application/javascript; charset=utf-8"),
     "/static/scene_ui_3d.js": ("scene_ui_3d.js", "application/javascript; charset=utf-8"),
     "/static/entity_editor.js": ("entity_editor.js", "application/javascript; charset=utf-8"),
+    "/static/playback_runtime.js": ("playback_runtime.js", "application/javascript; charset=utf-8"),
     "/static/causal_projection.js": ("causal_projection.js", "application/javascript; charset=utf-8"),
     "/static/projection_visibility.js": ("projection_visibility.js", "application/javascript; charset=utf-8"),
     "/static/event_rule_editor.js": ("event_rule_editor.js", "application/javascript; charset=utf-8"),
