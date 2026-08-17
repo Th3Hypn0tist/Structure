@@ -1,12 +1,12 @@
 // Generic Link projection. All represented Link geometry, ports and event
 // feedback live in world-space WebGL. DOM/SVG is not used for scene content.
+// Links always retain slow baseline direction flow. Event playback only boosts
+// the same existing Link transiently and it fades back to baseline afterwards.
 
-const LINK_EVENT_BOOST_MS = 480;
-const NODE_EVENT_FLASH_MS = 360;
 const linkProjection = {
   ports: new Map(),
   flowPhases: new Map(),
-  boostUntil: new Map(),
+  activationWindows: new Map(),
   causalRunKey: null,
   causalTouchedLinks: new Set(),
   genericReachedAt: new Map(),
@@ -16,6 +16,11 @@ const linkProjection = {
 function causalRuntime() {
   const runtime = window.StructureCausalProjection;
   if (!runtime || !runtime.state) throw new Error('StructureCausalProjection runtime contract missing');
+  return runtime;
+}
+function linkPlayback() {
+  const runtime = window.StructurePlayback;
+  if (!runtime) throw new Error('StructurePlayback runtime contract missing');
   return runtime;
 }
 
@@ -40,6 +45,12 @@ function linkTypeRgb(linkType, variant = 'flow') {
 function brightenedLinkRgb(property) {
   return linkProjectionRgb(property, 'flow').map(value => value + (1 - value) * .58);
 }
+function mixedLinkRgb(property, amount) {
+  const base = linkProjectionRgb(property, 'base');
+  const active = brightenedLinkRgb(property);
+  const t = Math.max(0, Math.min(1, amount));
+  return base.map((value, index) => value + (active[index] - value) * t);
+}
 function linkTypeOrder(types) {
   const order = new Map();
   let index = 0;
@@ -58,7 +69,7 @@ function propertyBoxBottom(entity) {
   const items = propertyGroups(canonicalIndex()).get(entity.id) ?? [];
   if (!items.length) return bottom;
   const layout = propsListLayout(entity, items);
-  return Math.min(bottom, layout.center[1] - layout.height / 2);
+  return Math.min(bottom, layout.attachmentCenter[1] - layout.attachmentHeight / 2);
 }
 
 function linkSlots() {
@@ -112,6 +123,15 @@ function linkSlots() {
   return slots;
 }
 
+function activationAmount(propertyId) {
+  const window = linkProjection.activationWindows.get(propertyId);
+  if (!window || !linkPlayback().state.startedAt) return 0;
+  const elapsed = linkPlayback().elapsed();
+  if (elapsed < window.start) return 0;
+  if (elapsed < window.activeEnd) return 1;
+  if (elapsed >= window.fadeEnd || window.fadeEnd <= window.activeEnd) return 0;
+  return 1 - (elapsed - window.activeEnd) / (window.fadeEnd - window.activeEnd);
+}
 function flowProgress(property, time) {
   let state = linkProjection.flowPhases.get(property.id);
   if (!state) {
@@ -119,8 +139,8 @@ function flowProgress(property, time) {
     linkProjection.flowPhases.set(property.id, state);
   }
   const dt = Math.max(0, Math.min(.05, (time - state.time) / 1000));
-  const active = time < (linkProjection.boostUntil.get(property.id) ?? 0);
-  const speed = active ? eventSettings().active_link_speed : linkSettings().base_flow_speed;
+  const active = activationAmount(property.id) > 0;
+  const speed = active ? requiredNumber(eventSettings(), 'active_link_speed', 'settings.event_playback') : requiredNumber(linkSettings(), 'base_flow_speed', 'settings.link_visualization');
   if (!Number.isFinite(speed) || speed < 0) throw new Error('Link flow speed must be a non-negative number');
   state.phase = (state.phase + dt * speed) % 1;
   state.time = time;
@@ -130,16 +150,20 @@ function flowProgress(property, time) {
 function activateGenericLinkFromEvent(property, sourceReachedAt) {
   const target = entityForCanonicalRef(property.value.parent_ref);
   if (!target) throw new Error(`Generic Link target unresolved during Event playback: ${property.id}`);
-  const arrivalAt = sourceReachedAt + LINK_EVENT_BOOST_MS;
-  linkProjection.boostUntil.set(property.id, arrivalAt);
-  linkProjection.flashes.set(target.id, { startedAt: arrivalAt, color: brightenedLinkRgb(property) });
+  const timing = linkPlayback().timingMs();
+  const start = sourceReachedAt;
+  const arrivalAt = start + timing.travel;
+  const activeEnd = arrivalAt + timing.target;
+  const fadeEnd = activeEnd + timing.fade;
+  linkProjection.activationWindows.set(property.id, { start, activeEnd, fadeEnd });
+  linkProjection.flashes.set(target.id, { startedAt: arrivalAt, activeEnd, fadeEnd, color: brightenedLinkRgb(property) });
   return { target, arrivalAt };
 }
 function resetGenericEventFeedback() {
   linkProjection.causalRunKey = null;
   linkProjection.causalTouchedLinks.clear();
   linkProjection.genericReachedAt.clear();
-  linkProjection.boostUntil.clear();
+  linkProjection.activationWindows.clear();
   linkProjection.flashes.clear();
 }
 function registerGenericReach(entityId, reachedAt) {
@@ -150,25 +174,29 @@ function registerGenericReach(entityId, reachedAt) {
   }
   return false;
 }
-function syncGenericLinksFromCausalPlayback(time) {
+function syncGenericLinksFromCausalPlayback() {
   const state = causalRuntime().state;
-  if (!ws || !state.graph || !state.playbackStartedAt) {
+  const playback = linkPlayback();
+  if (!ws || !state.graph || !playback.state.startedAt) {
     resetGenericEventFeedback();
     return;
   }
-  const runKey = `${state.rootEventRef}\u0000${state.playbackStartedAt}`;
+  const runKey = `${state.rootEventRef}\u0000${playback.state.startedAt}`;
   if (linkProjection.causalRunKey !== runKey) {
     resetGenericEventFeedback();
     linkProjection.causalRunKey = runKey;
   }
-  const stepMs = Math.max(120, eventSettings().effect_travel_duration * 350);
-  for (const node of state.graph.nodes) {
-    const reachedAt = state.playbackStartedAt + node.depth * stepMs;
-    if (time < reachedAt) continue;
-    const item = state.graph.index.get(node.ref);
-    if (!item) throw new Error(`Causal node unresolved during generic Link feedback: ${node.ref}`);
+
+  const schedules = causalEdgeSchedules(state.graph);
+  const reached = causalNodeReachedTimes(state.graph, schedules);
+  const elapsed = playback.elapsed();
+  for (const [ref, reachedAt] of reached) {
+    if (elapsed < reachedAt) continue;
+    const item = state.graph.index.get(ref);
+    if (!item) throw new Error(`Causal node unresolved during generic Link feedback: ${ref}`);
     registerGenericReach(item.owner.id, reachedAt);
   }
+
   let propagated = true;
   while (propagated) {
     propagated = false;
@@ -177,7 +205,7 @@ function syncGenericLinksFromCausalPlayback(time) {
       const source = entityForCanonicalRef(property.value.child_ref);
       if (!source) throw new Error(`Generic Link source unresolved during Event playback: ${property.id}`);
       const sourceReachedAt = linkProjection.genericReachedAt.get(source.id);
-      if (sourceReachedAt === undefined || time < sourceReachedAt) continue;
+      if (sourceReachedAt === undefined || elapsed < sourceReachedAt) continue;
       linkProjection.causalTouchedLinks.add(property.id);
       const { target, arrivalAt } = activateGenericLinkFromEvent(property, sourceReachedAt);
       registerGenericReach(target.id, arrivalAt);
@@ -186,19 +214,20 @@ function syncGenericLinksFromCausalPlayback(time) {
   }
 }
 
-function drawNodeEventFlashes3D(time) {
+function drawNodeEventFlashes3D() {
+  const elapsed = linkPlayback().elapsed();
   for (const [entityId, flash] of [...linkProjection.flashes]) {
-    const progress = (time - flash.startedAt) / NODE_EVENT_FLASH_MS;
-    if (progress < 0) continue;
-    if (progress >= 1) {
+    if (elapsed < flash.startedAt) continue;
+    if (elapsed >= flash.fadeEnd) {
       linkProjection.flashes.delete(entityId);
       continue;
     }
     const entity = assertWorkspace().entities.find(item => item.id === entityId);
     if (!entity) throw new Error(`Event flash Entity unresolved: ${entityId}`);
-    const pulse = Math.sin(Math.PI * progress);
-    const half = nodeHalfSize() + (.025 + .035 * pulse) * nodeMasterSize();
-    const color = flash.color.map(value => Math.min(1, value * (.65 + .35 * pulse)));
+    let amount = 1;
+    if (elapsed > flash.activeEnd && flash.fadeEnd > flash.activeEnd) amount = 1 - (elapsed - flash.activeEnd) / (flash.fadeEnd - flash.activeEnd);
+    const half = nodeHalfSize() + (.025 + .035 * amount) * nodeMasterSize();
+    const color = flash.color.map(value => Math.min(1, value * (.65 + .35 * amount)));
     drawBox(entity.position, [half, half, half], color, true);
   }
 }
@@ -214,8 +243,9 @@ function drawGenericLinks3D(time) {
     const start = slots.get(`${property.id}:out`);
     const end = slots.get(`${property.id}:in`);
     if (!start || !end) continue;
-    const baseColor = linkProjectionRgb(property, 'base');
-    const flowColor = linkProjectionRgb(property, 'flow');
+    const amount = activationAmount(property.id);
+    const baseColor = mixedLinkRgb(property, amount);
+    const flowColor = amount > 0 ? brightenedLinkRgb(property) : linkProjectionRgb(property, 'flow');
     drawLine(start, end, baseColor);
     const progress = flowProgress(property, time);
     const pulse = V.add(start, V.mul(V.sub(end, start), progress));
@@ -231,9 +261,9 @@ function drawGenericLinks3D(time) {
 }
 
 function drawLinkProjection3D(time) {
-  syncGenericLinksFromCausalPlayback(time);
+  syncGenericLinksFromCausalPlayback();
   drawGenericLinks3D(time);
-  drawNodeEventFlashes3D(time);
+  if (linkPlayback().state.startedAt) drawNodeEventFlashes3D();
 }
 
 const renderSceneBeforeLinks = render;
