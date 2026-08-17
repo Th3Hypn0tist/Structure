@@ -9,10 +9,14 @@
 //   Event IN left of Props, Event OUT right of Props, same Y as Props center
 //   Dependency IN below Props
 //
-// Event IN / Event OUT are shared link-projection nodes. An Entity owns at most
-// one of each regardless of Event Property count. Canonical Event/Effect edges
-// remain distinct in the graph/playback, but external scene routes aggregate at
-// Entity boundaries instead of drawing per-Property spaghetti.
+// Event links obey the shared animation contract: the same projected link is
+// always present with slow direction-only baseline flow. Event playback speeds
+// up and brightens that same link transiently, then it fades back to baseline.
+
+const CAUSAL_LINK_TYPES = new Set([
+  'event_read', 'event_input', 'event_output', 'event_effect',
+  'event_cause', 'event_condition', 'effect_target',
+]);
 
 const causalProjection = {
   rootEventRef: null,
@@ -21,6 +25,7 @@ const causalProjection = {
   playbackStartedAt: 0,
   eventHitTargets: [],
   propertyHitTargets: [],
+  routePhases: new Map(),
 };
 window.StructureSceneProjection = Object.freeze({
   state: causalProjection,
@@ -31,6 +36,11 @@ window.StructureCausalProjection = Object.freeze({
   surface: { style: { display: '' } },
 });
 
+function playbackApi() {
+  const api = window.StructurePlayback;
+  if (!api) throw new Error('StructurePlayback runtime contract missing');
+  return api;
+}
 function propertyPanelSettings() { return viewSettings(); }
 function propertyPanelCollapsed(ownerId) {
   return propertyPanelSettings().show_all_props ? false : Boolean(propertyPanelSettings().property_panel_collapsed[ownerId]);
@@ -141,7 +151,8 @@ const SCENE_COLORS = Object.freeze({
   generic: [.24, .28, .34],
   reached: [.92, .32, .24],
   outline: [.50, .58, .70],
-  causal: [.72, .28, .22],
+  causal: [.48, .18, .14],
+  causalFlow: [.78, .30, .22],
   causalActive: [.98, .44, .30],
 });
 
@@ -160,11 +171,7 @@ function eventListLayout(entity) {
   const rows = events.map((property, index) => ({
     ref: property.id,
     property,
-    center: [
-      rightEdge - width / 2,
-      top - rowHeight / 2 - index * (rowHeight + rowGap),
-      entity.position[2],
-    ],
+    center: [rightEdge - width / 2, top - rowHeight / 2 - index * (rowHeight + rowGap), entity.position[2]],
     halfScale: [width / 2, rowHeight / 2, depth],
     width,
     height: rowHeight,
@@ -191,55 +198,31 @@ function propsListLayout(entity, items) {
 
   if (collapsed) {
     const buttonSize = .24 * master * scale;
-    const center = [
-      entity.position[0] + half - buttonSize / 2,
-      topEdge - buttonSize / 2,
-      entity.position[2],
-    ];
+    const center = [entity.position[0] + half - buttonSize / 2, topEdge - buttonSize / 2, entity.position[2]];
     return {
-      entity,
-      collapsed,
-      center,
+      entity, collapsed, center,
       frameScale: [buttonSize / 2, buttonSize / 2, depth],
-      rows: [],
-      width: buttonSize,
-      height: buttonSize,
-      toggleCenter: center,
-      attachmentCenter,
-      attachmentWidth: width,
-      attachmentHeight: expandedHeight,
+      rows: [], width: buttonSize, height: buttonSize, toggleCenter: center,
+      attachmentCenter, attachmentWidth: width, attachmentHeight: expandedHeight,
     };
   }
 
   const center = attachmentCenter;
   const top = topEdge - padding;
   const rows = items.map(({ ref, item }, index) => ({
-    ref,
-    item,
+    ref, item,
     center: [center[0], top - rowHeight / 2 - index * (rowHeight + rowGap), center[2]],
     halfScale: [width * .47, rowHeight * .42, depth * 1.35],
     width: width * .94,
     height: rowHeight * .84,
   }));
   const toggleSize = .18 * master * scale;
-  const toggleCenter = [
-    center[0] + width / 2 - padding - toggleSize / 2,
-    topEdge - padding - toggleSize / 2,
-    center[2] + depth + .012,
-  ];
+  const toggleCenter = [center[0] + width / 2 - padding - toggleSize / 2, topEdge - padding - toggleSize / 2, center[2] + depth + .012];
   return {
-    entity,
-    collapsed,
-    center,
+    entity, collapsed, center,
     frameScale: [width / 2, expandedHeight / 2, depth],
-    rows,
-    width,
-    height: expandedHeight,
-    toggleCenter,
-    toggleSize,
-    attachmentCenter,
-    attachmentWidth: width,
-    attachmentHeight: expandedHeight,
+    rows, width, height: expandedHeight, toggleCenter, toggleSize,
+    attachmentCenter, attachmentWidth: width, attachmentHeight: expandedHeight,
   };
 }
 
@@ -248,41 +231,87 @@ function eventIoLayout(entity, eventLayout, propsLayout) {
   const master = nodeMasterSize();
   const gap = .20 * master;
   const half = nodeHalfSize();
-  const propsCenter = propsLayout?.attachmentCenter ?? [
-    entity.position[0],
-    entity.position[1] - nodeHalfSize() - gap - half,
-    entity.position[2],
-  ];
+  const propsCenter = propsLayout?.attachmentCenter ?? [entity.position[0], entity.position[1] - nodeHalfSize() - gap - half, entity.position[2]];
   const propsWidth = propsLayout?.attachmentWidth ?? master;
   const leftEdge = propsCenter[0] - propsWidth / 2;
   const rightEdge = propsCenter[0] + propsWidth / 2;
-  const y = propsCenter[1];
-  const z = entity.position[2];
   return {
-    inCenter: [leftEdge - gap - half, y, z],
-    outCenter: [rightEdge + gap + half, y, z],
+    inCenter: [leftEdge - gap - half, propsCenter[1], entity.position[2]],
+    outCenter: [rightEdge + gap + half, propsCenter[1], entity.position[2]],
     halfScale: [half, half, half],
   };
+}
+
+function causalEdgeSchedules(graph) {
+  const timing = playbackApi().timingMs();
+  const siblings = new Map();
+  for (const edge of graph.edges) {
+    if (!siblings.has(edge.from)) siblings.set(edge.from, []);
+    siblings.get(edge.from).push(edge);
+  }
+  for (const edges of siblings.values()) edges.sort((a, b) => a.id.localeCompare(b.id));
+  const schedules = new Map();
+  for (const edge of graph.edges) {
+    const branchIndex = siblings.get(edge.from).findIndex(item => item.id === edge.id);
+    const generationStart = timing.activation + Math.max(0, edge.depth - 1) * (timing.travel + timing.target + timing.next);
+    const start = generationStart + branchIndex * timing.branch;
+    const arrival = start + timing.travel;
+    const effectEnd = arrival + timing.target;
+    const nextAt = effectEnd + timing.next;
+    schedules.set(edge.id, { start, arrival, effectEnd, nextAt });
+  }
+  return schedules;
+}
+function causalPlaybackBoundaries(graph) {
+  if (!graph) return [];
+  const timing = playbackApi().timingMs();
+  const schedules = causalEdgeSchedules(graph);
+  const values = [0, timing.activation];
+  let end = timing.activation;
+  for (const schedule of schedules.values()) {
+    values.push(schedule.start, schedule.arrival, schedule.effectEnd, schedule.nextAt);
+    end = Math.max(end, schedule.nextAt);
+  }
+  values.push(end + timing.hold, end + timing.hold + timing.fade);
+  return values;
+}
+function causalNodeReachedTimes(graph, schedules) {
+  const reached = new Map([[graph.rootRef, 0]]);
+  for (const edge of graph.edges) {
+    const arrival = schedules.get(edge.id)?.arrival ?? 0;
+    const current = reached.get(edge.to);
+    if (current === undefined || arrival < current) reached.set(edge.to, arrival);
+  }
+  return reached;
+}
+function causalPlaybackState(schedule, elapsed) {
+  if (!schedule) return { active: false, reached: false, targetActive: false, fade: 0 };
+  const timing = playbackApi().timingMs();
+  const active = elapsed >= schedule.start && elapsed < schedule.arrival;
+  const reached = elapsed >= schedule.arrival;
+  const targetActive = elapsed >= schedule.arrival && elapsed < schedule.effectEnd;
+  let fade = 0;
+  if (elapsed >= schedule.effectEnd && elapsed < schedule.effectEnd + timing.fade && timing.fade > 0) {
+    fade = 1 - (elapsed - schedule.effectEnd) / timing.fade;
+  }
+  return { active, reached, targetActive, fade };
 }
 
 function clearCausalProjection() {
   causalProjection.rootEventRef = null;
   causalProjection.graph = null;
   causalProjection.playbackStartedAt = 0;
+  playbackApi().setBoundaryProvider(null);
+  playbackApi().reset();
 }
 function triggerCausalProjection(eventRef) {
   const graph = buildCausalGraph(eventRef, causalProjection.maxDepth);
   causalProjection.rootEventRef = eventRef;
   causalProjection.graph = graph;
   causalProjection.playbackStartedAt = performance.now();
+  playbackApi().start(causalProjection.playbackStartedAt);
+  playbackApi().setBoundaryProvider(() => causalPlaybackBoundaries(causalProjection.graph));
   status(`fired: ${displayName(graph.index.get(eventRef))}`);
-}
-function causalPlaybackState(edge, elapsed, stepMs) {
-  const activeAt = Math.max(0, edge.depth - 1) * stepMs;
-  return {
-    active: elapsed >= activeAt && elapsed < activeAt + stepMs * .9,
-    reached: elapsed >= activeAt + stepMs * .75,
-  };
 }
 
 function buildSceneLayouts(index) {
@@ -305,33 +334,64 @@ function buildSceneLayouts(index) {
 }
 
 function ownerForRef(ref, index) {
-  const item = index.get(ref);
-  return item?.owner ?? null;
+  return index.get(ref)?.owner ?? null;
 }
-function aggregateCausalRoutes(graph, layouts, elapsed, stepMs) {
+function allEventRoutes(layouts) {
   const grouped = new Map();
-  for (const edge of graph.edges) {
-    const sourceOwner = ownerForRef(edge.from, graph.index);
-    const targetOwner = ownerForRef(edge.to, graph.index);
-    if (!sourceOwner || !targetOwner) continue;
-    if (sourceOwner.id === targetOwner.id) continue;
+  const index = canonicalIndex();
+  for (const { property, value } of canonicalLinks()) {
+    if (!CAUSAL_LINK_TYPES.has(value.link_type_ref)) continue;
+    const sourceOwner = ownerForRef(value.parent_ref, index);
+    const targetOwner = ownerForRef(value.child_ref, index);
+    if (!sourceOwner || !targetOwner || sourceOwner.id === targetOwner.id) continue;
     const key = `${sourceOwner.id}\u0000${targetOwner.id}`;
-    if (!grouped.has(key)) grouped.set(key, { sourceOwner, targetOwner, edges: [] });
-    grouped.get(key).edges.push(edge);
+    if (!grouped.has(key)) grouped.set(key, { key, sourceOwner, targetOwner, properties: [] });
+    grouped.get(key).properties.push(property);
   }
   return [...grouped.values()].map(route => {
     const sourceLayout = layouts.entities.get(route.sourceOwner.id);
     const targetLayout = layouts.entities.get(route.targetOwner.id);
-    const start = sourceLayout?.eventIo?.outCenter ?? route.sourceOwner.position;
-    const end = targetLayout?.eventIo?.inCenter ?? route.targetOwner.position;
-    const states = route.edges.map(edge => causalPlaybackState(edge, elapsed, stepMs));
     return {
-      start,
-      end,
-      active: states.some(state => state.active),
-      reached: states.some(state => state.reached),
+      ...route,
+      start: sourceLayout?.eventIo?.outCenter ?? route.sourceOwner.position,
+      end: targetLayout?.eventIo?.inCenter ?? route.targetOwner.position,
     };
   });
+}
+function activeRouteStates(graph, schedules, elapsed) {
+  const states = new Map();
+  if (!graph) return states;
+  for (const edge of graph.edges) {
+    const sourceOwner = ownerForRef(edge.from, graph.index);
+    const targetOwner = ownerForRef(edge.to, graph.index);
+    if (!sourceOwner || !targetOwner || sourceOwner.id === targetOwner.id) continue;
+    const key = `${sourceOwner.id}\u0000${targetOwner.id}`;
+    const state = causalPlaybackState(schedules.get(edge.id), elapsed);
+    const current = states.get(key) ?? { active: false, reached: false, targetActive: false, fade: 0 };
+    current.active ||= state.active;
+    current.reached ||= state.reached;
+    current.targetActive ||= state.targetActive;
+    current.fade = Math.max(current.fade, state.fade);
+    states.set(key, current);
+  }
+  return states;
+}
+function eventRouteFlowProgress(routeKey, now, active) {
+  let state = causalProjection.routePhases.get(routeKey);
+  if (!state) {
+    state = { phase: 0, time: now };
+    causalProjection.routePhases.set(routeKey, state);
+  }
+  const dt = Math.max(0, Math.min(.05, (now - state.time) / 1000));
+  const speed = active ? requiredNumber(eventSettings(), 'active_link_speed', 'settings.event_playback') : requiredNumber(linkSettings(), 'base_flow_speed', 'settings.link_visualization');
+  if (speed < 0) throw new Error('Event link flow speed must be non-negative');
+  state.phase = (state.phase + dt * speed) % 1;
+  state.time = now;
+  return state.phase;
+}
+function mixColor(base, active, amount) {
+  const t = Math.max(0, Math.min(1, amount));
+  return base.map((value, index) => value + (active[index] - value) * t);
 }
 
 function drawSceneProjection3D() {
@@ -340,9 +400,11 @@ function drawSceneProjection3D() {
   causalProjection.graph = graph;
   const index = graph ? graph.index : canonicalIndex();
   const layouts = buildSceneLayouts(index);
-  const elapsed = graph ? performance.now() - causalProjection.playbackStartedAt : 0;
-  const stepMs = Math.max(120, eventSettings().effect_travel_duration * 350);
-  const graphDepth = new Map(graph ? graph.nodes.map(node => [node.ref, node.depth]) : []);
+  const elapsed = graph ? playbackApi().elapsed() : 0;
+  const schedules = graph ? causalEdgeSchedules(graph) : new Map();
+  const reachedAt = graph ? causalNodeReachedTimes(graph, schedules) : new Map();
+  const timing = playbackApi().timingMs();
+  const routeStates = activeRouteStates(graph, schedules, elapsed);
 
   causalProjection.eventHitTargets = [];
   causalProjection.propertyHitTargets = [];
@@ -355,12 +417,11 @@ function drawSceneProjection3D() {
     drawSceneText3D(entity.name, labelCenter, 1.75 * nodeMasterSize(), .32 * nodeMasterSize(), selected.has(entity.id) ? [.62,.82,1] : [.94,.97,1]);
 
     for (const row of local.eventLayout.rows) {
-      const depth = graphDepth.get(row.ref);
-      const reached = depth !== undefined && elapsed >= depth * stepMs;
-      const active = graph?.rootRef === row.ref || reached;
-      const color = active ? SCENE_COLORS.eventActive : SCENE_COLORS.event;
+      const reached = reachedAt.has(row.ref) && elapsed >= reachedAt.get(row.ref);
+      const rootActive = graph?.rootRef === row.ref && elapsed < timing.activation;
+      const color = rootActive || reached ? SCENE_COLORS.eventActive : SCENE_COLORS.event;
       drawBox(row.center, row.halfScale, color);
-      drawBox(row.center, [row.halfScale[0]+.008,row.halfScale[1]+.008,row.halfScale[2]+.008], active ? [.98,.66,.28] : SCENE_COLORS.outline, true);
+      drawBox(row.center, [row.halfScale[0]+.008,row.halfScale[1]+.008,row.halfScale[2]+.008], rootActive || reached ? [.98,.66,.28] : SCENE_COLORS.outline, true);
       drawSceneText3D(propertyDisplayName(row.property, entity), [row.center[0],row.center[1],row.center[2]+row.halfScale[2]+.012], row.width*.88, row.height*.68, [.98,.92,.82]);
       causalProjection.eventHitTargets.push({ ref: row.ref, center: row.center, halfWidth: row.halfScale[0], halfHeight: row.halfScale[1] });
     }
@@ -374,11 +435,9 @@ function drawSceneProjection3D() {
       } else {
         drawBox(props.center, props.frameScale, SCENE_COLORS.propsFrame, true);
         for (const row of props.rows) {
-          const depth = graphDepth.get(row.ref);
-          const reached = depth !== undefined && elapsed >= depth * stepMs;
+          const reached = reachedAt.has(row.ref) && elapsed >= reachedAt.get(row.ref);
           const base = SCENE_COLORS[row.item.propertyType] ?? SCENE_COLORS.generic;
-          const color = reached ? SCENE_COLORS.reached : base;
-          drawBox(row.center, row.halfScale, color);
+          drawBox(row.center, row.halfScale, reached ? SCENE_COLORS.reached : base);
           drawBox(row.center, [row.halfScale[0]+.008,row.halfScale[1]+.008,row.halfScale[2]+.008], reached ? [.98,.58,.48] : SCENE_COLORS.outline, true);
           drawSceneText3D(`${row.item.propertyType.toUpperCase()} · ${displayName(row.item)}`, [row.center[0],row.center[1],row.center[2]+row.halfScale[2]+.012], row.width*.90, row.height*.68, [.92,.95,.99]);
           causalProjection.propertyHitTargets.push({ kind: 'property', ref: row.ref, center: row.center, halfWidth: row.halfScale[0], halfHeight: row.halfScale[1] });
@@ -391,7 +450,8 @@ function drawSceneProjection3D() {
     }
 
     if (local.eventIo) {
-      const ioColor = graph ? SCENE_COLORS.eventIoActive : SCENE_COLORS.eventIo;
+      const hasActiveRoute = [...routeStates.entries()].some(([key, state]) => state.active && key.startsWith(`${entity.id}\u0000`) || state.active && key.endsWith(`\u0000${entity.id}`));
+      const ioColor = hasActiveRoute ? SCENE_COLORS.eventIoActive : SCENE_COLORS.eventIo;
       drawBox(local.eventIo.inCenter, local.eventIo.halfScale, ioColor, true);
       drawBox(local.eventIo.outCenter, local.eventIo.halfScale, ioColor);
       const textY = local.eventIo.inCenter[1] + local.eventIo.halfScale[1] + .24 * nodeMasterSize();
@@ -400,9 +460,18 @@ function drawSceneProjection3D() {
     }
   }
 
-  if (graph && viewSettings().event_routes_visible) {
-    for (const route of aggregateCausalRoutes(graph, layouts, elapsed, stepMs)) {
-      drawLine(route.start, route.end, route.active ? SCENE_COLORS.causalActive : SCENE_COLORS.causal);
+  if (viewSettings().event_routes_visible) {
+    const now = performance.now();
+    const pulseRadius = Math.max(.025, linkSettings().flow_width * .14) * nodeMasterSize();
+    for (const route of allEventRoutes(layouts)) {
+      const state = routeStates.get(route.key) ?? { active: false, fade: 0 };
+      const intensity = state.active ? 1 : state.fade;
+      const lineColor = mixColor(SCENE_COLORS.causal, SCENE_COLORS.causalActive, intensity);
+      const flowColor = mixColor(SCENE_COLORS.causalFlow, SCENE_COLORS.causalActive, intensity);
+      drawLine(route.start, route.end, lineColor);
+      const progress = eventRouteFlowProgress(route.key, now, state.active);
+      const pulse = V.add(route.start, V.mul(V.sub(route.end, route.start), progress));
+      drawBox(pulse, [pulseRadius, pulseRadius, pulseRadius], flowColor);
     }
   }
 }
