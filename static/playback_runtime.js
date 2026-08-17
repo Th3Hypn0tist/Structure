@@ -23,6 +23,7 @@ const playbackRuntime = {
 };
 
 function playbackNumber(field) {
+  if (!ws) return PLAYBACK_DEFAULTS[field];
   const settings = eventSettings();
   const raw = settings[field];
   const value = raw === undefined ? PLAYBACK_DEFAULTS[field] : Number(raw);
@@ -79,9 +80,7 @@ function setPlaybackPaused(paused, now = performance.now()) {
   }
   syncPlaybackButtons();
 }
-function togglePlaybackPause() {
-  setPlaybackPaused(!playbackRuntime.paused);
-}
+function togglePlaybackPause() { setPlaybackPaused(!playbackRuntime.paused); }
 function normalizePlaybackBoundaries(values) {
   return [...new Set((values ?? []).filter(value => Number.isFinite(value) && value >= 0).map(value => Math.round(value * 1000) / 1000))].sort((a, b) => a - b);
 }
@@ -98,10 +97,6 @@ function stepPlayback() {
 function setPlaybackBoundaryProvider(provider) {
   if (provider !== null && typeof provider !== 'function') throw new Error('playback boundary provider must be a function or null');
   playbackRuntime.boundaryProvider = provider;
-}
-
-function ensurePlaybackControls() {
-  if ($('#playbackPause')) return;
 }
 
 function installPlaybackControls() {
@@ -158,9 +153,10 @@ function installPlaybackTimingControls() {
     input.id = id;
     input.type = 'number';
     input.min = field === 'playback_speed' ? '0.05' : '0';
-    input.step = field === 'playback_speed' ? '0.05' : '0.05';
-    input.value = String(playbackNumber(field));
+    input.step = '0.05';
+    input.value = String(PLAYBACK_DEFAULTS[field]);
     input.addEventListener('change', () => {
+      if (!ws) return;
       const value = Number(input.value);
       if (!Number.isFinite(value) || (field === 'playback_speed' ? value <= 0 : value < 0)) {
         input.value = String(playbackNumber(field));
@@ -175,6 +171,7 @@ function installPlaybackTimingControls() {
   if (existingActive) existingActive.closest('label').firstChild.textContent = 'Active flow speed ';
 }
 function syncPlaybackTimingControls() {
+  if (!ws) return;
   const fields = {
     eventActivationDuration: 'event_activation_duration',
     targetEffectDuration: 'target_effect_duration',
@@ -186,7 +183,7 @@ function syncPlaybackTimingControls() {
   };
   for (const [id, field] of Object.entries(fields)) {
     const input = document.querySelector(`#${id}`);
-    if (input && ws) input.value = String(playbackNumber(field));
+    if (input) input.value = String(playbackNumber(field));
   }
 }
 
@@ -203,6 +200,15 @@ window.StructurePlayback = Object.freeze({
   setBoundaryProvider: setPlaybackBoundaryProvider,
   syncControls: syncPlaybackTimingControls,
 });
+
+// Extend the existing canonical settings sync rather than creating a second
+// workspace/settings lifecycle.
+const syncSettingsBeforePlayback = syncSettings;
+syncSettings = function syncSettingsWithPlayback() {
+  syncSettingsBeforePlayback();
+  syncPlaybackTimingControls();
+  syncPlaybackButtons();
+};
 
 window.addEventListener('load', () => {
   installPlaybackControls();
