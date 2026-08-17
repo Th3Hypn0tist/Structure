@@ -22,10 +22,10 @@ def suite_command() -> list[str]:
 
 
 def run_startup_suite() -> None:
-    print("[structure:test] startup suite")
+    print("[structure:cw] conformance gate")
     result = subprocess.run(suite_command(), cwd=PROJECT_ROOT, check=False)
     if result.returncode != 0:
         raise SystemExit(
-            f"Structure startup test suite failed ({result.returncode}); server not started"
+            f"Structure CW conformance gate failed ({result.returncode}); server not started"
         )
-    print("[structure:test] suite passed")
+    print("[structure:cw] conformance gate passed")
