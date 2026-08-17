@@ -51,6 +51,7 @@ class ArchitectureTests(unittest.TestCase):
             "app.js",
             "scene_ui_3d.js",
             "entity_editor.js",
+            "playback_runtime.js",
             "causal_projection.js",
             "projection_visibility.js",
             "event_rule_editor.js",
@@ -90,6 +91,40 @@ class ArchitectureTests(unittest.TestCase):
         self.assertNotIn("document.createElementNS", source)
         self.assertNotIn(".event-button", source)
         self.assertNotIn(".property-panel", source)
+
+    def test_event_links_keep_baseline_flow_and_boost_same_projection(self):
+        causal = (STATIC / "causal_projection.js").read_text(encoding="utf-8")
+        links = (STATIC / "link_projection.js").read_text(encoding="utf-8")
+        playback = (STATIC / "playback_runtime.js").read_text(encoding="utf-8")
+        self.assertIn("function allEventRoutes(layouts)", causal)
+        self.assertIn("eventRouteFlowProgress", causal)
+        self.assertIn("base_flow_speed", causal)
+        self.assertIn("active_link_speed", causal)
+        self.assertIn("function activationAmount(propertyId)", links)
+        self.assertIn("base_flow_speed", links)
+        self.assertIn("active_link_speed", links)
+        self.assertNotIn("LINK_EVENT_BOOST_MS", links)
+        self.assertNotIn("NODE_EVENT_FLASH_MS", links)
+        self.assertIn("pause", playback.lower())
+        self.assertIn("stepPlayback", playback)
+        self.assertIn("playback_speed", playback)
+
+    def test_event_playback_timing_is_visual_runtime_not_canonical_semantics(self):
+        playback = (STATIC / "playback_runtime.js").read_text(encoding="utf-8")
+        semantics = (SERVER / "semantics.py").read_text(encoding="utf-8")
+        for field in [
+            "event_activation_duration",
+            "effect_travel_duration",
+            "target_effect_duration",
+            "next_event_delay",
+            "branch_delay",
+            "completion_hold",
+            "fade_out_duration",
+            "playback_speed",
+        ]:
+            with self.subTest(field=field):
+                self.assertIn(field, playback)
+                self.assertNotIn(field, semantics)
 
     def test_cw_export_uses_canonical_semantic_source_only(self):
         source = (STATIC / "abstraction_library.js").read_text(encoding="utf-8")
