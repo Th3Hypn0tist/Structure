@@ -92,14 +92,18 @@ class ArchitectureTests(unittest.TestCase):
         self.assertNotIn(".event-button", source)
         self.assertNotIn(".property-panel", source)
 
-    def test_event_links_keep_baseline_flow_and_boost_same_projection(self):
+    def test_event_routes_keep_baseline_flow_and_overlay_transient_traces(self):
         causal = (STATIC / "causal_projection.js").read_text(encoding="utf-8")
         links = (STATIC / "link_projection.js").read_text(encoding="utf-8")
         playback = (STATIC / "playback_runtime.js").read_text(encoding="utf-8")
+        self.assertIn("currentEvents: []", causal)
+        self.assertIn("EVENT_TRACE_COLORS", causal)
         self.assertIn("function allEventRoutes(layouts)", causal)
+        self.assertIn("function drawTransientTraceRoute", causal)
+        self.assertIn("function traceAlpha", causal)
         self.assertIn("eventRouteFlowProgress", causal)
         self.assertIn("base_flow_speed", causal)
-        self.assertIn("active_link_speed", causal)
+        self.assertNotIn("active_link_speed", causal)
         self.assertIn("function activationAmount(propertyId)", links)
         self.assertIn("base_flow_speed", links)
         self.assertIn("active_link_speed", links)
@@ -108,6 +112,14 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn("pause", playback.lower())
         self.assertIn("stepPlayback", playback)
         self.assertIn("playback_speed", playback)
+
+    def test_event_io_is_tiny_shared_point_projection(self):
+        causal = (STATIC / "causal_projection.js").read_text(encoding="utf-8")
+        self.assertIn("const pointHalf = nodeHalf * .10", causal)
+        self.assertIn("inCenter: [leftEdge - gap - pointHalf", causal)
+        self.assertIn("outCenter: [rightEdge + gap + pointHalf", causal)
+        self.assertNotIn("drawSceneText3D('Event in'", causal)
+        self.assertNotIn("drawSceneText3D('Event out'", causal)
 
     def test_event_playback_timing_is_visual_runtime_not_canonical_semantics(self):
         playback = (STATIC / "playback_runtime.js").read_text(encoding="utf-8")
