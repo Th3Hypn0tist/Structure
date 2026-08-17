@@ -9,13 +9,28 @@
 //   Event IN left of Props, Event OUT right of Props, same Y as Props center
 //   Dependency IN below Props
 //
-// Event links obey the shared animation contract: the same projected link is
-// always present with slow direction-only baseline flow. Event playback speeds
-// up and brightens that same link transiently, then it fades back to baseline.
+// Link animation contract:
+//   - canonical links define causality; animation never invents a route
+//   - event routes retain slow baseline direction flow at all times
+//   - firing an Event creates a transient trace in currentEvents[]
+//   - source Entity/Event activates in that trace's color
+//   - the same link receives a growing travel segment + small head point
+//   - Effects/targets activate only when the canonical trace reaches them
+//   - downstream Events continue the same canonical trace
+//   - concurrent traces use distinct stable colors
+//   - completed traces hold briefly, fade, disappear; baseline links remain
 
 const CAUSAL_LINK_TYPES = new Set([
   'event_read', 'event_input', 'event_output', 'event_effect',
   'event_cause', 'event_condition', 'effect_target',
+]);
+const EVENT_TRACE_COLORS = Object.freeze([
+  [.98, .34, .20],
+  [.20, .66, 1.00],
+  [.80, .38, 1.00],
+  [.18, .88, .58],
+  [1.00, .70, .18],
+  [.22, .88, .92],
 ]);
 
 const causalProjection = {
@@ -26,6 +41,8 @@ const causalProjection = {
   eventHitTargets: [],
   propertyHitTargets: [],
   routePhases: new Map(),
+  currentEvents: [],
+  nextTraceId: 1,
 };
 window.StructureSceneProjection = Object.freeze({
   state: causalProjection,
@@ -139,9 +156,6 @@ function propertyGroups(index) {
 
 const SCENE_COLORS = Object.freeze({
   event: [.42, .25, .09],
-  eventActive: [.92, .42, .10],
-  eventIo: [.42, .25, .09],
-  eventIoActive: [.92, .42, .10],
   propsFrame: [.36, .42, .52],
   effect: [.48, .16, .13],
   data: [.08, .29, .43],
@@ -149,11 +163,9 @@ const SCENE_COLORS = Object.freeze({
   type: [.28, .32, .38],
   mount: [.16, .34, .24],
   generic: [.24, .28, .34],
-  reached: [.92, .32, .24],
   outline: [.50, .58, .70],
-  causal: [.48, .18, .14],
-  causalFlow: [.78, .30, .22],
-  causalActive: [.98, .44, .30],
+  causal: [.30, .12, .10],
+  causalFlow: [.66, .24, .18],
 });
 
 function eventListLayout(entity) {
@@ -230,15 +242,16 @@ function eventIoLayout(entity, eventLayout, propsLayout) {
   if (!eventLayout.rows.length) return null;
   const master = nodeMasterSize();
   const gap = .20 * master;
-  const half = nodeHalfSize();
-  const propsCenter = propsLayout?.attachmentCenter ?? [entity.position[0], entity.position[1] - nodeHalfSize() - gap - half, entity.position[2]];
+  const nodeHalf = nodeHalfSize();
+  const pointHalf = nodeHalf * .10;
+  const propsCenter = propsLayout?.attachmentCenter ?? [entity.position[0], entity.position[1] - nodeHalf - gap - nodeHalf, entity.position[2]];
   const propsWidth = propsLayout?.attachmentWidth ?? master;
   const leftEdge = propsCenter[0] - propsWidth / 2;
   const rightEdge = propsCenter[0] + propsWidth / 2;
   return {
-    inCenter: [leftEdge - gap - half, propsCenter[1], entity.position[2]],
-    outCenter: [rightEdge + gap + half, propsCenter[1], entity.position[2]],
-    halfScale: [half, half, half],
+    inCenter: [leftEdge - gap - pointHalf, propsCenter[1], entity.position[2]],
+    outCenter: [rightEdge + gap + pointHalf, propsCenter[1], entity.position[2]],
+    halfScale: [pointHalf, pointHalf, pointHalf],
   };
 }
 
@@ -262,17 +275,20 @@ function causalEdgeSchedules(graph) {
   }
   return schedules;
 }
-function causalPlaybackBoundaries(graph) {
-  if (!graph) return [];
+function causalPlaybackBoundariesForTrace(trace) {
   const timing = playbackApi().timingMs();
-  const schedules = causalEdgeSchedules(graph);
-  const values = [0, timing.activation];
+  const values = [trace.startedAt, trace.startedAt + timing.activation];
   let end = timing.activation;
-  for (const schedule of schedules.values()) {
-    values.push(schedule.start, schedule.arrival, schedule.effectEnd, schedule.nextAt);
+  for (const schedule of trace.schedules.values()) {
+    values.push(
+      trace.startedAt + schedule.start,
+      trace.startedAt + schedule.arrival,
+      trace.startedAt + schedule.effectEnd,
+      trace.startedAt + schedule.nextAt,
+    );
     end = Math.max(end, schedule.nextAt);
   }
-  values.push(end + timing.hold, end + timing.hold + timing.fade);
+  values.push(trace.startedAt + end + timing.hold, trace.startedAt + end + timing.hold + timing.fade);
   return values;
 }
 function causalNodeReachedTimes(graph, schedules) {
@@ -284,34 +300,78 @@ function causalNodeReachedTimes(graph, schedules) {
   }
   return reached;
 }
-function causalPlaybackState(schedule, elapsed) {
-  if (!schedule) return { active: false, reached: false, targetActive: false, fade: 0 };
+function traceEndTimes(trace) {
   const timing = playbackApi().timingMs();
-  const active = elapsed >= schedule.start && elapsed < schedule.arrival;
-  const reached = elapsed >= schedule.arrival;
-  const targetActive = elapsed >= schedule.arrival && elapsed < schedule.effectEnd;
-  let fade = 0;
-  if (elapsed >= schedule.effectEnd && elapsed < schedule.effectEnd + timing.fade && timing.fade > 0) {
-    fade = 1 - (elapsed - schedule.effectEnd) / timing.fade;
-  }
-  return { active, reached, targetActive, fade };
+  let contentEnd = timing.activation;
+  for (const schedule of trace.schedules.values()) contentEnd = Math.max(contentEnd, schedule.nextAt);
+  return {
+    contentEnd,
+    holdEnd: contentEnd + timing.hold,
+    fadeEnd: contentEnd + timing.hold + timing.fade,
+  };
+}
+function traceAlpha(trace, elapsed) {
+  const local = elapsed - trace.startedAt;
+  const ends = traceEndTimes(trace);
+  if (local < 0 || local >= ends.fadeEnd) return 0;
+  if (local <= ends.holdEnd) return 1;
+  const fade = ends.fadeEnd - ends.holdEnd;
+  return fade > 0 ? 1 - (local - ends.holdEnd) / fade : 0;
+}
+function causalPlaybackState(schedule, localElapsed) {
+  if (!schedule) return { active: false, reached: false, targetActive: false, progress: 0 };
+  const active = localElapsed >= schedule.start && localElapsed < schedule.arrival;
+  const reached = localElapsed >= schedule.arrival;
+  const targetActive = localElapsed >= schedule.arrival && localElapsed < schedule.effectEnd;
+  const progress = localElapsed <= schedule.start ? 0 : localElapsed >= schedule.arrival ? 1 : (localElapsed - schedule.start) / Math.max(1, schedule.arrival - schedule.start);
+  return { active, reached, targetActive, progress: Math.max(0, Math.min(1, progress)) };
 }
 
+function syncPlaybackBoundaryProvider() {
+  playbackApi().setBoundaryProvider(() => causalProjection.currentEvents.flatMap(causalPlaybackBoundariesForTrace));
+}
 function clearCausalProjection() {
   causalProjection.rootEventRef = null;
   causalProjection.graph = null;
   causalProjection.playbackStartedAt = 0;
+  causalProjection.currentEvents = [];
+  causalProjection.routePhases.clear();
   playbackApi().setBoundaryProvider(null);
   playbackApi().reset();
 }
 function triggerCausalProjection(eventRef) {
   const graph = buildCausalGraph(eventRef, causalProjection.maxDepth);
+  if (!playbackApi().state.startedAt) playbackApi().start(performance.now());
+  const startedAt = playbackApi().elapsed();
+  const traceId = causalProjection.nextTraceId++;
+  const trace = {
+    id: traceId,
+    rootEventRef: eventRef,
+    graph,
+    schedules: causalEdgeSchedules(graph),
+    reachedAt: null,
+    startedAt,
+    color: EVENT_TRACE_COLORS[(traceId - 1) % EVENT_TRACE_COLORS.length],
+  };
+  trace.reachedAt = causalNodeReachedTimes(graph, trace.schedules);
+  causalProjection.currentEvents.push(trace);
   causalProjection.rootEventRef = eventRef;
   causalProjection.graph = graph;
   causalProjection.playbackStartedAt = performance.now();
-  playbackApi().start(causalProjection.playbackStartedAt);
-  playbackApi().setBoundaryProvider(() => causalPlaybackBoundaries(causalProjection.graph));
+  syncPlaybackBoundaryProvider();
   status(`fired: ${displayName(graph.index.get(eventRef))}`);
+}
+function pruneCompletedTraces(elapsed) {
+  causalProjection.currentEvents = causalProjection.currentEvents.filter(trace => elapsed - trace.startedAt < traceEndTimes(trace).fadeEnd);
+  const latest = causalProjection.currentEvents.at(-1) ?? null;
+  causalProjection.rootEventRef = latest?.rootEventRef ?? null;
+  causalProjection.graph = latest?.graph ?? null;
+  if (!latest && playbackApi().state.startedAt) {
+    playbackApi().setBoundaryProvider(null);
+    playbackApi().reset();
+  } else if (latest) {
+    syncPlaybackBoundaryProvider();
+  }
 }
 
 function buildSceneLayouts(index) {
@@ -333,9 +393,8 @@ function buildSceneLayouts(index) {
   return { entities, events, properties };
 }
 
-function ownerForRef(ref, index) {
-  return index.get(ref)?.owner ?? null;
-}
+function ownerForRef(ref, index) { return index.get(ref)?.owner ?? null; }
+function eventRouteKey(sourceOwner, targetOwner) { return `${sourceOwner.id}\u0000${targetOwner.id}`; }
 function allEventRoutes(layouts) {
   const grouped = new Map();
   const index = canonicalIndex();
@@ -344,7 +403,7 @@ function allEventRoutes(layouts) {
     const sourceOwner = ownerForRef(value.parent_ref, index);
     const targetOwner = ownerForRef(value.child_ref, index);
     if (!sourceOwner || !targetOwner || sourceOwner.id === targetOwner.id) continue;
-    const key = `${sourceOwner.id}\u0000${targetOwner.id}`;
+    const key = eventRouteKey(sourceOwner, targetOwner);
     if (!grouped.has(key)) grouped.set(key, { key, sourceOwner, targetOwner, properties: [] });
     grouped.get(key).properties.push(property);
   }
@@ -358,53 +417,70 @@ function allEventRoutes(layouts) {
     };
   });
 }
-function activeRouteStates(graph, schedules, elapsed) {
-  const states = new Map();
-  if (!graph) return states;
-  for (const edge of graph.edges) {
-    const sourceOwner = ownerForRef(edge.from, graph.index);
-    const targetOwner = ownerForRef(edge.to, graph.index);
+function traceRouteEdges(trace) {
+  const grouped = new Map();
+  for (const edge of trace.graph.edges) {
+    const sourceOwner = ownerForRef(edge.from, trace.graph.index);
+    const targetOwner = ownerForRef(edge.to, trace.graph.index);
     if (!sourceOwner || !targetOwner || sourceOwner.id === targetOwner.id) continue;
-    const key = `${sourceOwner.id}\u0000${targetOwner.id}`;
-    const state = causalPlaybackState(schedules.get(edge.id), elapsed);
-    const current = states.get(key) ?? { active: false, reached: false, targetActive: false, fade: 0 };
-    current.active ||= state.active;
-    current.reached ||= state.reached;
-    current.targetActive ||= state.targetActive;
-    current.fade = Math.max(current.fade, state.fade);
-    states.set(key, current);
+    const key = eventRouteKey(sourceOwner, targetOwner);
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(edge);
   }
-  return states;
+  return grouped;
 }
-function eventRouteFlowProgress(routeKey, now, active) {
+function eventRouteFlowProgress(routeKey, now) {
   let state = causalProjection.routePhases.get(routeKey);
   if (!state) {
     state = { phase: 0, time: now };
     causalProjection.routePhases.set(routeKey, state);
   }
   const dt = Math.max(0, Math.min(.05, (now - state.time) / 1000));
-  const speed = active ? requiredNumber(eventSettings(), 'active_link_speed', 'settings.event_playback') : requiredNumber(linkSettings(), 'base_flow_speed', 'settings.link_visualization');
-  if (speed < 0) throw new Error('Event link flow speed must be non-negative');
+  const speed = requiredNumber(linkSettings(), 'base_flow_speed', 'settings.link_visualization');
+  if (speed < 0) throw new Error('Event baseline link flow speed must be non-negative');
   state.phase = (state.phase + dt * speed) % 1;
   state.time = now;
   return state.phase;
 }
-function mixColor(base, active, amount) {
-  const t = Math.max(0, Math.min(1, amount));
-  return base.map((value, index) => value + (active[index] - value) * t);
+function fadedColor(color, alpha, floor = .08) {
+  const amount = floor + (1 - floor) * Math.max(0, Math.min(1, alpha));
+  return color.map(value => value * amount);
+}
+function drawTransientTraceRoute(route, trace, edges, globalElapsed, pulseRadius) {
+  const localElapsed = globalElapsed - trace.startedAt;
+  const alpha = traceAlpha(trace, globalElapsed);
+  if (alpha <= 0) return;
+  let furthest = 0;
+  let touched = false;
+  for (const edge of edges) {
+    const state = causalPlaybackState(trace.schedules.get(edge.id), localElapsed);
+    if (state.progress > 0) touched = true;
+    furthest = Math.max(furthest, state.progress);
+  }
+  if (!touched) return;
+  const endpoint = V.add(route.start, V.mul(V.sub(route.end, route.start), furthest));
+  const color = fadedColor(trace.color, alpha, .18);
+  drawLine(route.start, endpoint, color);
+  if (furthest > 0 && furthest < 1) drawBox(endpoint, [pulseRadius, pulseRadius, pulseRadius], color);
+}
+function activeTraceForRef(ref, globalElapsed) {
+  for (let index = causalProjection.currentEvents.length - 1; index >= 0; index--) {
+    const trace = causalProjection.currentEvents[index];
+    const local = globalElapsed - trace.startedAt;
+    const reached = trace.reachedAt.get(ref);
+    if (reached === undefined || local < reached) continue;
+    const alpha = traceAlpha(trace, globalElapsed);
+    if (alpha > 0) return { trace, alpha, local, reached };
+  }
+  return null;
 }
 
 function drawSceneProjection3D() {
   if (!ws) return;
-  const graph = causalProjection.rootEventRef ? buildCausalGraph(causalProjection.rootEventRef, causalProjection.maxDepth) : null;
-  causalProjection.graph = graph;
-  const index = graph ? graph.index : canonicalIndex();
+  const globalElapsed = playbackApi().state.startedAt ? playbackApi().elapsed() : 0;
+  if (causalProjection.currentEvents.length) pruneCompletedTraces(globalElapsed);
+  const index = canonicalIndex();
   const layouts = buildSceneLayouts(index);
-  const elapsed = graph ? playbackApi().elapsed() : 0;
-  const schedules = graph ? causalEdgeSchedules(graph) : new Map();
-  const reachedAt = graph ? causalNodeReachedTimes(graph, schedules) : new Map();
-  const timing = playbackApi().timingMs();
-  const routeStates = activeRouteStates(graph, schedules, elapsed);
 
   causalProjection.eventHitTargets = [];
   causalProjection.propertyHitTargets = [];
@@ -413,15 +489,24 @@ function drawSceneProjection3D() {
     const local = layouts.entities.get(entity.id);
     if (!local) continue;
 
+    const entityTrace = causalProjection.currentEvents.find(trace => {
+      const localElapsed = globalElapsed - trace.startedAt;
+      const root = trace.graph.index.get(trace.rootEventRef);
+      return root?.owner.id === entity.id && localElapsed >= 0 && localElapsed < playbackApi().timingMs().activation;
+    });
+    if (entityTrace) {
+      const overlayHalf = nodeHalfSize() + .018 * nodeMasterSize();
+      drawBox(entity.position, [overlayHalf, overlayHalf, overlayHalf], fadedColor(entityTrace.color, traceAlpha(entityTrace, globalElapsed), .28), true);
+    }
+
     const labelCenter = [entity.position[0], entity.position[1] + nodeHalfSize() + .28 * nodeMasterSize(), entity.position[2] + .012];
     drawSceneText3D(entity.name, labelCenter, 1.75 * nodeMasterSize(), .32 * nodeMasterSize(), selected.has(entity.id) ? [.62,.82,1] : [.94,.97,1]);
 
     for (const row of local.eventLayout.rows) {
-      const reached = reachedAt.has(row.ref) && elapsed >= reachedAt.get(row.ref);
-      const rootActive = graph?.rootRef === row.ref && elapsed < timing.activation;
-      const color = rootActive || reached ? SCENE_COLORS.eventActive : SCENE_COLORS.event;
+      const active = activeTraceForRef(row.ref, globalElapsed);
+      const color = active ? fadedColor(active.trace.color, active.alpha, .24) : SCENE_COLORS.event;
       drawBox(row.center, row.halfScale, color);
-      drawBox(row.center, [row.halfScale[0]+.008,row.halfScale[1]+.008,row.halfScale[2]+.008], rootActive || reached ? [.98,.66,.28] : SCENE_COLORS.outline, true);
+      drawBox(row.center, [row.halfScale[0]+.008,row.halfScale[1]+.008,row.halfScale[2]+.008], active ? color : SCENE_COLORS.outline, true);
       drawSceneText3D(propertyDisplayName(row.property, entity), [row.center[0],row.center[1],row.center[2]+row.halfScale[2]+.012], row.width*.88, row.height*.68, [.98,.92,.82]);
       causalProjection.eventHitTargets.push({ ref: row.ref, center: row.center, halfWidth: row.halfScale[0], halfHeight: row.halfScale[1] });
     }
@@ -435,10 +520,11 @@ function drawSceneProjection3D() {
       } else {
         drawBox(props.center, props.frameScale, SCENE_COLORS.propsFrame, true);
         for (const row of props.rows) {
-          const reached = reachedAt.has(row.ref) && elapsed >= reachedAt.get(row.ref);
+          const active = activeTraceForRef(row.ref, globalElapsed);
           const base = SCENE_COLORS[row.item.propertyType] ?? SCENE_COLORS.generic;
-          drawBox(row.center, row.halfScale, reached ? SCENE_COLORS.reached : base);
-          drawBox(row.center, [row.halfScale[0]+.008,row.halfScale[1]+.008,row.halfScale[2]+.008], reached ? [.98,.58,.48] : SCENE_COLORS.outline, true);
+          const color = active ? fadedColor(active.trace.color, active.alpha, .22) : base;
+          drawBox(row.center, row.halfScale, color);
+          drawBox(row.center, [row.halfScale[0]+.008,row.halfScale[1]+.008,row.halfScale[2]+.008], active ? color : SCENE_COLORS.outline, true);
           drawSceneText3D(`${row.item.propertyType.toUpperCase()} · ${displayName(row.item)}`, [row.center[0],row.center[1],row.center[2]+row.halfScale[2]+.012], row.width*.90, row.height*.68, [.92,.95,.99]);
           causalProjection.propertyHitTargets.push({ kind: 'property', ref: row.ref, center: row.center, halfWidth: row.halfScale[0], halfHeight: row.halfScale[1] });
         }
@@ -449,29 +535,30 @@ function drawSceneProjection3D() {
       }
     }
 
+    // Shared Event I/O are intentionally only visible points: 10% of the old
+    // node-sized markers and no text labels.
     if (local.eventIo) {
-      const hasActiveRoute = [...routeStates.entries()].some(([key, state]) => state.active && key.startsWith(`${entity.id}\u0000`) || state.active && key.endsWith(`\u0000${entity.id}`));
-      const ioColor = hasActiveRoute ? SCENE_COLORS.eventIoActive : SCENE_COLORS.eventIo;
-      drawBox(local.eventIo.inCenter, local.eventIo.halfScale, ioColor, true);
-      drawBox(local.eventIo.outCenter, local.eventIo.halfScale, ioColor);
-      const textY = local.eventIo.inCenter[1] + local.eventIo.halfScale[1] + .24 * nodeMasterSize();
-      drawSceneText3D('Event in', [local.eventIo.inCenter[0], textY, local.eventIo.inCenter[2]+.012], 1.20*nodeMasterSize(), .28*nodeMasterSize(), [.96,.91,.84]);
-      drawSceneText3D('Event out', [local.eventIo.outCenter[0], textY, local.eventIo.outCenter[2]+.012], 1.20*nodeMasterSize(), .28*nodeMasterSize(), [.96,.91,.84]);
+      drawBox(local.eventIo.inCenter, local.eventIo.halfScale, SCENE_COLORS.causalFlow, true);
+      drawBox(local.eventIo.outCenter, local.eventIo.halfScale, SCENE_COLORS.causalFlow);
     }
   }
 
   if (viewSettings().event_routes_visible) {
     const now = performance.now();
-    const pulseRadius = Math.max(.025, linkSettings().flow_width * .14) * nodeMasterSize();
+    const pulseRadius = Math.max(.018, linkSettings().flow_width * .10) * nodeMasterSize();
     for (const route of allEventRoutes(layouts)) {
-      const state = routeStates.get(route.key) ?? { active: false, fade: 0 };
-      const intensity = state.active ? 1 : state.fade;
-      const lineColor = mixColor(SCENE_COLORS.causal, SCENE_COLORS.causalActive, intensity);
-      const flowColor = mixColor(SCENE_COLORS.causalFlow, SCENE_COLORS.causalActive, intensity);
-      drawLine(route.start, route.end, lineColor);
-      const progress = eventRouteFlowProgress(route.key, now, state.active);
-      const pulse = V.add(route.start, V.mul(V.sub(route.end, route.start), progress));
-      drawBox(pulse, [pulseRadius, pulseRadius, pulseRadius], flowColor);
+      // Baseline link is always present and always shows canonical direction.
+      drawLine(route.start, route.end, SCENE_COLORS.causal);
+      const progress = eventRouteFlowProgress(route.key, now);
+      const baselinePulse = V.add(route.start, V.mul(V.sub(route.end, route.start), progress));
+      drawBox(baselinePulse, [pulseRadius*.65, pulseRadius*.65, pulseRadius*.65], SCENE_COLORS.causalFlow);
+
+      // Each current Event overlays only its own canonical trace on that same
+      // route. No semantic or visual route is invented by the animation.
+      for (const trace of causalProjection.currentEvents) {
+        const edges = traceRouteEdges(trace).get(route.key);
+        if (edges?.length) drawTransientTraceRoute(route, trace, edges, globalElapsed, pulseRadius);
+      }
     }
   }
 }
@@ -519,7 +606,7 @@ render = function renderSceneWith3dChildren() {
 };
 
 window.addEventListener('keydown', event => {
-  if (event.key === 'Escape' && causalProjection.rootEventRef) clearCausalProjection();
+  if (event.key === 'Escape' && causalProjection.currentEvents.length) clearCausalProjection();
 });
 window.addEventListener('load', () => {
   bindPropertyPanelControls();
