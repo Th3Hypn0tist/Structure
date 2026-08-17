@@ -14,9 +14,10 @@
 //   - event routes retain slow baseline direction flow at all times
 //   - firing an Event creates a transient trace in currentEvents[]
 //   - source Entity/Event activates in that trace's color
-//   - the same link receives a growing travel segment + small head point
+//   - travel starts only after the predecessor canonical step is complete
 //   - Effects/targets activate only when the canonical trace reaches them
-//   - downstream Events continue the same canonical trace
+//   - downstream Events continue only after target activation + next delay
+//   - branches use canonical edge order + branch_delay deterministically
 //   - concurrent traces use distinct stable colors
 //   - completed traces hold briefly, fade, disappear; baseline links remain
 
@@ -121,7 +122,7 @@ function buildCausalGraph(rootRef, maxDepth = 8) {
       seenEdges.add(edgeKey);
       const cycle = current.path.has(targetRef);
       const nextDepth = current.depth + 1;
-      edges.push({ id: property.id, from: current.ref, to: targetRef, linkType: value.link_type_ref, depth: nextDepth, cycle });
+      edges.push({ id: property.id, from: current.ref, to: targetRef, linkType: value.link_type_ref, depth: nextDepth, cycle, order: edges.length });
       const existing = nodes.get(targetRef);
       if (!existing || nextDepth < existing.depth) nodes.set(targetRef, { ref: targetRef, depth: nextDepth });
       if (!cycle) {
@@ -255,24 +256,61 @@ function eventIoLayout(entity, eventLayout, propsLayout) {
   };
 }
 
+// Deterministic scheduler. Depth is descriptive only; timing is propagated from
+// predecessor completion. The earliest canonical arrival wins at a merge, with
+// canonical edge order as the stable tie-breaker. A node never schedules its
+// outgoing edges before the step that reached it has completed.
 function causalEdgeSchedules(graph) {
   const timing = playbackApi().timingMs();
-  const siblings = new Map();
-  for (const edge of graph.edges) {
-    if (!siblings.has(edge.from)) siblings.set(edge.from, []);
-    siblings.get(edge.from).push(edge);
-  }
-  for (const edges of siblings.values()) edges.sort((a, b) => a.id.localeCompare(b.id));
+  const outgoing = new Map();
+  const edgeOrder = new Map();
+  graph.edges.forEach((edge, index) => {
+    edgeOrder.set(edge.id, index);
+    if (!outgoing.has(edge.from)) outgoing.set(edge.from, []);
+    outgoing.get(edge.from).push(edge);
+  });
+  for (const edges of outgoing.values()) edges.sort((a, b) => edgeOrder.get(a.id) - edgeOrder.get(b.id));
+
   const schedules = new Map();
-  for (const edge of graph.edges) {
-    const branchIndex = siblings.get(edge.from).findIndex(item => item.id === edge.id);
-    const generationStart = timing.activation + Math.max(0, edge.depth - 1) * (timing.travel + timing.target + timing.next);
-    const start = generationStart + branchIndex * timing.branch;
-    const arrival = start + timing.travel;
-    const effectEnd = arrival + timing.target;
-    const nextAt = effectEnd + timing.next;
-    schedules.set(edge.id, { start, arrival, effectEnd, nextAt });
+  const bestReady = new Map([[graph.rootRef, timing.activation]]);
+  const bestIncomingOrder = new Map([[graph.rootRef, -1]]);
+  const queue = [{ ref: graph.rootRef, readyAt: timing.activation, incomingOrder: -1 }];
+
+  while (queue.length) {
+    queue.sort((a, b) => a.readyAt - b.readyAt || a.incomingOrder - b.incomingOrder || a.ref.localeCompare(b.ref));
+    const current = queue.shift();
+    if (Math.abs((bestReady.get(current.ref) ?? Infinity) - current.readyAt) > 1e-6) continue;
+    if ((bestIncomingOrder.get(current.ref) ?? Infinity) !== current.incomingOrder) continue;
+
+    const siblings = outgoing.get(current.ref) ?? [];
+    siblings.forEach((edge, branchIndex) => {
+      const start = current.readyAt + branchIndex * timing.branch;
+      const arrival = start + timing.travel;
+      const effectEnd = arrival + timing.target;
+      const nextAt = effectEnd + timing.next;
+      const order = edgeOrder.get(edge.id);
+      schedules.set(edge.id, {
+        start,
+        arrival,
+        effectEnd,
+        nextAt,
+        sourceReadyAt: current.readyAt,
+        branchIndex,
+        order,
+      });
+
+      if (edge.cycle) return;
+      const previousReady = bestReady.get(edge.to);
+      const previousOrder = bestIncomingOrder.get(edge.to) ?? Infinity;
+      const earlier = previousReady === undefined || nextAt < previousReady - 1e-6;
+      const stableTie = previousReady !== undefined && Math.abs(nextAt - previousReady) <= 1e-6 && order < previousOrder;
+      if (!earlier && !stableTie) return;
+      bestReady.set(edge.to, nextAt);
+      bestIncomingOrder.set(edge.to, order);
+      queue.push({ ref: edge.to, readyAt: nextAt, incomingOrder: order });
+    });
   }
+
   return schedules;
 }
 function causalPlaybackBoundariesForTrace(trace) {
@@ -294,9 +332,10 @@ function causalPlaybackBoundariesForTrace(trace) {
 function causalNodeReachedTimes(graph, schedules) {
   const reached = new Map([[graph.rootRef, 0]]);
   for (const edge of graph.edges) {
-    const arrival = schedules.get(edge.id)?.arrival ?? 0;
+    const schedule = schedules.get(edge.id);
+    if (!schedule) continue;
     const current = reached.get(edge.to);
-    if (current === undefined || arrival < current) reached.set(edge.to, arrival);
+    if (current === undefined || schedule.arrival < current) reached.set(edge.to, schedule.arrival);
   }
   return reached;
 }
@@ -336,6 +375,8 @@ function clearCausalProjection() {
   causalProjection.playbackStartedAt = 0;
   causalProjection.currentEvents = [];
   causalProjection.routePhases.clear();
+  causalProjection.eventHitTargets = [];
+  causalProjection.propertyHitTargets = [];
   playbackApi().setBoundaryProvider(null);
   playbackApi().reset();
 }
@@ -427,6 +468,7 @@ function traceRouteEdges(trace) {
     if (!grouped.has(key)) grouped.set(key, []);
     grouped.get(key).push(edge);
   }
+  for (const edges of grouped.values()) edges.sort((a, b) => (trace.schedules.get(a.id)?.order ?? Infinity) - (trace.schedules.get(b.id)?.order ?? Infinity));
   return grouped;
 }
 function eventRouteFlowProgress(routeKey, now) {
@@ -435,7 +477,7 @@ function eventRouteFlowProgress(routeKey, now) {
     state = { phase: 0, time: now };
     causalProjection.routePhases.set(routeKey, state);
   }
-  const dt = Math.max(0, Math.min(.05, (now - state.time) / 1000));
+  const dt = Math.max(0, (now - state.time) / 1000);
   const speed = requiredNumber(linkSettings(), 'base_flow_speed', 'settings.link_visualization');
   if (speed < 0) throw new Error('Event baseline link flow speed must be non-negative');
   state.phase = (state.phase + dt * speed) % 1;
@@ -446,31 +488,51 @@ function fadedColor(color, alpha, floor = .08) {
   const amount = floor + (1 - floor) * Math.max(0, Math.min(1, alpha));
   return color.map(value => value * amount);
 }
+
+// A shared visual route may represent multiple canonical causal edges. Never use
+// max(progress): a later edge would visually teleport the trace. Completed uses
+// leave only a dim trail; each currently travelling canonical edge draws its own
+// deterministic partial segment and head.
 function drawTransientTraceRoute(route, trace, edges, globalElapsed, pulseRadius) {
   const localElapsed = globalElapsed - trace.startedAt;
   const alpha = traceAlpha(trace, globalElapsed);
   if (alpha <= 0) return;
-  let furthest = 0;
-  let touched = false;
-  for (const edge of edges) {
-    const state = causalPlaybackState(trace.schedules.get(edge.id), localElapsed);
-    if (state.progress > 0) touched = true;
-    furthest = Math.max(furthest, state.progress);
+
+  const states = edges.map(edge => ({ edge, schedule: trace.schedules.get(edge.id) }))
+    .filter(item => item.schedule)
+    .map(item => ({ ...item, state: causalPlaybackState(item.schedule, localElapsed) }))
+    .sort((a, b) => a.schedule.start - b.schedule.start || a.schedule.order - b.schedule.order);
+  const completed = states.some(item => item.state.reached);
+  const active = states.filter(item => item.state.active);
+  const trailColor = fadedColor(trace.color, alpha * .28, .04);
+  const activeColor = fadedColor(trace.color, alpha, .18);
+
+  if (completed) drawLine(route.start, route.end, trailColor);
+  for (const item of active) {
+    const endpoint = V.add(route.start, V.mul(V.sub(route.end, route.start), item.state.progress));
+    drawLine(route.start, endpoint, activeColor);
+    drawBox(endpoint, [pulseRadius, pulseRadius, pulseRadius], activeColor);
   }
-  if (!touched) return;
-  const endpoint = V.add(route.start, V.mul(V.sub(route.end, route.start), furthest));
-  const color = fadedColor(trace.color, alpha, .18);
-  drawLine(route.start, endpoint, color);
-  if (furthest > 0 && furthest < 1) drawBox(endpoint, [pulseRadius, pulseRadius, pulseRadius], color);
 }
+
+// Activation is a bounded timeline state, not "reached forever". This makes
+// Event -> Effect -> Target -> downstream Event visibly sequential.
 function activeTraceForRef(ref, globalElapsed) {
   for (let index = causalProjection.currentEvents.length - 1; index >= 0; index--) {
     const trace = causalProjection.currentEvents[index];
     const local = globalElapsed - trace.startedAt;
-    const reached = trace.reachedAt.get(ref);
-    if (reached === undefined || local < reached) continue;
     const alpha = traceAlpha(trace, globalElapsed);
-    if (alpha > 0) return { trace, alpha, local, reached };
+    if (alpha <= 0) continue;
+    if (ref === trace.rootEventRef && local >= 0 && local < playbackApi().timingMs().activation) {
+      return { trace, alpha, local, reached: 0 };
+    }
+    for (const edge of trace.graph.edges) {
+      if (edge.to !== ref) continue;
+      const schedule = trace.schedules.get(edge.id);
+      if (!schedule) continue;
+      const state = causalPlaybackState(schedule, local);
+      if (state.targetActive) return { trace, alpha, local, reached: schedule.arrival };
+    }
   }
   return null;
 }
@@ -489,14 +551,16 @@ function drawSceneProjection3D() {
     const local = layouts.entities.get(entity.id);
     if (!local) continue;
 
-    const entityTrace = causalProjection.currentEvents.find(trace => {
+    const entityActive = activeTraceForRef(entity.id, globalElapsed);
+    const rootTrace = causalProjection.currentEvents.find(trace => {
       const localElapsed = globalElapsed - trace.startedAt;
       const root = trace.graph.index.get(trace.rootEventRef);
       return root?.owner.id === entity.id && localElapsed >= 0 && localElapsed < playbackApi().timingMs().activation;
     });
+    const entityTrace = entityActive ?? (rootTrace ? { trace: rootTrace, alpha: traceAlpha(rootTrace, globalElapsed) } : null);
     if (entityTrace) {
       const overlayHalf = nodeHalfSize() + .018 * nodeMasterSize();
-      drawBox(entity.position, [overlayHalf, overlayHalf, overlayHalf], fadedColor(entityTrace.color, traceAlpha(entityTrace, globalElapsed), .28), true);
+      drawBox(entity.position, [overlayHalf, overlayHalf, overlayHalf], fadedColor(entityTrace.trace.color, entityTrace.alpha, .28), true);
     }
 
     const labelCenter = [entity.position[0], entity.position[1] + nodeHalfSize() + .28 * nodeMasterSize(), entity.position[2] + .012];
@@ -535,8 +599,6 @@ function drawSceneProjection3D() {
       }
     }
 
-    // Shared Event I/O are intentionally only visible points: 10% of the old
-    // node-sized markers and no text labels.
     if (local.eventIo) {
       drawBox(local.eventIo.inCenter, local.eventIo.halfScale, SCENE_COLORS.causalFlow, true);
       drawBox(local.eventIo.outCenter, local.eventIo.halfScale, SCENE_COLORS.causalFlow);
@@ -547,14 +609,11 @@ function drawSceneProjection3D() {
     const now = performance.now();
     const pulseRadius = Math.max(.018, linkSettings().flow_width * .10) * nodeMasterSize();
     for (const route of allEventRoutes(layouts)) {
-      // Baseline link is always present and always shows canonical direction.
       drawLine(route.start, route.end, SCENE_COLORS.causal);
       const progress = eventRouteFlowProgress(route.key, now);
       const baselinePulse = V.add(route.start, V.mul(V.sub(route.end, route.start), progress));
       drawBox(baselinePulse, [pulseRadius*.65, pulseRadius*.65, pulseRadius*.65], SCENE_COLORS.causalFlow);
 
-      // Each current Event overlays only its own canonical trace on that same
-      // route. No semantic or visual route is invented by the animation.
       for (const trace of causalProjection.currentEvents) {
         const edges = traceRouteEdges(trace).get(route.key);
         if (edges?.length) drawTransientTraceRoute(route, trace, edges, globalElapsed, pulseRadius);
