@@ -87,7 +87,6 @@ class ArchitectureTests(unittest.TestCase):
     def test_event_io_is_one_tiny_shared_point_pair_per_entity_layout(self):
         causal = source("causal_projection.js")
         expected = f"const pointHalf = nodeHalf * {CW_EVENT_IO_POINT_SCALE:.2f}".rstrip("0")
-        # Current JS uses .10 spelling; normalize whitespace/leading decimal for semantic check.
         self.assertRegex(causal, r"const\s+pointHalf\s*=\s*nodeHalf\s*\*\s*(?:0?\.10|0?\.1)\s*;")
         self.assertIn("inCenter:", causal)
         self.assertIn("outCenter:", causal)
@@ -108,6 +107,35 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn("drawTransientTraceRoute", causal)
         self.assertNotIn("syntheticEdge", causal)
         self.assertNotIn("inferredRoute", causal)
+
+    def test_event_sequence_is_predecessor_driven_not_depth_driven(self):
+        causal = source("causal_projection.js")
+        scheduler = causal.split("function causalEdgeSchedules(graph)", 1)[1].split("function causalPlaybackBoundariesForTrace", 1)[0]
+        self.assertIn("bestReady", scheduler)
+        self.assertIn("current.readyAt", scheduler)
+        self.assertIn("const start = current.readyAt + branchIndex * timing.branch", scheduler)
+        self.assertIn("const nextAt = effectEnd + timing.next", scheduler)
+        self.assertIn("bestReady.set(edge.to, nextAt)", scheduler)
+        self.assertIn("edges.sort((a, b) => edgeOrder.get(a.id) - edgeOrder.get(b.id))", scheduler)
+        self.assertNotIn("edge.depth", scheduler)
+        self.assertNotIn("generationStart", scheduler)
+
+    def test_event_route_aggregation_cannot_teleport_trace_progress(self):
+        causal = source("causal_projection.js")
+        renderer = causal.split("function drawTransientTraceRoute", 1)[1].split("function activeTraceForRef", 1)[0]
+        self.assertIn("state.active", renderer)
+        self.assertIn("schedule.start", renderer)
+        self.assertIn("schedule.order", renderer)
+        self.assertIn("drawLine(route.start, endpoint", renderer)
+        self.assertNotIn("Math.max(furthest", renderer)
+        self.assertNotIn("furthest =", renderer)
+
+    def test_event_activation_is_bounded_to_target_window(self):
+        causal = source("causal_projection.js")
+        activation = causal.split("function activeTraceForRef", 1)[1].split("function drawSceneProjection3D", 1)[0]
+        self.assertIn("state.targetActive", activation)
+        self.assertIn("local < playbackApi().timingMs().activation", activation)
+        self.assertNotIn("local < reached", activation)
 
     def test_event_playback_state_is_runtime_not_server_semantics(self):
         playback = source("playback_runtime.js")
