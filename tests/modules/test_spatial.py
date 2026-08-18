@@ -7,8 +7,7 @@ from pathlib import Path
 
 from cw_oracle import entity_record, type_property
 from server.spatial import canonical_spatial_position, validate_spatial_entities
-from server.workspace import WorkspaceStore, workspace_fixture if False else None
-from server.workspace import starting_workspace
+from server.workspace import WorkspaceStore, starting_workspace
 
 
 class SpatialContractTests(unittest.TestCase):
