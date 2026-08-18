@@ -37,9 +37,11 @@
 
   function dynamicProjectionActive() {
     if (!ws) return true;
+    // Hover is transient view state. It must never invalidate a resident scene.
+    // Hover highlighting belongs in a small overlay/state buffer, not in the
+    // canonical/projection rebuild path.
     return Boolean(
       selected?.size ||
-      hovered ||
       linkSource ||
       linkTarget ||
       dragAxis ||
