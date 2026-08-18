@@ -32,7 +32,8 @@
       this.solidBoxes = new FloatStore(9 * 1024);
       this.outlineBoxes = new FloatStore(9 * 512);
       this.lines = new FloatStore(6 * 2048);
-      this.glyphs = new FloatStore(12 * 4096);
+      // Glyph instance: center xyz + size xy + uv rect + rgb + camera-right baseline offset.
+      this.glyphs = new FloatStore(13 * 4096);
       this.flowPulses = new FloatStore(14 * 2048);
       this.viewProjection = null;
       this.counts = { solidBoxes: 0, outlineBoxes: 0, lineVertices: 0, glyphs: 0, flowPulses: 0 };
@@ -70,13 +71,14 @@
       );
       this.counts.lineVertices += 2;
     }
-    glyph(center, size, uvRect, color) {
+    glyph(center, size, uvRect, color, baselineOffset = 0) {
       if (!this.viewProjection) throw new Error('RenderStore.glyph requires begin()');
       this.glyphs.push(
         Number(center[0]), Number(center[1]), Number(center[2]),
         Number(size[0]), Number(size[1]),
         Number(uvRect[0]), Number(uvRect[1]), Number(uvRect[2]), Number(uvRect[3]),
         Number(color[0]), Number(color[1]), Number(color[2]),
+        Number(baselineOffset),
       );
       this.counts.glyphs += 1;
     }
