@@ -181,14 +181,12 @@ async function bootstrapStructureS3DProjection() {
     await loadStructureScript('/static/structure_s3d_adapter.js');
   }
   if (!window.StructureFrameCache) {
-    // Must load after the Structure->S3D adapter so the cache wraps the final
-    // buildSceneLayouts/linkSlots implementations, and before the batch bridge
-    // so one reset occurs at the outer production render boundary.
     await loadStructureScript('/static/structure_frame_cache.js');
   }
   if (!window.StructureRenderBatch) {
     await loadStructureScript('/static/3d/render_store.js');
     await loadStructureScript('/static/3d/webgl_batch_renderer.js');
+    await loadStructureScript('/static/3d/persistent_gpu.js');
     await loadStructureScript('/static/structure_render_batch.js');
   }
   if (!window.S3DBenchmarkSettings) {
