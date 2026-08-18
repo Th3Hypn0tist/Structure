@@ -112,7 +112,8 @@ class ThreeDLibraryTests(unittest.TestCase):
             self.assertIn(token, source)
         self.assertIn("box(position, scale, color", source)
         self.assertIn("line(start, end, color)", source)
-        self.assertIn("glyph(center, size, uvRect, color)", source)
+        self.assertIn("glyph(center, size, uvRect, color, baselineOffset = 0)", source)
+        self.assertIn("Number(baselineOffset)", source)
         self.assertIn("flow(start, end, scale, color", source)
 
     def test_webgl_production_renderer_is_instanced_and_batched(self):
@@ -125,6 +126,7 @@ class ThreeDLibraryTests(unittest.TestCase):
         self.assertIn("gl.drawArraysInstanced(gl.TRIANGLE_STRIP", source)
         self.assertIn("drawFlow(data, count, vp, nowSeconds)", source)
         self.assertIn("timeSeconds", source)
+        self.assertIn("cameraRight", source)
         self.assertNotIn("property_type_ref", source)
         self.assertNotIn("ruleset_ref", source)
 
