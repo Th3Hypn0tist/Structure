@@ -62,13 +62,16 @@
   layout(location=2) in vec2 size;
   layout(location=3) in vec4 uvRect;
   layout(location=4) in vec3 inputColor;
+  layout(location=5) in float baselineOffset;
   uniform mat4 vp;
   uniform vec3 cameraRight;
   uniform vec3 cameraUp;
   out vec2 uv;
   out vec3 color;
   void main(){
-    vec3 world=center+cameraRight*(corner.x*size.x)+cameraUp*(corner.y*size.y);
+    vec3 world=center
+      + cameraRight*(baselineOffset + corner.x*size.x)
+      + cameraUp*(corner.y*size.y);
     uv=mix(uvRect.xy,uvRect.zw,corner*.5+.5);
     color=inputColor;
     gl_Position=vp*vec4(world,1.0);
@@ -120,7 +123,12 @@
       const index = code - this.first;
       const col = index % this.cols;
       const row = Math.floor(index / this.cols);
-      return [col / this.cols, row / this.rows, (col + 1) / this.cols, (row + 1) / this.rows];
+      // Canvas rows are top-down while WebGL UV Y is bottom-up.
+      const u0 = col / this.cols;
+      const u1 = (col + 1) / this.cols;
+      const v0 = 1 - (row + 1) / this.rows;
+      const v1 = 1 - row / this.rows;
+      return [u0, v0, u1, v1];
     }
   }
 
@@ -212,8 +220,8 @@
       gl.enableVertexAttribArray(0);
       gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.textInstanceBuffer);
-      const stride = 12 * 4;
-      const spec = [[1,3,0],[2,2,3],[3,4,5],[4,3,9]];
+      const stride = 13 * 4;
+      const spec = [[1,3,0],[2,2,3],[3,4,5],[4,3,9],[5,1,12]];
       for (const [attr, size, offset] of spec) {
         gl.enableVertexAttribArray(attr);
         gl.vertexAttribPointer(attr, size, gl.FLOAT, false, stride, offset * 4);
@@ -237,7 +245,8 @@
       const startX = -(clipped.length - 1) * charWidth * .5;
       for (let index = 0; index < clipped.length; index++) {
         const uv = this.atlas.uv(clipped[index]);
-        this.store.glyph([center[0] + startX + index * charWidth, center[1], center[2]], [charWidth * .52, height * .5], uv, color);
+        const baselineOffset = startX + index * charWidth;
+        this.store.glyph(center, [charWidth * .52, height * .5], uv, color, baselineOffset);
       }
     }
     upload(buffer, data) {
