@@ -1,7 +1,7 @@
 // WebGL2 high-density benchmark harness for S3D.
 (() => {
   const S3D = globalThis.S3D;
-  if (!S3D?.Benchmark || !S3D?.Mat4) throw new Error('S3D benchmark and math must load before benchmark_webgl');
+  if (!S3D?.Benchmark || !S3D?.Mat4 || !S3D?.Vec3) throw new Error('S3D benchmark and math must load before benchmark_webgl');
 
   function shader(gl, type, source) {
     const value = gl.createShader(type);
@@ -55,11 +55,16 @@
       this.uploads = 0;
       this.frameUploads = 0;
       this.running = false;
-      this.angle = 0;
-      this.radius = 58;
+      this.autoAngle = 0;
+      this.yawOffset = 0;
+      this.pitch = Math.atan(.45);
+      this.distance = 64;
+      this.target = [0, 0, 0];
+      this.pointer = null;
       this.currentPreset = null;
       this.lastReport = 0;
       this.initGeometry();
+      this.installInteraction();
     }
     initGeometry() {
       const gl = this.gl;
@@ -69,7 +74,7 @@
         -1,-1,-1, -1,-1,1, 1,-1,1, -1,-1,-1, 1,-1,1, 1,-1,-1,
         -1,1,-1, 1,1,1, -1,1,1, -1,1,-1, 1,1,-1, 1,1,1,
         -1,-1,-1, -1,1,1, -1,-1,1, -1,-1,-1, -1,1,-1, -1,1,1,
-        1,-1,-1, 1,-1,1, 1,1,1, 1,-1,-1, 1,1,1, 1,1,-1,
+        1,-1,-1, 1,-1,1, 1,1,1, 1,-1,-1, 1,1,1, 1,-1,-1, 1,1,1, 1,1,-1,
       ]);
       gl.bindVertexArray(this.nodeVao);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.nodeVertexBuffer);
@@ -86,6 +91,61 @@
       gl.enableVertexAttribArray(0);
       gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
       gl.bindVertexArray(null);
+    }
+    installInteraction() {
+      const canvas = this.canvas;
+      canvas.addEventListener('contextmenu', event => event.preventDefault());
+      canvas.addEventListener('pointerdown', event => {
+        if (event.button !== 0 && event.button !== 2) return;
+        this.pointer = { id: event.pointerId, button: event.button, x: event.clientX, y: event.clientY };
+        canvas.setPointerCapture(event.pointerId);
+        event.preventDefault();
+      });
+      canvas.addEventListener('pointermove', event => {
+        if (!this.pointer || event.pointerId !== this.pointer.id) return;
+        const dx = event.clientX - this.pointer.x;
+        const dy = event.clientY - this.pointer.y;
+        this.pointer.x = event.clientX;
+        this.pointer.y = event.clientY;
+        if (this.pointer.button === 2) this.orbit(dx, dy);
+        else if (this.pointer.button === 0) this.pan(dx, dy);
+        event.preventDefault();
+      });
+      const release = event => {
+        if (!this.pointer || event.pointerId !== this.pointer.id) return;
+        this.pointer = null;
+        if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+      };
+      canvas.addEventListener('pointerup', release);
+      canvas.addEventListener('pointercancel', release);
+      canvas.addEventListener('wheel', event => {
+        this.zoom(event.deltaY);
+        event.preventDefault();
+      }, { passive: false });
+    }
+    orbit(dx, dy) {
+      this.yawOffset -= dx * .0025;
+      this.pitch = Math.max(-1.48, Math.min(1.48, this.pitch + dy * .0025));
+    }
+    pan(dx, dy) {
+      const yaw = this.autoAngle + this.yawOffset;
+      const cp = Math.cos(this.pitch);
+      const forward = S3D.Vec3.norm([
+        -Math.sin(yaw) * cp,
+        -Math.sin(this.pitch),
+        -Math.cos(yaw) * cp,
+      ]);
+      let right = S3D.Vec3.cross(forward, [0, 1, 0]);
+      right = S3D.Vec3.length(right) < 1e-6 ? [1, 0, 0] : S3D.Vec3.norm(right);
+      const up = S3D.Vec3.norm(S3D.Vec3.cross(right, forward));
+      const scale = this.distance * .0015;
+      this.target = S3D.Vec3.add(
+        this.target,
+        S3D.Vec3.add(S3D.Vec3.mul(right, -dx * scale), S3D.Vec3.mul(up, dy * scale)),
+      );
+    }
+    zoom(deltaY) {
+      this.distance = Math.max(3, Math.min(320, this.distance * Math.exp(deltaY * .001)));
     }
     upload(buffer, data, usage) {
       const gl = this.gl;
@@ -117,10 +177,21 @@
         this.canvas.height = height;
       }
     }
+    cameraPosition() {
+      const yaw = this.autoAngle + this.yawOffset;
+      const cp = Math.cos(this.pitch);
+      return [
+        this.target[0] + Math.sin(yaw) * cp * this.distance,
+        this.target[1] + Math.sin(this.pitch) * this.distance,
+        this.target[2] + Math.cos(yaw) * cp * this.distance,
+      ];
+    }
     viewProjection() {
       const aspect = this.canvas.width / Math.max(1, this.canvas.height);
-      const camera = [Math.sin(this.angle) * this.radius, this.radius * .45, Math.cos(this.angle) * this.radius];
-      return S3D.Mat4.multiply(S3D.Mat4.perspective(55, aspect, .1, 400), S3D.Mat4.lookAt(camera, [0, 0, 0]));
+      return S3D.Mat4.multiply(
+        S3D.Mat4.perspective(55, aspect, .1, 500),
+        S3D.Mat4.lookAt(this.cameraPosition(), this.target),
+      );
     }
     drawProgram(programValue, color, vp) {
       const gl = this.gl;
@@ -173,6 +244,11 @@
           `build        ${(this.buildMs ?? 0).toFixed(1)} ms`,
           `JS heap      ${memory}`,
           '',
+          'mouse:',
+          '- LMB drag: pan',
+          '- RMB drag: orbit',
+          '- wheel: zoom',
+          '',
           'contract:',
           '- nodes: 1 instanced draw',
           '- links: <= 1 batched draw',
@@ -182,7 +258,7 @@
     }
     frame = now => {
       if (!this.running) return;
-      this.angle = now * 0.00008;
+      this.autoAngle = now * 0.00008;
       this.render(now);
       requestAnimationFrame(this.frame);
     };
