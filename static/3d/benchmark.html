@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>S3D 20K Benchmark</title>
+  <style>
+    html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#070a10;color:#e8eef8;font:13px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace}
+    canvas{position:fixed;inset:0;width:100%;height:100%}
+    #panel{position:fixed;top:12px;left:12px;z-index:2;padding:12px 14px;background:rgba(7,10,16,.88);border:1px solid #344154;min-width:260px}
+    #panel h1{font:600 15px/1.2 system-ui,sans-serif;margin:0 0 10px}
+    #controls{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+    button{background:#141c29;color:#e8eef8;border:1px solid #46546a;padding:5px 8px;cursor:pointer}
+    button.active{border-color:#5ca8ff;background:#173354}
+    pre{margin:0;white-space:pre-wrap}
+  </style>
+</head>
+<body>
+  <canvas id="bench"></canvas>
+  <section id="panel">
+    <h1>S3D WebGL2 density benchmark</h1>
+    <div id="controls">
+      <button data-preset="nodes20k">20K nodes</button>
+      <button data-preset="links50k">20K + 50K links</button>
+      <button data-preset="links100k">20K + 100K links</button>
+    </div>
+    <pre id="metrics">initializing…</pre>
+  </section>
+
+  <script src="/static/3d/core.js"></script>
+  <script src="/static/3d/math.js"></script>
+  <script src="/static/3d/benchmark.js"></script>
+  <script src="/static/3d/benchmark_webgl.js"></script>
+  <script>
+    const canvas = document.querySelector('#bench');
+    const metrics = document.querySelector('#metrics');
+    const benchmark = new S3D.WebGLBenchmark(canvas, metrics);
+    function activate(name) {
+      const preset = S3D.Benchmark.presets[name];
+      if (!preset) throw new Error(`unknown benchmark preset: ${name}`);
+      benchmark.loadPreset(preset);
+      document.querySelectorAll('[data-preset]').forEach(button => button.classList.toggle('active', button.dataset.preset === name));
+    }
+    document.querySelector('#controls').addEventListener('click', event => {
+      const name = event.target?.dataset?.preset;
+      if (name) activate(name);
+    });
+    activate('nodes20k');
+    benchmark.start();
+    window.S3DBenchmark = benchmark;
+  </script>
+</body>
+</html>
