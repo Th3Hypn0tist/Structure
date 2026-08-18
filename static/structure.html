@@ -59,6 +59,18 @@
   <script>(()=>{const toolbar=document.querySelector('#toolbar');if(!toolbar)throw new Error('toolbar missing');const sync=()=>document.documentElement.style.setProperty('--toolbar-clearance',`${Math.ceil(toolbar.getBoundingClientRect().bottom+8)}px`);new ResizeObserver(sync).observe(toolbar);window.addEventListener('resize',sync);sync();})();</script>
   <script>(()=>{const errors=[];const button=document.querySelector('#errorReportButton');if(!button)throw new Error('errorReportButton missing');function normalizeError(value){if(value instanceof Error)return{message:value.message,stack:value.stack};if(typeof value==='string')return{message:value,stack:''};return{message:JSON.stringify(value),stack:''};}function refreshButton(){button.textContent=`ERRORS ${errors.length}`;button.classList.toggle('has-errors',errors.length>0);}function record(entry){errors.push({timestamp:new Date().toISOString(),...entry});refreshButton();}window.reportStructureError=(error,context={})=>record({type:context.type??'caught_error',...normalizeError(error),...context});window.addEventListener('error',event=>{if(event instanceof ErrorEvent)record({type:'runtime_error',message:event.message,stack:event.error?.stack??'',source:event.filename,line:event.lineno,column:event.colno});else if(event.target?.src||event.target?.href)record({type:'resource_error',message:`Failed to load resource: ${event.target.src||event.target.href}`,source:event.target.src||event.target.href});},true);window.addEventListener('unhandledrejection',event=>record({type:'unhandled_rejection',...normalizeError(event.reason)}));function reportText(){return['STRUCTURE ERROR REPORT',`generated: ${new Date().toISOString()}`,`url: ${location.href}`,`user_agent: ${navigator.userAgent}`,`error_count: ${errors.length}`,'',...errors.flatMap((error,index)=>[`[${index+1}] ${error.timestamp} ${error.type}`,`message: ${error.message}`,error.source?`source: ${error.source}:${error.line??0}:${error.column??0}`:'',error.stack?`stack:\n${error.stack}`:'',''])].join('\n');}button.addEventListener('click',async()=>{if(!navigator.clipboard?.writeText)throw new Error('Clipboard API unavailable');await navigator.clipboard.writeText(reportText());button.textContent=`COPIED ${errors.length}`;setTimeout(refreshButton,900);});window.StructureErrorLog=errors;refreshButton();})();</script>
 
+  <script src="/static/3d/core.js"></script>
+  <script src="/static/3d/math.js"></script>
+  <script src="/static/3d/objects/object.js"></script>
+  <script src="/static/3d/objects/primitives.js"></script>
+  <script src="/static/3d/objects/anchors.js"></script>
+  <script src="/static/3d/objects/links.js"></script>
+  <script src="/static/3d/objects/props_item.js"></script>
+  <script src="/static/3d/objects/props.js"></script>
+  <script src="/static/3d/objects/event_item.js"></script>
+  <script src="/static/3d/objects/events.js"></script>
+  <script src="/static/3d/objects/pulse.js"></script>
+  <script src="/static/3d/objects/highlight.js"></script>
   <script src="/static/app.js"></script>
   <script src="/static/scene_ui_3d.js"></script>
   <script src="/static/entity_editor.js"></script>
