@@ -10,6 +10,9 @@
       this.value = value;
       this.color = [...color];
     }
+    draw(renderer, context = {}) {
+      renderer?.box?.(this.worldPosition(), this.scale, this.color, false, this, context);
+    }
   }
 
   S3D.PropsItem = PropsItem;
