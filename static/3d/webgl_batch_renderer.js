@@ -1,11 +1,11 @@
 // WebGL2-first batched renderer for S3D RenderStore.
-// Boxes use shared cube geometry + instancing, links use one packed line draw,
-// link flow is shader-driven, and text uses a shared glyph atlas + instanced quads.
+// Scene batches may be compiled into persistent GPU buffers. Camera-only frames
+// then update uniforms only: no object traversal and no buffer uploads.
 (() => {
   const S3D = globalThis.S3D;
   if (!S3D?.RenderStore) throw new Error('S3D RenderStore must load before WebGLBatchRenderer');
 
-  function compile(gl, type, source) {
+  function compileShader(gl, type, source) {
     const shader = gl.createShader(type);
     gl.shaderSource(shader, source);
     gl.compileShader(shader);
@@ -13,12 +13,12 @@
     return shader;
   }
   function makeProgram(gl, vertex, fragment) {
-    const program = gl.createProgram();
-    gl.attachShader(program, compile(gl, gl.VERTEX_SHADER, vertex));
-    gl.attachShader(program, compile(gl, gl.FRAGMENT_SHADER, fragment));
-    gl.linkProgram(program);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) || 'program link failed');
-    return program;
+    const value = gl.createProgram();
+    gl.attachShader(value, compileShader(gl, gl.VERTEX_SHADER, vertex));
+    gl.attachShader(value, compileShader(gl, gl.FRAGMENT_SHADER, fragment));
+    gl.linkProgram(value);
+    if (!gl.getProgramParameter(value, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(value) || 'program link failed');
+    return value;
   }
 
   const BOX_VS = `#version 300 es
@@ -45,11 +45,6 @@
     color=flowColor;
     gl_Position=vp*vec4(center+p*flowScale,1.0);
   }`;
-  const COLOR_FS = `#version 300 es
-  precision highp float;
-  in vec3 color;
-  out vec4 outColor;
-  void main(){ outColor=vec4(color,1.0); }`;
   const LINE_VS = `#version 300 es
   layout(location=0) in vec3 p;
   layout(location=1) in vec3 inputColor;
@@ -76,6 +71,11 @@
     color=inputColor;
     gl_Position=vp*vec4(world,1.0);
   }`;
+  const COLOR_FS = `#version 300 es
+  precision highp float;
+  in vec3 color;
+  out vec4 outColor;
+  void main(){ outColor=vec4(color,1.0); }`;
   const TEXT_FS = `#version 300 es
   precision highp float;
   uniform sampler2D atlas;
@@ -123,7 +123,6 @@
       const index = code - this.first;
       const col = index % this.cols;
       const row = Math.floor(index / this.cols);
-      // Canvas rows are top-down while WebGL UV Y is bottom-up.
       const u0 = col / this.cols;
       const u1 = (col + 1) / this.cols;
       const v0 = 1 - (row + 1) / this.rows;
@@ -142,54 +141,71 @@
       this.lineProgram = makeProgram(gl, LINE_VS, COLOR_FS);
       this.textProgram = makeProgram(gl, TEXT_VS, TEXT_FS);
       this.atlas = new GlyphAtlas(gl);
-      this.stats = { drawCalls: 0, uploads: 0, solidBoxes: 0, outlineBoxes: 0, lineVertices: 0, glyphs: 0, flowPulses: 0 };
+      this.compiled = null;
+      this.stats = { drawCalls: 0, uploads: 0, solidBoxes: 0, outlineBoxes: 0, lineVertices: 0, glyphs: 0, flowPulses: 0, compiled: false };
       this.initBoxes();
       this.initFlow();
       this.initLines();
       this.initText();
+      this.uniforms = {
+        boxVp: gl.getUniformLocation(this.boxProgram, 'vp'),
+        flowVp: gl.getUniformLocation(this.flowProgram, 'vp'),
+        flowTime: gl.getUniformLocation(this.flowProgram, 'timeSeconds'),
+        lineVp: gl.getUniformLocation(this.lineProgram, 'vp'),
+        textVp: gl.getUniformLocation(this.textProgram, 'vp'),
+        textRight: gl.getUniformLocation(this.textProgram, 'cameraRight'),
+        textUp: gl.getUniformLocation(this.textProgram, 'cameraUp'),
+        textAtlas: gl.getUniformLocation(this.textProgram, 'atlas'),
+      };
     }
-    initBoxes() {
+    configureBoxVao(vao, instanceBuffer, indexBuffer) {
       const gl = this.gl;
-      this.boxVao = gl.createVertexArray();
-      this.boxVertexBuffer = gl.createBuffer();
-      this.boxInstanceBuffer = gl.createBuffer();
-      this.boxFaceIndexBuffer = gl.createBuffer();
-      this.boxEdgeIndexBuffer = gl.createBuffer();
-      this.boxVertices = new Float32Array([-1,-1,-1, 1,-1,-1, 1,1,-1, -1,1,-1, -1,-1,1, 1,-1,1, 1,1,1, -1,1,1]);
-      this.boxFaces = new Uint16Array([0,2,1,0,3,2,4,5,6,4,6,7,0,4,7,0,7,3,1,2,6,1,6,5,0,1,5,0,5,4,3,7,6,3,6,2]);
-      this.boxEdges = new Uint16Array([0,1,1,2,2,3,3,0,4,5,5,6,6,7,7,4,0,4,1,5,2,6,3,7]);
-      gl.bindVertexArray(this.boxVao);
+      gl.bindVertexArray(vao);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.boxVertexBuffer);
-      gl.bufferData(gl.ARRAY_BUFFER, this.boxVertices, gl.STATIC_DRAW);
       gl.enableVertexAttribArray(0);
       gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
-      gl.bindBuffer(gl.ARRAY_BUFFER, this.boxInstanceBuffer);
+      gl.bindBuffer(gl.ARRAY_BUFFER, instanceBuffer);
       const stride = 9 * 4;
       for (let attr = 1; attr <= 3; attr++) {
         gl.enableVertexAttribArray(attr);
         gl.vertexAttribPointer(attr, 3, gl.FLOAT, false, stride, (attr - 1) * 3 * 4);
         gl.vertexAttribDivisor(attr, 1);
       }
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+      gl.bindVertexArray(null);
+    }
+    initBoxes() {
+      const gl = this.gl;
+      this.boxVertexBuffer = gl.createBuffer();
+      this.boxFaceIndexBuffer = gl.createBuffer();
+      this.boxEdgeIndexBuffer = gl.createBuffer();
+      this.solidBoxInstanceBuffer = gl.createBuffer();
+      this.outlineBoxInstanceBuffer = gl.createBuffer();
+      this.solidBoxVao = gl.createVertexArray();
+      this.outlineBoxVao = gl.createVertexArray();
+      this.boxVertices = new Float32Array([-1,-1,-1, 1,-1,-1, 1,1,-1, -1,1,-1, -1,-1,1, 1,-1,1, 1,1,1, -1,1,1]);
+      this.boxFaces = new Uint16Array([0,2,1,0,3,2,4,5,6,4,6,7,0,4,7,0,7,3,1,2,6,1,6,5,0,1,5,0,5,4,3,7,6,3,6,2]);
+      this.boxEdges = new Uint16Array([0,1,1,2,2,3,3,0,4,5,5,6,6,7,7,4,0,4,1,5,2,6,3,7]);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.boxVertexBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, this.boxVertices, gl.STATIC_DRAW);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.boxFaceIndexBuffer);
       gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, this.boxFaces, gl.STATIC_DRAW);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.boxEdgeIndexBuffer);
       gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, this.boxEdges, gl.STATIC_DRAW);
-      gl.bindVertexArray(null);
+      this.configureBoxVao(this.solidBoxVao, this.solidBoxInstanceBuffer, this.boxFaceIndexBuffer);
+      this.configureBoxVao(this.outlineBoxVao, this.outlineBoxInstanceBuffer, this.boxEdgeIndexBuffer);
     }
     initFlow() {
       const gl = this.gl;
       this.flowVao = gl.createVertexArray();
-      this.flowVertexBuffer = gl.createBuffer();
       this.flowInstanceBuffer = gl.createBuffer();
       gl.bindVertexArray(this.flowVao);
-      gl.bindBuffer(gl.ARRAY_BUFFER, this.flowVertexBuffer);
-      gl.bufferData(gl.ARRAY_BUFFER, this.boxVertices, gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.boxVertexBuffer);
       gl.enableVertexAttribArray(0);
       gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.flowInstanceBuffer);
       const stride = 14 * 4;
-      const spec = [[1,3,0],[2,3,3],[3,3,6],[4,3,9],[5,2,12]];
-      for (const [attr,size,offset] of spec) {
+      for (const [attr,size,offset] of [[1,3,0],[2,3,3],[3,3,6],[4,3,9],[5,2,12]]) {
         gl.enableVertexAttribArray(attr);
         gl.vertexAttribPointer(attr, size, gl.FLOAT, false, stride, offset * 4);
         gl.vertexAttribDivisor(attr, 1);
@@ -221,8 +237,7 @@
       gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.textInstanceBuffer);
       const stride = 13 * 4;
-      const spec = [[1,3,0],[2,2,3],[3,4,5],[4,3,9],[5,1,12]];
-      for (const [attr, size, offset] of spec) {
+      for (const [attr,size,offset] of [[1,3,0],[2,2,3],[3,4,5],[4,3,9],[5,1,12]]) {
         gl.enableVertexAttribArray(attr);
         gl.vertexAttribPointer(attr, size, gl.FLOAT, false, stride, offset * 4);
         gl.vertexAttribDivisor(attr, 1);
@@ -244,83 +259,95 @@
       const charWidth = width / Math.max(1, clipped.length);
       const startX = -(clipped.length - 1) * charWidth * .5;
       for (let index = 0; index < clipped.length; index++) {
-        const uv = this.atlas.uv(clipped[index]);
         const baselineOffset = startX + index * charWidth;
-        this.store.glyph(center, [charWidth * .52, height * .5], uv, color, baselineOffset);
+        this.store.glyph(center, [charWidth * .52, height * .5], this.atlas.uv(clipped[index]), color, baselineOffset);
       }
     }
-    upload(buffer, data) {
+    upload(buffer, data, usage = this.gl.DYNAMIC_DRAW) {
       const gl = this.gl;
       gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-      gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+      gl.bufferData(gl.ARRAY_BUFFER, data, usage);
       this.stats.uploads += 1;
     }
-    drawBoxes(data, count, outline, vp) {
+    compileCurrent() {
+      const snapshot = this.store.snapshot();
+      this.stats.uploads = 0;
+      this.upload(this.lineBuffer, snapshot.lines, this.gl.STATIC_DRAW);
+      this.upload(this.solidBoxInstanceBuffer, snapshot.solidBoxes, this.gl.STATIC_DRAW);
+      this.upload(this.outlineBoxInstanceBuffer, snapshot.outlineBoxes, this.gl.STATIC_DRAW);
+      this.upload(this.flowInstanceBuffer, snapshot.flowPulses, this.gl.STATIC_DRAW);
+      this.upload(this.textInstanceBuffer, snapshot.glyphs, this.gl.STATIC_DRAW);
+      this.compiled = { counts: { ...snapshot.counts }, uploads: this.stats.uploads };
+      this.stats.compiled = true;
+      return this.stats.uploads;
+    }
+    clearCompiled() {
+      this.compiled = null;
+      this.stats.compiled = false;
+    }
+    drawBoxes(count, outline, vp) {
       if (!count) return;
       const gl = this.gl;
       gl.useProgram(this.boxProgram);
-      gl.uniformMatrix4fv(gl.getUniformLocation(this.boxProgram, 'vp'), false, new Float32Array(vp));
-      gl.bindVertexArray(this.boxVao);
-      this.upload(this.boxInstanceBuffer, data);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, outline ? this.boxEdgeIndexBuffer : this.boxFaceIndexBuffer);
+      gl.uniformMatrix4fv(this.uniforms.boxVp, false, new Float32Array(vp));
+      gl.bindVertexArray(outline ? this.outlineBoxVao : this.solidBoxVao);
       gl.drawElementsInstanced(outline ? gl.LINES : gl.TRIANGLES, outline ? this.boxEdges.length : this.boxFaces.length, gl.UNSIGNED_SHORT, 0, count);
       this.stats.drawCalls += 1;
     }
-    drawFlow(data, count, vp, nowSeconds) {
+    drawFlow(count, vp, nowSeconds) {
       if (!count) return;
       const gl = this.gl;
       gl.useProgram(this.flowProgram);
-      gl.uniformMatrix4fv(gl.getUniformLocation(this.flowProgram, 'vp'), false, new Float32Array(vp));
-      gl.uniform1f(gl.getUniformLocation(this.flowProgram, 'timeSeconds'), nowSeconds);
+      gl.uniformMatrix4fv(this.uniforms.flowVp, false, new Float32Array(vp));
+      gl.uniform1f(this.uniforms.flowTime, nowSeconds);
       gl.bindVertexArray(this.flowVao);
-      this.upload(this.flowInstanceBuffer, data);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.boxFaceIndexBuffer);
       gl.drawElementsInstanced(gl.TRIANGLES, this.boxFaces.length, gl.UNSIGNED_SHORT, 0, count);
       this.stats.drawCalls += 1;
     }
-    drawLines(data, vertexCount, vp) {
+    drawLines(vertexCount, vp) {
       if (!vertexCount) return;
       const gl = this.gl;
       gl.useProgram(this.lineProgram);
-      gl.uniformMatrix4fv(gl.getUniformLocation(this.lineProgram, 'vp'), false, new Float32Array(vp));
+      gl.uniformMatrix4fv(this.uniforms.lineVp, false, new Float32Array(vp));
       gl.bindVertexArray(this.lineVao);
-      this.upload(this.lineBuffer, data);
       gl.drawArrays(gl.LINES, 0, vertexCount);
       this.stats.drawCalls += 1;
     }
-    drawText(data, count, vp, cameraRight, cameraUp) {
+    drawText(count, vp, cameraRight, cameraUp) {
       if (!count) return;
       const gl = this.gl;
       gl.useProgram(this.textProgram);
-      gl.uniformMatrix4fv(gl.getUniformLocation(this.textProgram, 'vp'), false, new Float32Array(vp));
-      gl.uniform3fv(gl.getUniformLocation(this.textProgram, 'cameraRight'), cameraRight);
-      gl.uniform3fv(gl.getUniformLocation(this.textProgram, 'cameraUp'), cameraUp);
+      gl.uniformMatrix4fv(this.uniforms.textVp, false, new Float32Array(vp));
+      gl.uniform3fv(this.uniforms.textRight, cameraRight);
+      gl.uniform3fv(this.uniforms.textUp, cameraUp);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, this.atlas.texture);
-      gl.uniform1i(gl.getUniformLocation(this.textProgram, 'atlas'), 0);
+      gl.uniform1i(this.uniforms.textAtlas, 0);
       gl.bindVertexArray(this.textVao);
-      this.upload(this.textInstanceBuffer, data);
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
       gl.disable(gl.BLEND);
       this.stats.drawCalls += 1;
     }
-    flush(cameraRight, cameraUp, nowSeconds = performance.now() / 1000) {
-      const snapshot = this.store.snapshot();
-      const gl = this.gl;
-      this.drawLines(snapshot.lines, snapshot.counts.lineVertices, snapshot.viewProjection);
-      this.drawBoxes(snapshot.solidBoxes, snapshot.counts.solidBoxes, false, snapshot.viewProjection);
-      this.drawBoxes(snapshot.outlineBoxes, snapshot.counts.outlineBoxes, true, snapshot.viewProjection);
-      this.drawFlow(snapshot.flowPulses, snapshot.counts.flowPulses, snapshot.viewProjection, nowSeconds);
-      this.drawText(snapshot.glyphs, snapshot.counts.glyphs, snapshot.viewProjection, cameraRight, cameraUp);
+    drawCompiled(viewProjection, cameraRight, cameraUp, nowSeconds = performance.now() / 1000, uploads = 0) {
+      if (!this.compiled) throw new Error('WebGLBatchRenderer.drawCompiled requires compileCurrent()');
+      const counts = this.compiled.counts;
+      this.stats.drawCalls = 0;
+      this.stats.uploads = uploads;
+      this.drawLines(counts.lineVertices, viewProjection);
+      this.drawBoxes(counts.solidBoxes, false, viewProjection);
+      this.drawBoxes(counts.outlineBoxes, true, viewProjection);
+      this.drawFlow(counts.flowPulses, viewProjection, nowSeconds);
+      this.drawText(counts.glyphs, viewProjection, cameraRight, cameraUp);
       gl.bindVertexArray(null);
-      this.stats.solidBoxes = snapshot.counts.solidBoxes;
-      this.stats.outlineBoxes = snapshot.counts.outlineBoxes;
-      this.stats.lineVertices = snapshot.counts.lineVertices;
-      this.stats.glyphs = snapshot.counts.glyphs;
-      this.stats.flowPulses = snapshot.counts.flowPulses;
+      Object.assign(this.stats, counts, { compiled: true });
       return { ...this.stats };
+    }
+    flush(cameraRight, cameraUp, nowSeconds = performance.now() / 1000) {
+      const vp = this.store.viewProjection;
+      const uploads = this.compileCurrent();
+      return this.drawCompiled(vp, cameraRight, cameraUp, nowSeconds, uploads);
     }
   }
 
