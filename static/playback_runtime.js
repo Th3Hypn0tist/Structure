@@ -182,7 +182,7 @@ async function bootstrapStructureS3DProjection() {
   }
   if (!window.S3DBenchmarkSettings) {
     await loadStructureScript('/static/3d/benchmark.js');
-    await loadStructureScript('/static/3d/benchmark_webgl.js');
+    await loadStructureScript('/static/structure_benchmark.js');
     await loadStructureScript('/static/3d/benchmark_panel.js');
   }
 }
