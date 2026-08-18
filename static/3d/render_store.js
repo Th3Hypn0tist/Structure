@@ -1,4 +1,4 @@
-// Reusable frame render store for high-density S3D rendering.
+// Reusable render store for high-density S3D rendering.
 // Logical objects enqueue presentation data here; GPU renderers consume batches.
 (() => {
   const S3D = globalThis.S3D;
@@ -33,8 +33,9 @@
       this.outlineBoxes = new FloatStore(9 * 512);
       this.lines = new FloatStore(6 * 2048);
       this.glyphs = new FloatStore(12 * 4096);
+      this.flowPulses = new FloatStore(14 * 2048);
       this.viewProjection = null;
-      this.counts = { solidBoxes: 0, outlineBoxes: 0, lineVertices: 0, glyphs: 0 };
+      this.counts = { solidBoxes: 0, outlineBoxes: 0, lineVertices: 0, glyphs: 0, flowPulses: 0 };
     }
     begin(viewProjection) {
       if (!viewProjection || viewProjection.length !== 16) throw new Error('RenderStore.begin requires a 4x4 viewProjection matrix');
@@ -43,10 +44,12 @@
       this.outlineBoxes.clear();
       this.lines.clear();
       this.glyphs.clear();
+      this.flowPulses.clear();
       this.counts.solidBoxes = 0;
       this.counts.outlineBoxes = 0;
       this.counts.lineVertices = 0;
       this.counts.glyphs = 0;
+      this.counts.flowPulses = 0;
     }
     box(position, scale, color, outline = false) {
       if (!this.viewProjection) throw new Error('RenderStore.box requires begin()');
@@ -77,6 +80,17 @@
       );
       this.counts.glyphs += 1;
     }
+    flow(start, end, scale, color, phase = 0, speed = 0) {
+      if (!this.viewProjection) throw new Error('RenderStore.flow requires begin()');
+      this.flowPulses.push(
+        Number(start[0]), Number(start[1]), Number(start[2]),
+        Number(end[0]), Number(end[1]), Number(end[2]),
+        Number(scale[0]), Number(scale[1]), Number(scale[2]),
+        Number(color[0]), Number(color[1]), Number(color[2]),
+        Number(phase), Number(speed),
+      );
+      this.counts.flowPulses += 1;
+    }
     snapshot() {
       return {
         viewProjection: this.viewProjection,
@@ -84,6 +98,7 @@
         outlineBoxes: this.outlineBoxes.view(),
         lines: this.lines.view(),
         glyphs: this.glyphs.view(),
+        flowPulses: this.flowPulses.view(),
         counts: { ...this.counts },
       };
     }
