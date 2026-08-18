@@ -25,6 +25,7 @@ STATIC = {
     "/static/causal_projection.js": ("causal_projection.js", "application/javascript; charset=utf-8"),
     "/static/projection_visibility.js": ("projection_visibility.js", "application/javascript; charset=utf-8"),
     "/static/event_rule_editor.js": ("event_rule_editor.js", "application/javascript; charset=utf-8"),
+    "/static/canonical_deletion.js": ("canonical_deletion.js", "application/javascript; charset=utf-8"),
     "/static/abstraction_library.js": ("abstraction_library.js", "application/javascript; charset=utf-8"),
     "/static/link_projection.js": ("link_projection.js", "application/javascript; charset=utf-8"),
     "/static/style.css": ("style.css", "text/css; charset=utf-8"),
