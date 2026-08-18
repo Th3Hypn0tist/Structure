@@ -48,6 +48,7 @@ CW_REQUIREMENTS = {
     "CW-028": "Normal CW authoring has explicit UI paths for every supported CW Property primitive.",
     "CW-029": "Canonical Event editing writes canonical Event/Effect/Link Properties, never a parallel Event model.",
     "CW-030": "Canonical semantic source is Entity + Properties + Rulesets; visual state never becomes semantic authority.",
+    "CW-031": "Entity positions may reference recursively nested Entity coordinate spaces; explicit spatial refs resolve and remain acyclic.",
 }
 
 CW_PROPERTY_TYPES = frozenset({"type", "mount", "link", "event", "effect", "data", "function"})
