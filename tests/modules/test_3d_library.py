@@ -14,6 +14,8 @@ class ThreeDLibraryTests(unittest.TestCase):
             "core.js",
             "math.js",
             "renderer.js",
+            "render_store.js",
+            "webgl_batch_renderer.js",
             "benchmark.js",
             "benchmark_webgl.js",
             "benchmark_panel.js",
@@ -109,12 +111,46 @@ class ThreeDLibraryTests(unittest.TestCase):
         self.assertNotIn("propertyDisplayName", library)
         self.assertNotIn("activeLinkProperties", library)
 
-    def test_dynamic_adapter_and_real_benchmark_assets_are_served(self):
+    def test_render_store_collects_boxes_lines_and_glyphs_without_semantics(self):
+        source = (LIB / "render_store.js").read_text(encoding="utf-8")
+        self.assertIn("class RenderStore", source)
+        self.assertIn("solidBoxes", source)
+        self.assertIn("outlineBoxes", source)
+        self.assertIn("lineVertices", source)
+        self.assertIn("glyphs", source)
+        self.assertIn("box(position, scale, color", source)
+        self.assertIn("line(start, end, color)", source)
+        self.assertIn("glyph(center, size, uvRect, color)", source)
+
+    def test_webgl_production_renderer_is_instanced_and_batched(self):
+        source = (LIB / "webgl_batch_renderer.js").read_text(encoding="utf-8")
+        self.assertIn("class WebGLBatchRenderer", source)
+        self.assertIn("gl.vertexAttribDivisor", source)
+        self.assertIn("gl.drawElementsInstanced", source)
+        self.assertIn("gl.drawArrays(gl.LINES", source)
+        self.assertIn("class GlyphAtlas", source)
+        self.assertIn("gl.drawArraysInstanced(gl.TRIANGLE_STRIP", source)
+        self.assertNotIn("property_type_ref", source)
+        self.assertNotIn("ruleset_ref", source)
+
+    def test_structure_render_bridge_batches_existing_projection_calls(self):
+        source = (STATIC / "structure_render_batch.js").read_text(encoding="utf-8")
+        self.assertIn("new S3D.WebGLBatchRenderer(gl)", source)
+        self.assertIn("drawBox = function drawBoxBatched", source)
+        self.assertIn("drawLine = function drawLineBatched", source)
+        self.assertIn("drawSceneText3D = function drawSceneText3DBatched", source)
+        self.assertIn("renderer.begin(viewProjection())", source)
+        self.assertIn("renderer.flush(cameraRight(), cameraUp())", source)
+
+    def test_dynamic_adapter_renderer_and_real_benchmark_assets_are_served(self):
         app = (ROOT / "app.py").read_text(encoding="utf-8")
         playback = (STATIC / "playback_runtime.js").read_text(encoding="utf-8")
         for path in (
             "/static/3d/renderer.js",
             "/static/structure_s3d_adapter.js",
+            "/static/3d/render_store.js",
+            "/static/3d/webgl_batch_renderer.js",
+            "/static/structure_render_batch.js",
             "/static/3d/benchmark.js",
             "/static/structure_benchmark.js",
             "/static/3d/benchmark_panel.js",
