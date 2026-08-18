@@ -36,6 +36,17 @@
     ensureBatchFrame();
     renderer.text(text, center, width, height, tint);
   };
+  function drawFlowBatched(start, end, scale, color, phase = 0, speed = 0) {
+    ensureBatchFrame();
+    renderer.flow(start, end, scale, color, phase, speed);
+  }
+
+  // The generic S3D adapter is loaded before this concrete WebGL renderer.
+  // Inject only the generic flow primitive here; no Structure/CW semantics cross
+  // into S3D.Link. Flow movement is evaluated by the GPU from time + phase + speed.
+  if (window.StructureS3D?.renderer?.handlers) {
+    window.StructureS3D.renderer.handlers.flow = drawFlowBatched;
+  }
 
   const renderBeforeBatch = render;
   render = function renderWithS3DBatches() {
@@ -45,7 +56,7 @@
     frameOpen = true;
     try {
       const result = renderBeforeBatch();
-      const stats = renderer.flush(cameraRight(), cameraUp());
+      const stats = renderer.flush(cameraRight(), cameraUp(), performance.now() / 1000);
       window.StructureRenderBatchStats = stats;
       return result;
     } finally {
@@ -56,6 +67,7 @@
   window.StructureRenderBatch = Object.freeze({
     renderer,
     legacy,
+    flow: drawFlowBatched,
     stats: () => ({ ...(window.StructureRenderBatchStats ?? renderer.stats) }),
   });
 })();
