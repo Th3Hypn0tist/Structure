@@ -1,0 +1,419 @@
+{
+  "handover": {
+    "project": "Structure",
+    "generated_at": "2026-08-18T06:38:00+03:00",
+    "scope": "Session handover: viewer/projection work, CW export, CW conformance gate, CW authoring completeness, and deterministic Event/Link playback.",
+    "authority": {
+      "highest_authority": "Project conversations",
+      "rule": "Project conversations are the authoritative specification. GitHub is implementation/current state.",
+      "derived_sources": [
+        "Session handover = summary only",
+        "GitHub repo = implementation",
+        "Tests = executable evidence derived from conversation-locked CW requirements"
+      ],
+      "forbidden_assumption": "Do not claim authoritative specs live in the repository or a special branch."
+    }
+  },
+  "architecture": {
+    "canonical_model": {
+      "name": "CCF",
+      "note": "Do not expand CCF unless exact expansion is explicitly established in project discussions.",
+      "rulesets": [
+        "Mindmap",
+        "UML",
+        "CW"
+      ],
+      "progression": "Mindmap -> UML -> CW",
+      "requirement_relation": "requirements(MINDMAP) ⊂ requirements(UML) ⊂ requirements(CW)",
+      "identity_rule": "Ruleset switching changes projection/requirements/validation/authoring affordances, not canonical identity.",
+      "aigmos_rule": "AIGMos is not a separate Ruleset; it is a concrete software system represented as CCF satisfying CW.",
+      "cw_scope": "CW is sufficient to describe all software semantics relevant to Structure."
+    },
+    "structure_invariant": "If a Ruleset can describe it, Structure should be able to create it, edit it, validate it, visualize it, import it, export it and, where a mapping exists, compare it.",
+    "no_guessing": "Structure must not guess semantic meaning. Ambiguous data stays unresolved/candidate/unsupported.",
+    "graph_rule": "Canonical semantics are the architecture; graph is a projection."
+  },
+  "development_order": [
+    "1. Stabilize viewer projections",
+    "2. Manual Create/Edit completeness",
+    "3. Import/Export",
+    "4. Code import + metadata/bindings",
+    "5. Semantic mapping / compare",
+    "6. Extensive real tests"
+  ],
+  "viewer_3d_contract": {
+    "locked_rule": "Everything represented inside the scene/view is 3D. DOM is only editor/application chrome.",
+    "scene_objects": [
+      "Entity",
+      "Event list/buttons",
+      "Props list/rows",
+      "Link geometry",
+      "Link ports",
+      "Event/causal routes",
+      "Scene text"
+    ],
+    "forbidden_scene_representation": [
+      "camera-facing DOM cards",
+      "CSS-transformed fake world-space UI",
+      "SVG/DOM semantic links",
+      "2D Event/Props overlays",
+      "screen-space authoritative geometry"
+    ],
+    "node_local_layout": {
+      "entity": "center",
+      "event_list": "left of Entity with small gap",
+      "props_list": "directly below Entity, centered",
+      "dependency_out": "above Entity",
+      "dependency_in": "below full Props list",
+      "event_in": "left of Props at Props vertical center",
+      "event_out": "right of Props at Props vertical center"
+    },
+    "props": {
+      "placement": "Below Entity",
+      "expanded_control": "Only tiny close button in Props top-right corner",
+      "collapsed_control": "Tiny reopen '+' control",
+      "manual_direction": "Forbidden/removed",
+      "hierarchy": "Props belongs under Entity in the 3D hierarchy"
+    },
+    "event_io": {
+      "semantic_type": "Shared Link projection points, not Event Property instances",
+      "count_rule": "Exactly one Event IN and one Event OUT visual point per Entity regardless of Event count",
+      "size_rule": "10% of previous node-sized marker; only enough to be visible; no text labels",
+      "position_rule": "Event IN left / Event OUT right of Props, same Y at Props vertical center",
+      "event_rows_rule": "Individual Event rows never create own input/output ports"
+    }
+  },
+  "link_and_event_animation_contract": {
+    "baseline": {
+      "rule": "Canonical links remain visible with slow baseline directional flow.",
+      "direction": "child -> parent for generic Links",
+      "purpose": "Direction indication only"
+    },
+    "event_trace": {
+      "rule": "Event playback overlays a transient trace on the same canonical route and never invents routes.",
+      "current_events": "Concurrent runs live in currentEvents[] and use stable distinct trace colors.",
+      "sequence": [
+        "Event activation",
+        "canonical link travel",
+        "target/effect activation",
+        "next_event_delay",
+        "then downstream outgoing links"
+      ],
+      "branching": "Stable canonical edge order + branch_delay",
+      "merge": "Earliest canonical arrival wins; ties by stable edge order",
+      "completion": "Hold -> fade -> disappear; baseline remains",
+      "visual": "Growing colored segment + small head point; target highlights are bounded activation windows"
+    },
+    "determinism_fix": {
+      "old_bug": "Depth-based timing let different branch lengths jump to the same graph depth; aggregated route progress could visually teleport.",
+      "new_rule": "Scheduler is predecessor-completion-driven. Depth is descriptive only.",
+      "route_aggregation_fix": "No route-level max(progress); active canonical edges draw deterministic partial segments, completed uses leave a dim trail."
+    },
+    "playback_runtime": {
+      "fields": [
+        "event_activation_duration",
+        "effect_travel_duration",
+        "target_effect_duration",
+        "next_event_delay",
+        "branch_delay",
+        "completion_hold",
+        "fade_out_duration",
+        "playback_speed"
+      ],
+      "controls": [
+        "Pause/Resume",
+        "Step"
+      ],
+      "semantic_boundary": "Playback timing is view/runtime state, not CW semantic authority."
+    }
+  },
+  "cw_export": {
+    "ui": "Export CW toolbar button",
+    "payload_boundary": [
+      "version",
+      "entities",
+      "rulesets",
+      "color_spaces"
+    ],
+    "excluded": [
+      "camera",
+      "settings",
+      "runtime",
+      "projection",
+      "playback"
+    ],
+    "shared_boundary": "Export CW and Publish Abstraction share canonicalSemanticPayload().",
+    "filename_pattern": "Structure_CW_<UTC timestamp>.json",
+    "workflow": "Structure -> Export CW -> send JSON back for analysis"
+  },
+  "cw_conformance_gate": {
+    "purpose": "Tests prove conversation-derived CW invariants instead of snapshotting implementation details.",
+    "startup_behavior": {
+      "banner": "[structure:cw] conformance gate",
+      "pass": "[structure:cw] conformance gate passed",
+      "fail": "Server does not start"
+    },
+    "layers": [
+      "Executable CW oracle",
+      "Semantic conformance",
+      "Persistence/abstraction boundaries",
+      "Projection authority boundaries",
+      "Normal authoring capability",
+      "Requirement-to-test coverage matrix",
+      "Full starter-scene integration fixture"
+    ],
+    "principle": "If Structure lacks a CW capability, fix Structure; do not weaken the test.",
+    "negative_mutations": [
+      "identity collision",
+      "unresolved ref",
+      "Property/Ruleset mismatch",
+      "wrong Event/Effect direction",
+      "parallel embedded relation semantics",
+      "view/runtime leakage into export",
+      "legacy compatibility fallback",
+      "projection inventing semantics"
+    ],
+    "requirement_registry": "CW requirement IDs require concrete test coverage.",
+    "known_result": "Gate exposed missing Data/Function authoring and implementation was fixed instead of weakening tests."
+  },
+  "cw_authoring": {
+    "data": {
+      "status": "implemented",
+      "capabilities": [
+        "create",
+        "name",
+        "data_type_ref",
+        "edit",
+        "delete"
+      ]
+    },
+    "function": {
+      "status": "implemented",
+      "capabilities": [
+        "create",
+        "name",
+        "function_type_ref",
+        "input_refs",
+        "output_refs",
+        "edit",
+        "delete"
+      ],
+      "ref_rule": "I/O accepts only resolvable canonical refs"
+    },
+    "ruleset_resolution": "Resolve by property_type_ref and require exactly one match; never guess.",
+    "delete_safety": "Block delete when Link or Function still references the Property."
+  },
+  "important_bug_history": [
+    {
+      "bug": "1000+ continuously increasing browser errors",
+      "cause": "scene_ui_3d.js referenced by HTML but absent from app.py STATIC whitelist; drawSceneText3D then failed every frame",
+      "fix_commit": "580280fb0dece9336722f5e7f8028315a45272c6"
+    },
+    {
+      "bug": "surface.querySelectorAll is not a function",
+      "cause": "Old SVG/DOM causal surface expectation survived after 3D migration",
+      "fix": "Move generic Links/ports/Event feedback to WebGL instead of fake DOM compatibility"
+    },
+    {
+      "bug": "Props/Event scene confusion and stale Props visuals",
+      "cause": "Mixed DOM/3D projection lifecycle",
+      "fix": "Move Event/Props into world-space 3D hierarchy and reset scene projection on New"
+    },
+    {
+      "bug": "Event trace sequence jumping",
+      "cause": "Depth-based timeline plus route-level furthest-progress behavior",
+      "fix_commit": "ee4e220da1cad15ec0f75b288c848449cdef7b10",
+      "test_commit": "fa313e641e6e4b36a0d861efe5a7d3ae8b550ed8"
+    }
+  ],
+  "key_commits_this_session": [
+    [
+      "580280fb0dece9336722f5e7f8028315a45272c6",
+      "Serve 3D scene UI runtime"
+    ],
+    [
+      "d738564c2313148ce3ead543e957749b9fb0c579",
+      "Move Link projection fully into 3D scene"
+    ],
+    [
+      "d746164764ee3c1c6e6a6c50933d80ac5246337b",
+      "Update architecture tests for world-space 3D scene projection"
+    ],
+    [
+      "c226d976",
+      "Add canonical CW JSON export"
+    ],
+    [
+      "9bc08970",
+      "Add Export CW button"
+    ],
+    [
+      "ea2f608e",
+      "Add CW export regression tests"
+    ],
+    [
+      "8dd94b4ec070af348c92387df7de783ef387935a",
+      "Align Entity 3D child layout to node contract"
+    ],
+    [
+      "0ff623b1ed1d8ccf0f9510205fb4047133da3f08",
+      "Use one shared Event input and output link port per Entity"
+    ],
+    [
+      "a949214b8c4b9871d21df363dc3258e9344632a1",
+      "Center shared Event I/O beside Props and aggregate causal routes"
+    ],
+    [
+      "a480932d",
+      "Add transient Event playback clock and controls"
+    ],
+    [
+      "939121e9",
+      "Serve Event playback runtime"
+    ],
+    [
+      "5259dd9b",
+      "Load Event playback runtime"
+    ],
+    [
+      "947c0fd2",
+      "Restore baseline-to-active Event link animation contract"
+    ],
+    [
+      "d4e5b5b0",
+      "Drive generic Link activation from shared Event playback clock"
+    ],
+    [
+      "95974d3f",
+      "Make playback controls safe across workspace load"
+    ],
+    [
+      "2aa8ef88",
+      "Lock Event Link playback animation contract"
+    ],
+    [
+      "f63af7ebc7bbee37c1a22b4b4d297cd68b03aec8",
+      "Match Event trace animation and tiny shared I/O points"
+    ],
+    [
+      "8753f34716644a9d04dae59bf442b0b7e2b7da34",
+      "Align animation tests with transient Event trace contract"
+    ],
+    [
+      "d29a3686",
+      "Add executable CW conformance oracle for tests"
+    ],
+    [
+      "9a827bb0",
+      "Add CW semantic conformance gate"
+    ],
+    [
+      "3129c7f3",
+      "Add traceable CW requirement registry"
+    ],
+    [
+      "f05976ff",
+      "Rewrite semantic tests as CW validator conformance tests"
+    ],
+    [
+      "9f21ca95",
+      "Rewrite workspace tests around CW canonical persistence"
+    ],
+    [
+      "fe48ab7b",
+      "Rewrite abstraction tests as CW composition boundary tests"
+    ],
+    [
+      "e3d427d0",
+      "Rewrite architecture tests as CW authority boundary tests"
+    ],
+    [
+      "0d5cab91",
+      "Add CW authoring capability gate"
+    ],
+    [
+      "ca07b7a3",
+      "Add CW requirement coverage matrix gate"
+    ],
+    [
+      "6295f029",
+      "Add full-model CW integration fixture tests"
+    ],
+    [
+      "5600655e",
+      "Make startup tests an explicit CW conformance gate"
+    ],
+    [
+      "18e221e9c0a2642c9469425e2ddcb67d2af4a884",
+      "Add normal CW Data and Function authoring"
+    ],
+    [
+      "38b865c0ef1f22bef56e668113e95cc83adaaf90",
+      "Strengthen CW Data and Function authoring capability tests"
+    ],
+    [
+      "ee4e220da1cad15ec0f75b288c848449cdef7b10",
+      "Make Event trace sequencing predecessor-driven and deterministic"
+    ],
+    [
+      "fa313e641e6e4b36a0d861efe5a7d3ae8b550ed8",
+      "Lock deterministic predecessor-driven Event sequencing"
+    ]
+  ],
+  "do_not_regress": [
+    "No DOM/SVG semantic scene objects.",
+    "Props stays below Entity, not right.",
+    "No Event IN/OUT per Event row.",
+    "Event IN/OUT remain tiny unlabeled points.",
+    "Event IN/OUT are shared Link projection points, not Event Properties.",
+    "No external spaghetti from every internal Event->Effect relation.",
+    "Animation never invents routes absent from canonical Links.",
+    "No depth-based Event playback scheduling.",
+    "No route-level max(progress) teleport.",
+    "No permanently highlighted reached targets.",
+    "No camera/view/runtime leakage into CW export.",
+    "Do not weaken CW tests to fit incomplete implementation.",
+    "Raw JSON cannot be the only authoring path for supported CW primitives.",
+    "Never guess Rulesets or semantics."
+  ],
+  "current_open_items_and_risks": [
+    {
+      "item": "Visual verification of deterministic Event sequencing",
+      "status": "Code + regression test updated; user-side browser run still required",
+      "next": "git pull; python3 app.py; fire same Event chain repeatedly and confirm identical visible order"
+    },
+    {
+      "item": "Render-loop architecture",
+      "status": "Projection modules still monkey-patch global render()",
+      "next": "Refactor to one explicit render pipeline after viewer stabilizes"
+    },
+    {
+      "item": "StructureCausalProjection.surface compatibility shim",
+      "status": "Still present as fake object",
+      "next": "Remove when no callers depend on it"
+    },
+    {
+      "item": "DOM gizmo labels",
+      "status": "gizmoX/Y/Z still manipulated as DOM",
+      "risk": "May violate literal all-scene-objects-3D rule",
+      "next": "Prefer migrate to 3D scene text"
+    },
+    {
+      "item": "Persistence temp-file race / WSL-mounted drive issue",
+      "status": "Known earlier os.replace failure, not solved here",
+      "next": "Add write lock/fsync/diagnostics if it returns"
+    },
+    {
+      "item": "CW import",
+      "status": "Export implemented; general import still pending",
+      "next": "Build canonical import with validation and no guessing"
+    }
+  ],
+  "next_session_recommended_start": [
+    "1. Pull latest main and run [structure:cw] conformance gate.",
+    "2. Visually test the same Event chain several times for identical predecessor-driven order.",
+    "3. If sequence still looks wrong, export CW and debug canonical edge order rather than adding timing heuristics.",
+    "4. Once viewer is stable, continue CW Import.",
+    "5. Then clean renderer integration, remove fake causal surface, migrate remaining scene-attached DOM labels to 3D."
+  ]
+}

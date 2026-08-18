@@ -1,0 +1,535 @@
+{
+  "handover": {
+    "title": "Structure CW 2.0 Interaction, Spatial and Context Projection Decisions",
+    "date": "2026-08-18",
+    "status": "active_development",
+    "purpose": "Consolidated decisions from the current Structure development session, intended as implementation guidance and handover context.",
+    "primary_goal": "Finish Structure sufficiently to use it for AIGMos 2.0 documentation canonicalization into CW 2.0."
+  },
+
+  "architecture": {
+    "core_role": {
+      "description": "Structure is not merely a CW visualizer. Its fundamental operation is selection and projection of a CW subgraph.",
+      "pipeline": [
+        "load CW 2.0",
+        "select root entity or entities",
+        "apply relation-specific traversal depths",
+        "resolve subgraph",
+        "project visually in Structure",
+        "optionally serialize the same subgraph as a CW bundle"
+      ],
+      "shared_projection_model": {
+        "human": "Structure visual projection",
+        "machine": "AIGMos q/qc/agent context bundle",
+        "principle": "Visual projection and AI context projection operate on the same resolved CW subgraph."
+      }
+    },
+
+    "subgraph_selection": {
+      "roots": "One or more entity references.",
+      "relation_depths": {
+        "description": "Traversal depth is independently configurable by link type.",
+        "examples": {
+          "dependency": 2,
+          "ownership": 1,
+          "relation": 0,
+          "authority": 0
+        }
+      },
+      "principle": "A Structure projection preset can also function as an AI context preset."
+    }
+  },
+
+  "cw_storage": {
+    "canonical_base_format": {
+      "type": "monolithic_json",
+      "description": "The normal CW representation is one self-contained JSON document.",
+      "intended_uses": [
+        "authoring",
+        "AI generation",
+        "validation",
+        "transport",
+        "small abstractions",
+        "import",
+        "export",
+        "context bundles"
+      ]
+    },
+
+    "entity_file_projection": {
+      "description": "A monolithic CW document can be deterministically exploded into entity-oriented files for working storage and version control.",
+      "operation": "export.to_entities",
+      "example": [
+        "entities/ENTITY_001.json",
+        "entities/ENTITY_002.json",
+        "entities/ENTITY_003.json"
+      ],
+      "rule": "Entity-per-file is not a separate CW format. It is a filesystem representation of the same CW data."
+    },
+
+    "bundle": {
+      "description": "Entity files or selected entities can be bundled back into a monolithic CW document.",
+      "operations": {
+        "bundle.entities": {
+          "description": "Bundle only explicitly selected entities."
+        },
+        "bundle.closure": {
+          "description": "Bundle selected entities plus the graph context resolved through configured relation-specific traversal depths."
+        }
+      },
+      "invariant": "Splitting and rebundling must preserve canonical semantics."
+    },
+
+    "ai_context_use": {
+      "description": "A bot can request only the entities required for a task and receive them as one compact CW file.",
+      "pipeline": [
+        "request entity references",
+        "optionally resolve relation closure",
+        "bundle selected subgraph",
+        "provide bundle to q/qc/agent"
+      ]
+    }
+  },
+
+  "spatial_model": {
+    "node_position": {
+      "decision": "Entity nodes may carry canonical position information.",
+      "preferred_structure": {
+        "node": {
+          "position": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "coordinate_space_ref": "COORDINATE_SPACE_REF"
+        }
+      },
+      "semantics": "Position describes where the entity node exists within its referenced coordinate space.",
+      "rule": "Position must not be hard-coded as screen or pixel coordinates."
+    },
+
+    "coordinate_spaces": {
+      "reason": "The same position mechanism must support abstract diagrams and later physical/spatial projections.",
+      "possible_spaces": [
+        "abstract",
+        "local_cartesian",
+        "site",
+        "building",
+        "CAD",
+        "geographic",
+        "WGS84"
+      ],
+      "recursive_composition": {
+        "example": [
+          "WORLD / GPS",
+          "SITE",
+          "LOCAL SITE SPACE",
+          "BUILDING",
+          "LOCAL BUILDING SPACE",
+          "IMPORTED CW ABSTRACTION"
+        ],
+        "principle": "An imported abstraction retains its own local coordinate space and can be anchored into a parent coordinate space."
+      }
+    },
+
+    "map_projection": {
+      "description": "A Site-level entity can later be positioned geographically while its imported/internal abstraction continues using normal local or abstract coordinates.",
+      "principle": "Internal entities do not individually require GPS coordinates merely because their containing Site is shown on a map."
+    },
+
+    "cad_projection": {
+      "description": "A Structure view may use a CAD drawing as a spatial background layer and place CW nodes over it.",
+      "cad_layer_metadata": [
+        "origin",
+        "scale",
+        "rotation",
+        "unit",
+        "coordinate_space_ref"
+      ],
+      "principle": "Nodes belong to the coordinate space, not to the CAD file itself.",
+      "benefit": "A CAD revision can be replaced without redefining canonical node positions if the coordinate-space mapping remains valid."
+    }
+  },
+
+  "selection": {
+    "primitive": "toggle.selection",
+
+    "state": {
+      "type": "runtime_view_state",
+      "canonical_cw_property": false,
+      "representation": "set of selected object references"
+    },
+
+    "interaction_binding": {
+      "modifier": "Ctrl",
+      "node_hit": {
+        "interaction": "Ctrl + node interaction",
+        "operation": "toggle.selection(node)"
+      },
+      "empty_space_drag": {
+        "interaction": "Ctrl + drag from empty space",
+        "operation": "box selection followed by toggle.selection(nodes_in_box)"
+      }
+    },
+
+    "box_behavior": {
+      "replace_selection": false,
+      "operation": "toggle",
+      "rules": {
+        "selected_node_inside_box": "becomes unselected",
+        "unselected_node_inside_box": "becomes selected"
+      },
+      "purpose": "Allow selection to be sculpted repeatedly using boxes and individual node toggles."
+    },
+
+    "workflow_example": [
+      "Create coarse selection with a box.",
+      "Box-toggle an unwanted region out.",
+      "Box-toggle a missing region in.",
+      "Toggle individual nodes for final adjustment."
+    ],
+
+    "selection_consumers": [
+      "move",
+      "delete node",
+      "property editing",
+      "link creation",
+      "export",
+      "CW bundle generation",
+      "coordinate-space assignment",
+      "AI context generation"
+    ]
+  },
+
+  "links": {
+    "terminology": {
+      "generic_term": "link",
+      "description": "Dependency, relation, ownership and other graph relations are all links. Their semantic type is defined separately."
+    },
+
+    "known_link_types": [
+      "dependency",
+      "relation",
+      "ownership",
+      "authority",
+      "containment",
+      "architecture_parent",
+      "event_read",
+      "event_input",
+      "event_output",
+      "event_effect",
+      "event_cause",
+      "event_condition",
+      "effect_target"
+    ],
+
+    "link_action": {
+      "selection_aware": true,
+      "zero_nodes_selected": {
+        "enabled": false,
+        "behavior": "Does nothing.",
+        "visual": "May use disabled or neutral state."
+      },
+      "one_or_more_nodes_selected": {
+        "enabled": true,
+        "behavior": "Selected nodes form the source working set for link creation."
+      },
+      "color_feedback": {
+        "supported": true,
+        "description": "The Link control may change color according to the active link type/ruleset color space."
+      }
+    },
+
+    "batch_creation_example": {
+      "selection": "8 nodes",
+      "link_type": "dependency",
+      "target": "Core",
+      "result": "Create dependency links from the selected nodes according to the dependency link semantics."
+    },
+
+    "multi_link_editing": {
+      "required": true,
+      "description": "Multiple links can be selected from the link list and edited as a batch.",
+      "operations": [
+        "change link type",
+        "change parent or target",
+        "change child or source",
+        "change shared properties",
+        "delete selected links"
+      ],
+      "example": {
+        "selected_links": 15,
+        "operation": "Set dependency target",
+        "target": "Core"
+      },
+      "preferred_apply_behavior": "Validate the batch before committing the changes."
+    }
+  },
+
+  "ownership": {
+    "role": "Canonical root/hierarchy parent mechanism.",
+
+    "cardinality": {
+      "parent_per_entity": "0..1",
+      "children_per_owner": "0..N"
+    },
+
+    "root_semantics": {
+      "root_entity": "No ownership parent.",
+      "non_root_entity": "At most one ownership parent."
+    },
+
+    "new_owner_behavior": {
+      "operation_semantics": "set",
+      "not": "append",
+      "example": {
+        "before": "A owns X",
+        "user_action": "Set B as owner of X",
+        "after": "B owns X",
+        "invalid_result": [
+          "A owns X",
+          "B owns X"
+        ]
+      }
+    },
+
+    "ruleset_direction": {
+      "preferred": true,
+      "description": "Cardinality and replacement behavior should be expressed through the link ruleset rather than hard-coded specifically into Structure.",
+      "conceptual_example": {
+        "ownership": {
+          "parent_cardinality": "0..1",
+          "on_new_parent": "replace_existing"
+        },
+        "dependency": {
+          "parent_cardinality": "0..N",
+          "on_new_parent": "append"
+        }
+      }
+    }
+  },
+
+  "deletion": {
+    "node": {
+      "location": "canvas / node selection workflow",
+      "operation": "delete node",
+      "constraint": "Deletion must not leave invalid dangling canonical references."
+    },
+
+    "link": {
+      "location": "left-side Links list",
+      "operation": "delete link"
+    },
+
+    "event": {
+      "location": "left-side Events list",
+      "operation": "delete event"
+    },
+
+    "ui_principle": "Nodes are spatial canvas objects. Links and events are primarily managed through their existing left-side list views."
+  },
+
+  "node_merge": {
+    "required": true,
+    "reason": "Documentation canonicalization will reveal multiple entities that actually represent the same canonical concept.",
+
+    "operation": "merge.node",
+
+    "input": "2 or more selected nodes",
+
+    "pipeline": [
+      "select nodes",
+      "invoke merge",
+      "choose canonical survivor",
+      "merge compatible properties",
+      "identify property conflicts",
+      "rewrite references from merged entities to survivor",
+      "deduplicate resulting links and events",
+      "remove merged entities",
+      "validate resulting CW graph"
+    ],
+
+    "reference_rewrite": {
+      "required": true,
+      "principle": "Merging is not equivalent to simply deleting duplicate entities. References must be redirected to the surviving canonical entity."
+    }
+  },
+
+  "deduplication_and_conflicts": {
+    "principle": "Duplicate and conflict are different states.",
+
+    "identity_rule": {
+      "object_id_determines_equivalence": false,
+      "description": "Different object IDs may still represent semantically identical links or events."
+    },
+
+    "links": {
+      "identical_semantics": {
+        "classification": "duplicate",
+        "action": "deduplicate automatically"
+      },
+      "example": [
+        "dependency X -> Core",
+        "dependency X -> Core"
+      ]
+    },
+
+    "events": {
+      "canonical_identical": {
+        "classification": "duplicate",
+        "action": "deduplicate"
+      },
+
+      "semantic_difference": {
+        "classification": "distinct or conflict",
+        "action": "Do not automatically deduplicate."
+      },
+
+      "example": {
+        "event_a": "condition: value > 10",
+        "event_b": "condition: value >= 10",
+        "result": "Not equivalent."
+      },
+
+      "rule": "Event canonical-equivalence comparison must be strict because even small differences may change behavior."
+    }
+  },
+
+  "left_panel": {
+    "links": {
+      "capabilities": [
+        "list links",
+        "select link",
+        "multi-select links",
+        "batch edit links",
+        "delete link",
+        "delete selected links"
+      ]
+    },
+
+    "events": {
+      "capabilities": [
+        "list events",
+        "select event",
+        "delete event"
+      ]
+    }
+  },
+
+  "aigmos_2_0_dependency": {
+    "problem": "AIGMos 2.0 scope is already locked, but its documentation must be canonicalized into CW 2.0.",
+    "risk": "The amount of documentation restructuring is large even though CW 2.0 can already express the required architecture.",
+    "structure_role": "Structure becomes tooling for performing the canonicalization efficiently instead of manually reconstructing the entire documentation set.",
+    "canonicalization_principle": {
+      "automatic": [
+        "parse existing material",
+        "normalize entities",
+        "resolve known links",
+        "deduplicate",
+        "generate CW",
+        "project graph"
+      ],
+      "manual": [
+        "true semantic conflicts",
+        "missing architectural decisions",
+        "ambiguous source material"
+      ]
+    }
+  },
+
+  "implementation_priority": [
+    {
+      "priority": 1,
+      "feature": "node.position formalization"
+    },
+    {
+      "priority": 2,
+      "feature": "coordinate_space_ref support"
+    },
+    {
+      "priority": 3,
+      "feature": "toggle.selection for individual nodes"
+    },
+    {
+      "priority": 4,
+      "feature": "toggle.selection for box results"
+    },
+    {
+      "priority": 5,
+      "feature": "node deletion"
+    },
+    {
+      "priority": 6,
+      "feature": "link deletion from Links panel"
+    },
+    {
+      "priority": 7,
+      "feature": "event deletion from Events panel"
+    },
+    {
+      "priority": 8,
+      "feature": "multi-link selection and batch editing"
+    },
+    {
+      "priority": 9,
+      "feature": "selection-aware Link action"
+    },
+    {
+      "priority": 10,
+      "feature": "ownership cardinality and replace-existing-owner behavior"
+    },
+    {
+      "priority": 11,
+      "feature": "merge.node"
+    },
+    {
+      "priority": 12,
+      "feature": "semantic duplicate detection for links and events"
+    },
+    {
+      "priority": 13,
+      "feature": "selected entity export"
+    },
+    {
+      "priority": 14,
+      "feature": "relation-specific depth traversal"
+    },
+    {
+      "priority": 15,
+      "feature": "CW subgraph bundling"
+    }
+  ],
+
+  "design_principles": [
+    "Keep CW 2.0 monolithic JSON as the basic interchange and authoring format.",
+    "Treat entity-per-file storage as a deterministic projection, not a separate format.",
+    "Use the same graph traversal mechanism for Structure visualization and AI context generation.",
+    "Keep selection semantics extremely small: toggle.selection.",
+    "Keep input bindings separate from operations.",
+    "Use link as the generic term for graph relations.",
+    "Derive link behavior from rulesets where possible.",
+    "Do not allow UI operations to create structurally invalid CW.",
+    "Treat ownership as a single-parent hierarchy relation.",
+    "Treat a new ownership assignment as replacement, not addition.",
+    "Different IDs do not imply different semantics.",
+    "Identical links and events are duplicates, not conflicts.",
+    "Small semantic differences in events must be preserved.",
+    "Node merge must rewrite references rather than merely delete duplicates.",
+    "Do not bind node.position to screen coordinates.",
+    "Design coordinate spaces now so future maps, CAD views and physical spatial models do not require a CW migration.",
+    "Keep imported abstractions in their own local coordinate spaces and anchor them recursively into higher-level spaces.",
+    "Structure selection and projection should be directly reusable as controlled q/qc/agent context."
+  ],
+
+  "conceptual_core": {
+    "pipeline": [
+      "SELECT",
+      "TRAVERSE",
+      "EDIT",
+      "VALIDATE",
+      "PROJECT",
+      "BUNDLE"
+    ],
+    "summary": "The same canonical CW graph and subgraph-selection mechanism serves both human Structure views and machine AIGMos context."
+  }
+}
