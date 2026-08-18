@@ -36,6 +36,86 @@
     return out;
   }
 
+  function positionBounds(positions) {
+    if (!(positions instanceof Float32Array) || positions.length % 3) throw new Error('benchmark positions must be Float32Array xyz tuples');
+    const min = [Infinity, Infinity, Infinity];
+    const max = [-Infinity, -Infinity, -Infinity];
+    for (let offset = 0; offset < positions.length; offset += 3) {
+      for (let axis = 0; axis < 3; axis++) {
+        min[axis] = Math.min(min[axis], positions[offset + axis]);
+        max[axis] = Math.max(max[axis], positions[offset + axis]);
+      }
+    }
+    return { min, max };
+  }
+
+  function stressEventPath(positions, pointCount = 28, seed = 0xe71e57) {
+    if (!Number.isInteger(pointCount) || pointCount < 2) throw new Error('stress event path requires at least two points');
+    const { min, max } = positionBounds(positions);
+    const random = lcg(seed);
+    const out = new Float32Array(pointCount * 3);
+    const spanY = max[1] - min[1];
+    const spanZ = max[2] - min[2];
+    const marginY = spanY * .08;
+    const marginZ = spanZ * .08;
+    for (let index = 0; index < pointCount; index++) {
+      const t = index / (pointCount - 1);
+      const offset = index * 3;
+      out[offset] = min[0] + (max[0] - min[0]) * t;
+      out[offset + 1] = min[1] + marginY + random() * Math.max(0, spanY - marginY * 2);
+      out[offset + 2] = min[2] + marginZ + random() * Math.max(0, spanZ - marginZ * 2);
+    }
+    return out;
+  }
+
+  function nearestPathTriggerData(positions, path) {
+    if (!(positions instanceof Float32Array) || positions.length % 3) throw new Error('benchmark positions must be Float32Array xyz tuples');
+    if (!(path instanceof Float32Array) || path.length < 6 || path.length % 3) throw new Error('benchmark path must contain xyz points');
+    const nodeCount = positions.length / 3;
+    const segmentCount = path.length / 3 - 1;
+    const out = new Float32Array(nodeCount * 2);
+    for (let node = 0; node < nodeCount; node++) {
+      const px = positions[node * 3];
+      const py = positions[node * 3 + 1];
+      const pz = positions[node * 3 + 2];
+      let bestDistance2 = Infinity;
+      let bestProgress = 0;
+      for (let segment = 0; segment < segmentCount; segment++) {
+        const a = segment * 3;
+        const b = a + 3;
+        const ax = path[a], ay = path[a + 1], az = path[a + 2];
+        const dx = path[b] - ax, dy = path[b + 1] - ay, dz = path[b + 2] - az;
+        const length2 = dx * dx + dy * dy + dz * dz || 1;
+        const local = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy + (pz - az) * dz) / length2));
+        const qx = ax + dx * local, qy = ay + dy * local, qz = az + dz * local;
+        const ex = px - qx, ey = py - qy, ez = pz - qz;
+        const distance2 = ex * ex + ey * ey + ez * ez;
+        if (distance2 < bestDistance2) {
+          bestDistance2 = distance2;
+          bestProgress = (segment + local) / segmentCount;
+        }
+      }
+      out[node * 2] = bestProgress;
+      out[node * 2 + 1] = Math.sqrt(bestDistance2);
+    }
+    return out;
+  }
+
+  function pathPoint(path, progress) {
+    const count = path.length / 3;
+    if (count < 2) return [0, 0, 0];
+    const value = Math.max(0, Math.min(1, progress)) * (count - 1);
+    const segment = Math.min(count - 2, Math.floor(value));
+    const local = value - segment;
+    const a = segment * 3;
+    const b = a + 3;
+    return [
+      path[a] + (path[b] - path[a]) * local,
+      path[a + 1] + (path[b + 1] - path[a + 1]) * local,
+      path[a + 2] + (path[b + 2] - path[a + 2]) * local,
+    ];
+  }
+
   function linkVertices(positions, linkCount, seed = 0x51d3) {
     if (!(positions instanceof Float32Array) || positions.length % 3) throw new Error('benchmark positions must be Float32Array xyz tuples');
     if (!Number.isInteger(linkCount) || linkCount < 0) throw new Error('benchmark link count must be a non-negative integer');
@@ -96,6 +176,10 @@
   S3D.Benchmark = Object.freeze({
     presets: PRESETS,
     nodePositions,
+    positionBounds,
+    stressEventPath,
+    nearestPathTriggerData,
+    pathPoint,
     linkVertices,
     FrameMetrics,
   });
