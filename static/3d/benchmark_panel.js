@@ -1,16 +1,9 @@
-// Structure Settings integration for the S3D WebGL2 density benchmark.
-// Benchmark stays hidden until explicitly enabled and uses an isolated overlay canvas.
+// Settings integration for the real Structure high-density benchmark.
+// The benchmark uses the normal Structure scene, canonical objects and Event path.
 (() => {
-  if (!globalThis.S3D?.WebGLBenchmark) throw new Error('S3D WebGL benchmark must load before benchmark panel');
+  if (!globalThis.StructureBenchmark) throw new Error('Structure benchmark must load before benchmark panel');
 
-  const state = {
-    benchmark: null,
-    enabled: false,
-    nodes: 1000,
-    suspendedCanvases: new Map(),
-    suspendedOverlays: new Map(),
-    renderGateInstalled: false,
-  };
+  const state = { enabled: false, nodes: 1000, metricsFrame: 0 };
 
   function create(tag, attrs = {}, text = '') {
     const element = document.createElement(tag);
@@ -22,117 +15,82 @@
     return element;
   }
 
-  function currentPreset() {
-    return { id: `nodes-${state.nodes}`, nodes: state.nodes, links: 0 };
+  function metricsText() {
+    const metric = StructureBenchmark.metricsSnapshot();
+    const memory = performance.memory ? `${(performance.memory.usedJSHeapSize / 1048576).toFixed(1)} MB` : 'n/a';
+    return [
+      'STRUCTURE BENCHMARK',
+      `nodes         ${metric.nodes.toLocaleString()}`,
+      `entities      ${metric.entities.toLocaleString()}`,
+      `canonical links ${metric.links.toLocaleString()}`,
+      `active traces ${metric.traces}`,
+      `fps           ${metric.fps.toFixed(1)}`,
+      `avg frame     ${metric.avg_ms.toFixed(2)} ms`,
+      `p95 frame     ${metric.p95_ms.toFixed(2)} ms`,
+      `p99 frame     ${metric.p99_ms.toFixed(2)} ms`,
+      `render CPU    ${metric.render_ms.toFixed(2)} ms`,
+      `draw calls    ${metric.draw_calls}`,
+      `buffer uploads ${metric.uploads}`,
+      `workspace build ${metric.build_ms.toFixed(1)} ms`,
+      `JS heap       ${memory}`,
+      '',
+      'Real Structure path:',
+      'Entity + Props + Event + Effect + Links',
+      'TRIGGER Event -> normal causal playback',
+      '',
+      'Mouse uses normal Structure controls.',
+    ].join('\n');
   }
 
-  function installRenderGate() {
-    if (state.renderGateInstalled) return;
-    if (typeof globalThis.render !== 'function') throw new Error('Structure render loop unavailable for benchmark gate');
-    const structureRender = globalThis.render;
-    globalThis.render = function renderWithBenchmarkGate() {
-      if (state.enabled) {
-        requestAnimationFrame(globalThis.render);
-        return;
-      }
-      structureRender();
-    };
-    state.renderGateInstalled = true;
-  }
-
-  function suspendStructureScene(benchmarkCanvas) {
-    state.suspendedCanvases.clear();
-    for (const canvas of document.querySelectorAll('canvas')) {
-      if (canvas === benchmarkCanvas) continue;
-      state.suspendedCanvases.set(canvas, canvas.hidden);
-      canvas.hidden = true;
-    }
-
-    state.suspendedOverlays.clear();
-    for (const selector of ['#nodeLabels', '#gizmoLabels']) {
-      const element = document.querySelector(selector);
-      if (!element) continue;
-      state.suspendedOverlays.set(element, element.hidden);
-      element.hidden = true;
-    }
-  }
-
-  function restoreStructureScene() {
-    for (const [canvas, wasHidden] of state.suspendedCanvases) canvas.hidden = wasHidden;
-    state.suspendedCanvases.clear();
-    for (const [element, wasHidden] of state.suspendedOverlays) element.hidden = wasHidden;
-    state.suspendedOverlays.clear();
+  function updateMetrics() {
+    if (!state.enabled) return;
+    const output = document.querySelector('#structureBenchmarkMetrics');
+    if (output) output.textContent = metricsText();
+    state.metricsFrame = requestAnimationFrame(updateMetrics);
   }
 
   function setNodes(raw) {
-    const value = Number(raw);
-    if (!Number.isFinite(value)) return;
-    state.nodes = Math.max(100, Math.min(20000, Math.round(value / 100) * 100));
+    const normalized = StructureBenchmark.setNodeCount(raw);
+    state.nodes = normalized;
     const slider = document.querySelector('#s3dBenchmarkNodes');
     const output = document.querySelector('#s3dBenchmarkNodeCount');
-    if (slider) slider.value = String(state.nodes);
-    if (output) output.textContent = state.nodes.toLocaleString();
-    if (state.enabled && state.benchmark) state.benchmark.loadPreset(currentPreset());
+    if (slider) slider.value = String(normalized);
+    if (output) output.textContent = normalized.toLocaleString();
   }
 
   function setEnabled(enabled) {
-    const canvas = document.querySelector('#s3dBenchmarkCanvas');
-    const metrics = document.querySelector('#s3dBenchmarkMetrics');
     const toggle = document.querySelector('#s3dBenchmarkEnabled');
-    if (!canvas || !metrics || !toggle) return;
-
+    const metrics = document.querySelector('#structureBenchmarkMetrics');
+    if (!toggle || !metrics) return;
     const next = Boolean(enabled);
     if (next === state.enabled) return;
     state.enabled = next;
-    toggle.checked = state.enabled;
-
-    if (state.enabled) {
-      suspendStructureScene(canvas);
-      canvas.hidden = false;
+    toggle.checked = next;
+    if (next) {
+      StructureBenchmark.activate(state.nodes);
       metrics.hidden = false;
-      if (!state.benchmark) state.benchmark = new S3D.WebGLBenchmark(canvas, metrics);
-      state.benchmark.loadPreset(currentPreset());
-      state.benchmark.start();
+      cancelAnimationFrame(state.metricsFrame);
+      updateMetrics();
     } else {
-      state.benchmark?.stop();
-      canvas.hidden = true;
+      cancelAnimationFrame(state.metricsFrame);
+      state.metricsFrame = 0;
+      StructureBenchmark.deactivate();
       metrics.hidden = true;
-      restoreStructureScene();
     }
   }
 
   function install() {
     if (document.querySelector('#s3dBenchmarkSettings')) return;
     const settings = document.querySelector('#settings');
-    const scene = document.querySelector('#scene');
-    if (!settings || !scene) throw new Error('S3D benchmark requires Structure settings and scene canvas');
-    installRenderGate();
+    if (!settings) throw new Error('Structure benchmark requires Settings');
 
-    const canvas = create('canvas', { id: 's3dBenchmarkCanvas', 'aria-label': 'S3D benchmark canvas' });
-    canvas.hidden = true;
-    Object.assign(canvas.style, {
-      position: 'fixed', inset: '0', width: '100%', height: '100%', zIndex: '1', pointerEvents: 'auto', touchAction: 'none',
-    });
-    document.body.insertBefore(canvas, document.body.firstChild);
-
-    const metrics = create('pre', { id: 's3dBenchmarkMetrics', 'aria-live': 'polite' }, 'benchmark stopped');
+    const metrics = create('pre', { id: 'structureBenchmarkMetrics', 'aria-live': 'polite' }, 'benchmark stopped');
     metrics.hidden = true;
     Object.assign(metrics.style, {
-      position: 'fixed',
-      right: '16px',
-      bottom: '16px',
-      zIndex: '12000',
-      margin: '0',
-      padding: '10px 12px',
-      minWidth: '250px',
-      maxWidth: 'calc(100vw - 32px)',
-      whiteSpace: 'pre',
-      pointerEvents: 'none',
-      background: 'rgba(5, 8, 13, .88)',
-      border: '1px solid rgba(90, 125, 170, .55)',
-      borderRadius: '6px',
-      color: '#dbe9ff',
-      font: '12px/1.35 ui-monospace, SFMono-Regular, Consolas, monospace',
+      position: 'fixed', right: '16px', bottom: '16px', zIndex: '12000', margin: '0', padding: '10px 12px',
+      minWidth: '285px', maxWidth: 'calc(100vw - 32px)', whiteSpace: 'pre', pointerEvents: 'none',
+      background: 'rgba(5, 8, 13, .88)', border: '1px solid rgba(90, 125, 170, .55)', borderRadius: '6px',
+      color: '#dbe9ff', font: '12px/1.35 ui-monospace, SFMono-Regular, Consolas, monospace',
       boxShadow: '0 8px 28px rgba(0,0,0,.35)',
     });
     document.body.appendChild(metrics);
@@ -143,20 +101,25 @@
 
     const enableLabel = create('label');
     const enable = create('input', { id: 's3dBenchmarkEnabled', type: 'checkbox' });
-    enableLabel.append(enable, document.createTextNode(' Run benchmark'));
+    enableLabel.append(enable, document.createTextNode(' Run real Structure benchmark'));
 
     const nodeLabel = create('label');
     nodeLabel.append(document.createTextNode('Nodes '));
-    const nodes = create('input', { id: 's3dBenchmarkNodes', type: 'range', min: '100', max: '20000', step: '100', value: String(state.nodes) });
+    const nodes = create('input', {
+      id: 's3dBenchmarkNodes', type: 'range', min: '100', max: '20000', step: '100', value: String(state.nodes),
+    });
     const nodeCount = create('output', { id: 's3dBenchmarkNodeCount' }, state.nodes.toLocaleString());
     nodeLabel.append(nodes, document.createTextNode(' '), nodeCount);
 
-    const note = create('small', { className: 'muted' }, 'Continuous WebGL2 benchmark. LMB pan · RMB orbit · wheel zoom. Node count 100–20,000.');
+    const fire = create('button', { id: 'structureBenchmarkFire', type: 'button' }, 'FIRE TRIGGER EVENT');
+    const note = create('small', { className: 'muted' },
+      'Creates a temporary real Structure workspace. The TRIGGER Entity is left of the blue cube; its Event starts the normal causal chain. Original workspace is restored when stopped.');
 
     enable.addEventListener('change', () => setEnabled(enable.checked));
-    nodes.addEventListener('input', () => setNodes(nodes.value));
+    nodes.addEventListener('change', () => setNodes(nodes.value));
+    fire.addEventListener('click', () => StructureBenchmark.fire());
 
-    body.append(enableLabel, nodeLabel, note);
+    body.append(enableLabel, nodeLabel, fire, note);
     details.append(summary, body);
     settings.append(document.createElement('hr'), details);
   }
