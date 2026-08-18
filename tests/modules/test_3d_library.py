@@ -133,7 +133,8 @@ class ThreeDLibraryTests(unittest.TestCase):
         self.assertIn("gl.drawArrays(gl.LINES", source)
         self.assertIn("class GlyphAtlas", source)
         self.assertIn("gl.drawArraysInstanced(gl.TRIANGLE_STRIP", source)
-        self.assertIn("drawFlows", source)
+        self.assertIn("drawFlow(data, count, vp, nowSeconds)", source)
+        self.assertIn("timeSeconds", source)
         self.assertNotIn("property_type_ref", source)
         self.assertNotIn("ruleset_ref", source)
 
