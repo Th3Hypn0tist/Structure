@@ -1,6 +1,6 @@
 // WebGL2-first batched renderer for S3D RenderStore.
 // Boxes use shared cube geometry + instancing, links use one packed line draw,
-// and text uses a shared glyph atlas + instanced quads.
+// link flow is shader-driven, and text uses a shared glyph atlas + instanced quads.
 (() => {
   const S3D = globalThis.S3D;
   if (!S3D?.RenderStore) throw new Error('S3D RenderStore must load before WebGLBatchRenderer');
@@ -29,6 +29,22 @@
   uniform mat4 vp;
   out vec3 color;
   void main(){ color=instanceColor; gl_Position=vp*vec4(instancePosition+p*instanceScale,1.0); }`;
+  const FLOW_VS = `#version 300 es
+  layout(location=0) in vec3 p;
+  layout(location=1) in vec3 flowStart;
+  layout(location=2) in vec3 flowEnd;
+  layout(location=3) in vec3 flowScale;
+  layout(location=4) in vec3 flowColor;
+  layout(location=5) in vec2 flowState;
+  uniform mat4 vp;
+  uniform float timeSeconds;
+  out vec3 color;
+  void main(){
+    float progress=fract(flowState.x + timeSeconds * flowState.y);
+    vec3 center=mix(flowStart,flowEnd,progress);
+    color=flowColor;
+    gl_Position=vp*vec4(center+p*flowScale,1.0);
+  }`;
   const COLOR_FS = `#version 300 es
   precision highp float;
   in vec3 color;
@@ -114,11 +130,13 @@
       this.gl = gl;
       this.store = new S3D.RenderStore();
       this.boxProgram = makeProgram(gl, BOX_VS, COLOR_FS);
+      this.flowProgram = makeProgram(gl, FLOW_VS, COLOR_FS);
       this.lineProgram = makeProgram(gl, LINE_VS, COLOR_FS);
       this.textProgram = makeProgram(gl, TEXT_VS, TEXT_FS);
       this.atlas = new GlyphAtlas(gl);
-      this.stats = { drawCalls: 0, uploads: 0, solidBoxes: 0, outlineBoxes: 0, lineVertices: 0, glyphs: 0 };
+      this.stats = { drawCalls: 0, uploads: 0, solidBoxes: 0, outlineBoxes: 0, lineVertices: 0, glyphs: 0, flowPulses: 0 };
       this.initBoxes();
+      this.initFlow();
       this.initLines();
       this.initText();
     }
@@ -129,12 +147,12 @@
       this.boxInstanceBuffer = gl.createBuffer();
       this.boxFaceIndexBuffer = gl.createBuffer();
       this.boxEdgeIndexBuffer = gl.createBuffer();
-      const vertices = new Float32Array([-1,-1,-1, 1,-1,-1, 1,1,-1, -1,1,-1, -1,-1,1, 1,-1,1, 1,1,1, -1,1,1]);
+      this.boxVertices = new Float32Array([-1,-1,-1, 1,-1,-1, 1,1,-1, -1,1,-1, -1,-1,1, 1,-1,1, 1,1,1, -1,1,1]);
       this.boxFaces = new Uint16Array([0,2,1,0,3,2,4,5,6,4,6,7,0,4,7,0,7,3,1,2,6,1,6,5,0,1,5,0,5,4,3,7,6,3,6,2]);
       this.boxEdges = new Uint16Array([0,1,1,2,2,3,3,0,4,5,5,6,6,7,7,4,0,4,1,5,2,6,3,7]);
       gl.bindVertexArray(this.boxVao);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.boxVertexBuffer);
-      gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+      gl.bufferData(gl.ARRAY_BUFFER, this.boxVertices, gl.STATIC_DRAW);
       gl.enableVertexAttribArray(0);
       gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.boxInstanceBuffer);
@@ -148,6 +166,27 @@
       gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, this.boxFaces, gl.STATIC_DRAW);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.boxEdgeIndexBuffer);
       gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, this.boxEdges, gl.STATIC_DRAW);
+      gl.bindVertexArray(null);
+    }
+    initFlow() {
+      const gl = this.gl;
+      this.flowVao = gl.createVertexArray();
+      this.flowVertexBuffer = gl.createBuffer();
+      this.flowInstanceBuffer = gl.createBuffer();
+      gl.bindVertexArray(this.flowVao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.flowVertexBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, this.boxVertices, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.flowInstanceBuffer);
+      const stride = 14 * 4;
+      const spec = [[1,3,0],[2,3,3],[3,3,6],[4,3,9],[5,2,12]];
+      for (const [attr,size,offset] of spec) {
+        gl.enableVertexAttribArray(attr);
+        gl.vertexAttribPointer(attr, size, gl.FLOAT, false, stride, offset * 4);
+        gl.vertexAttribDivisor(attr, 1);
+      }
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.boxFaceIndexBuffer);
       gl.bindVertexArray(null);
     }
     initLines() {
@@ -189,6 +228,7 @@
     }
     box(position, scale, color, outline = false) { this.store.box(position, scale, color, outline); }
     line(start, end, color) { this.store.line(start, end, color); }
+    flow(start, end, scale, color, phase = 0, speed = 0) { this.store.flow(start, end, scale, color, phase, speed); }
     text(text, center, width, height, color) {
       const value = String(text ?? '');
       if (!value.length || width <= 0 || height <= 0) return;
@@ -215,6 +255,18 @@
       this.upload(this.boxInstanceBuffer, data);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, outline ? this.boxEdgeIndexBuffer : this.boxFaceIndexBuffer);
       gl.drawElementsInstanced(outline ? gl.LINES : gl.TRIANGLES, outline ? this.boxEdges.length : this.boxFaces.length, gl.UNSIGNED_SHORT, 0, count);
+      this.stats.drawCalls += 1;
+    }
+    drawFlow(data, count, vp, nowSeconds) {
+      if (!count) return;
+      const gl = this.gl;
+      gl.useProgram(this.flowProgram);
+      gl.uniformMatrix4fv(gl.getUniformLocation(this.flowProgram, 'vp'), false, new Float32Array(vp));
+      gl.uniform1f(gl.getUniformLocation(this.flowProgram, 'timeSeconds'), nowSeconds);
+      gl.bindVertexArray(this.flowVao);
+      this.upload(this.flowInstanceBuffer, data);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.boxFaceIndexBuffer);
+      gl.drawElementsInstanced(gl.TRIANGLES, this.boxFaces.length, gl.UNSIGNED_SHORT, 0, count);
       this.stats.drawCalls += 1;
     }
     drawLines(data, vertexCount, vp) {
@@ -245,18 +297,20 @@
       gl.disable(gl.BLEND);
       this.stats.drawCalls += 1;
     }
-    flush(cameraRight, cameraUp) {
+    flush(cameraRight, cameraUp, nowSeconds = performance.now() / 1000) {
       const snapshot = this.store.snapshot();
       const gl = this.gl;
       this.drawLines(snapshot.lines, snapshot.counts.lineVertices, snapshot.viewProjection);
       this.drawBoxes(snapshot.solidBoxes, snapshot.counts.solidBoxes, false, snapshot.viewProjection);
       this.drawBoxes(snapshot.outlineBoxes, snapshot.counts.outlineBoxes, true, snapshot.viewProjection);
+      this.drawFlow(snapshot.flowPulses, snapshot.counts.flowPulses, snapshot.viewProjection, nowSeconds);
       this.drawText(snapshot.glyphs, snapshot.counts.glyphs, snapshot.viewProjection, cameraRight, cameraUp);
       gl.bindVertexArray(null);
       this.stats.solidBoxes = snapshot.counts.solidBoxes;
       this.stats.outlineBoxes = snapshot.counts.outlineBoxes;
       this.stats.lineVertices = snapshot.counts.lineVertices;
       this.stats.glyphs = snapshot.counts.glyphs;
+      this.stats.flowPulses = snapshot.counts.flowPulses;
       return { ...this.stats };
     }
   }
