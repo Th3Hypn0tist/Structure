@@ -147,7 +147,7 @@ class ThreeDLibraryTests(unittest.TestCase):
     def test_real_benchmark_has_left_trigger_entity_and_uses_normal_causal_trigger(self):
         source = (STATIC / "structure_benchmark.js").read_text(encoding="utf-8")
         self.assertIn("const triggerId = 'BENCH_TRIGGER'", source)
-        self.assertIn("'BENCH_TRIGGER', [minX - 5.0, 0, 0]", source)
+        self.assertIn("entity(triggerId, 'TRIGGER', [minX - 5.0, 0, 0]", source)
         self.assertIn("triggerEventRef: 'EVENT_BENCH_TRIGGER'", source)
         self.assertIn("triggerCausalProjection(BENCH.triggerEventRef)", source)
         self.assertIn("RULESET_LINK_EVENT_CAUSE", source)
