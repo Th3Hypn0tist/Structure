@@ -30,7 +30,12 @@
       if (!renderer) return;
       const { start, end } = this.endpoints();
       renderer.line?.(start, end, this.color, this, context);
-      if (this.flow) renderer.box?.(this.pointAt(), this.pulseScale, this.flowColor, false, this, context);
+      if (!this.flow) return;
+      if (renderer.handlers?.flow || typeof renderer.flow === 'function') {
+        renderer.flow?.(start, end, this.pulseScale, this.flowColor, this.phase, this.speed, this, context);
+      } else {
+        renderer.box?.(this.pointAt(), this.pulseScale, this.flowColor, false, this, context);
+      }
     }
   }
 
