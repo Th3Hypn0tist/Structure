@@ -123,5 +123,6 @@
   }
 
   window.S3DBenchmarkSettings = Object.freeze({ state, setEnabled, setNodes });
-  window.addEventListener('load', install);
+  if (document.readyState === 'loading') window.addEventListener('load', install);
+  else install();
 })();
