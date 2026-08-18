@@ -62,6 +62,7 @@ class ThreeDLibraryTests(unittest.TestCase):
         self.assertIn("from instanceof S3D.Anchor", links)
         self.assertIn("to instanceof S3D.Anchor", links)
         self.assertIn("pointAt", links)
+        self.assertIn("renderer.flow", links)
 
     def test_props_and_events_are_instantiable_drawable_object_groups(self):
         props = (LIB / "objects" / "props.js").read_text(encoding="utf-8")
@@ -111,16 +112,18 @@ class ThreeDLibraryTests(unittest.TestCase):
         self.assertNotIn("propertyDisplayName", library)
         self.assertNotIn("activeLinkProperties", library)
 
-    def test_render_store_collects_boxes_lines_and_glyphs_without_semantics(self):
+    def test_render_store_collects_boxes_lines_glyphs_and_gpu_flows_without_semantics(self):
         source = (LIB / "render_store.js").read_text(encoding="utf-8")
         self.assertIn("class RenderStore", source)
         self.assertIn("solidBoxes", source)
         self.assertIn("outlineBoxes", source)
         self.assertIn("lineVertices", source)
         self.assertIn("glyphs", source)
+        self.assertIn("flowPulses", source)
         self.assertIn("box(position, scale, color", source)
         self.assertIn("line(start, end, color)", source)
         self.assertIn("glyph(center, size, uvRect, color)", source)
+        self.assertIn("flow(start, end, scale, color", source)
 
     def test_webgl_production_renderer_is_instanced_and_batched(self):
         source = (LIB / "webgl_batch_renderer.js").read_text(encoding="utf-8")
@@ -130,6 +133,7 @@ class ThreeDLibraryTests(unittest.TestCase):
         self.assertIn("gl.drawArrays(gl.LINES", source)
         self.assertIn("class GlyphAtlas", source)
         self.assertIn("gl.drawArraysInstanced(gl.TRIANGLE_STRIP", source)
+        self.assertIn("drawFlows", source)
         self.assertNotIn("property_type_ref", source)
         self.assertNotIn("ruleset_ref", source)
 
@@ -139,8 +143,9 @@ class ThreeDLibraryTests(unittest.TestCase):
         self.assertIn("drawBox = function drawBoxBatched", source)
         self.assertIn("drawLine = function drawLineBatched", source)
         self.assertIn("drawSceneText3D = function drawSceneText3DBatched", source)
+        self.assertIn("function drawFlowBatched", source)
         self.assertIn("renderer.begin(viewProjection())", source)
-        self.assertIn("renderer.flush(cameraRight(), cameraUp())", source)
+        self.assertIn("renderer.flush(cameraRight(), cameraUp(), performance.now() / 1000)", source)
 
     def test_structure_frame_cache_memoizes_expensive_projection_work_once_per_frame(self):
         source = (STATIC / "structure_frame_cache.js").read_text(encoding="utf-8")
