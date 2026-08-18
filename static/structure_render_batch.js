@@ -11,14 +11,29 @@
     drawLine,
     drawSceneText3D,
   });
+  let frameOpen = false;
+
+  // The bridge is loaded dynamically after Structure has already started its RAF
+  // chain. A callback queued before this bridge exists may therefore call the new
+  // draw functions once without entering renderWithS3DBatches first. Lazy begin
+  // makes that transition frame safe and keeps the rendering API order-independent.
+  function ensureBatchFrame() {
+    if (frameOpen) return;
+    resize();
+    renderer.begin(viewProjection());
+    frameOpen = true;
+  }
 
   drawBox = function drawBoxBatched(position, scale, color, outline = false) {
+    ensureBatchFrame();
     renderer.box(position, scale, color, outline);
   };
   drawLine = function drawLineBatched(start, end, color) {
+    ensureBatchFrame();
     renderer.line(start, end, color);
   };
   drawSceneText3D = function drawSceneText3DBatched(text, center, width, height, tint = [.93,.96,1]) {
+    ensureBatchFrame();
     renderer.text(text, center, width, height, tint);
   };
 
@@ -27,10 +42,15 @@
     if (!ws) return renderBeforeBatch();
     resize();
     renderer.begin(viewProjection());
-    const result = renderBeforeBatch();
-    const stats = renderer.flush(cameraRight(), cameraUp());
-    window.StructureRenderBatchStats = stats;
-    return result;
+    frameOpen = true;
+    try {
+      const result = renderBeforeBatch();
+      const stats = renderer.flush(cameraRight(), cameraUp());
+      window.StructureRenderBatchStats = stats;
+      return result;
+    } finally {
+      frameOpen = false;
+    }
   };
 
   window.StructureRenderBatch = Object.freeze({
