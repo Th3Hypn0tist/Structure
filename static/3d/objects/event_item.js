@@ -9,6 +9,9 @@
       this.label = String(label);
       this.color = [...color];
     }
+    draw(renderer, context = {}) {
+      renderer?.box?.(this.worldPosition(), this.scale, this.color, false, this, context);
+    }
   }
 
   S3D.EventItem = EventItem;
