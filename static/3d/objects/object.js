@@ -54,6 +54,8 @@
       return anchor;
     }
     anchor(name) { return this.anchors.get(name) ?? null; }
+    update() {}
+    draw() {}
   }
 
   class Group extends SceneObject {
@@ -64,6 +66,39 @@
       this.collapsed = Boolean(options.collapsed);
     }
     setCollapsed(value) { this.collapsed = Boolean(value); return this; }
+    layoutRows({
+      width,
+      rowHeight,
+      rowGap = this.gap,
+      padding = 0,
+      depth = .05,
+      itemWidth = width,
+      itemHeight = rowHeight,
+      itemDepth = depth,
+    } = {}) {
+      for (const [name, value] of Object.entries({ width, rowHeight, rowGap, padding, depth, itemWidth, itemHeight, itemDepth })) {
+        if (!Number.isFinite(value) || value < 0) throw new Error(`Group.layoutRows ${name} must be a non-negative number`);
+      }
+      const count = this.children.length;
+      const rowsHeight = count ? count * rowHeight + Math.max(0, count - 1) * rowGap : 0;
+      const height = rowsHeight + padding * 2;
+      const top = height / 2 - padding;
+      this.children.forEach((child, index) => {
+        child.position = [0, top - rowHeight / 2 - index * (rowHeight + rowGap), 0];
+        child.scale = [itemWidth / 2, itemHeight / 2, itemDepth];
+        child.visible = !this.collapsed;
+        child.layoutWidth = itemWidth;
+        child.layoutHeight = itemHeight;
+      });
+      this.layout = { width, height, rowsHeight, rowHeight, rowGap, padding, depth, itemWidth, itemHeight, itemDepth };
+      return this.layout;
+    }
+    update(deltaSeconds, now) {
+      for (const child of this.children) if (child.visible !== false) child.update?.(deltaSeconds, now);
+    }
+    draw(renderer, context = {}) {
+      for (const child of this.children) if (child.visible !== false) child.draw?.(renderer, context);
+    }
   }
 
   S3D.SceneObject = SceneObject;
