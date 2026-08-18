@@ -165,9 +165,26 @@ syncSettings = function syncSettingsWithPlayback() {
   syncPlaybackButtons();
 };
 
+function loadStructureScript(src) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = false;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error(`Failed to load ${src}`));
+    document.head.appendChild(script);
+  });
+}
+async function bootstrapStructureS3DProjection() {
+  if (window.StructureS3D) return;
+  await loadStructureScript('/static/3d/renderer.js');
+  await loadStructureScript('/static/structure_s3d_adapter.js');
+}
+
 window.addEventListener('load', () => {
   installPlaybackControls();
   installPlaybackTimingControls();
   syncPlaybackTimingControls();
   syncPlaybackButtons();
+  bootstrapStructureS3DProjection().catch(error => window.reportStructureError?.(error, { type: 's3d_bootstrap' }));
 });
