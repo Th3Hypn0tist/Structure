@@ -3,7 +3,13 @@
 (() => {
   if (!globalThis.S3D?.WebGLBenchmark) throw new Error('S3D WebGL benchmark must load before benchmark panel');
 
-  const state = { benchmark: null, enabled: false, nodes: 1000 };
+  const state = {
+    benchmark: null,
+    enabled: false,
+    nodes: 1000,
+    suspendedCanvases: new Map(),
+    suspendedOverlays: new Map(),
+  };
 
   function create(tag, attrs = {}, text = '') {
     const element = document.createElement(tag);
@@ -19,6 +25,30 @@
     return { id: `nodes-${state.nodes}`, nodes: state.nodes, links: 0 };
   }
 
+  function suspendStructureScene(benchmarkCanvas) {
+    state.suspendedCanvases.clear();
+    for (const canvas of document.querySelectorAll('canvas')) {
+      if (canvas === benchmarkCanvas) continue;
+      state.suspendedCanvases.set(canvas, canvas.hidden);
+      canvas.hidden = true;
+    }
+
+    state.suspendedOverlays.clear();
+    for (const selector of ['#nodeLabels', '#gizmoLabels']) {
+      const element = document.querySelector(selector);
+      if (!element) continue;
+      state.suspendedOverlays.set(element, element.hidden);
+      element.hidden = true;
+    }
+  }
+
+  function restoreStructureScene() {
+    for (const [canvas, wasHidden] of state.suspendedCanvases) canvas.hidden = wasHidden;
+    state.suspendedCanvases.clear();
+    for (const [element, wasHidden] of state.suspendedOverlays) element.hidden = wasHidden;
+    state.suspendedOverlays.clear();
+  }
+
   function setNodes(raw) {
     const value = Number(raw);
     if (!Number.isFinite(value)) return;
@@ -31,19 +61,26 @@
   }
 
   function setEnabled(enabled) {
-    state.enabled = Boolean(enabled);
     const canvas = document.querySelector('#s3dBenchmarkCanvas');
     const toggle = document.querySelector('#s3dBenchmarkEnabled');
     if (!canvas || !toggle) return;
-    canvas.hidden = !state.enabled;
+
+    const next = Boolean(enabled);
+    if (next === state.enabled) return;
+    state.enabled = next;
     toggle.checked = state.enabled;
+
     if (state.enabled) {
+      suspendStructureScene(canvas);
+      canvas.hidden = false;
       const metrics = document.querySelector('#s3dBenchmarkMetrics');
       if (!state.benchmark) state.benchmark = new S3D.WebGLBenchmark(canvas, metrics);
       state.benchmark.loadPreset(currentPreset());
       state.benchmark.start();
     } else {
       state.benchmark?.stop();
+      canvas.hidden = true;
+      restoreStructureScene();
     }
   }
 
@@ -74,7 +111,7 @@
     const nodeCount = create('output', { id: 's3dBenchmarkNodeCount' }, state.nodes.toLocaleString());
     nodeLabel.append(nodes, document.createTextNode(' '), nodeCount);
 
-    const note = create('small', { className: 'muted' }, 'Continuous WebGL2 orbit benchmark. Node count 100–20,000.');
+    const note = create('small', { className: 'muted' }, 'Continuous WebGL2 orbit benchmark. Node count 100–20,000. Structure scene canvases are suspended while running.');
     const metrics = create('pre', { id: 's3dBenchmarkMetrics' }, 'benchmark stopped');
 
     enable.addEventListener('change', () => setEnabled(enable.checked));
