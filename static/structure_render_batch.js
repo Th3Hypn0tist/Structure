@@ -1,6 +1,7 @@
 // Production Structure -> S3D batched rendering bridge.
-// Static projection data is compiled to GPU-resident batches once and reused on
-// camera-only frames. Dynamic authoring/playback safely falls back to rebuild mode.
+// Static projection data can be compiled to GPU-resident batches and reused on
+// camera-only frames. Until all authoring overlays are resident-aware, the fast
+// path is intentionally enabled only for the benchmark workspace.
 (() => {
   if (!globalThis.S3D?.WebGLBatchRenderer) throw new Error('S3D WebGLBatchRenderer must load before Structure batch bridge');
   if (typeof gl === 'undefined' || typeof render !== 'function') throw new Error('Structure GL/render runtime unavailable for batch bridge');
@@ -35,11 +36,12 @@
     });
   }
 
+  function residentFastPathEnabled() {
+    return Boolean(window.StructureBenchmark?.state?.active);
+  }
+
   function dynamicProjectionActive() {
     if (!ws) return true;
-    // Hover is transient view state. It must never invalidate a resident scene.
-    // Hover highlighting belongs in a small overlay/state buffer, not in the
-    // canonical/projection rebuild path.
     return Boolean(
       selected?.size ||
       linkSource ||
@@ -103,8 +105,11 @@
   render = function renderWithS3DBatches() {
     if (!ws) return renderBeforeBatch();
 
-    const dynamic = dynamicProjectionActive();
+    const allowResident = residentFastPathEnabled();
+    const dynamic = !allowResident || dynamicProjectionActive();
     const signature = settingsSignature();
+
+    if (!allowResident && residentValid) invalidateResident('resident_disabled_outside_benchmark');
     if (residentWorkspace !== ws) {
       residentWorkspace = ws;
       invalidateResident('workspace_changed');
@@ -130,7 +135,7 @@
         residentCompiles += 1;
         stats = { ...stats, resident: false, compiledResident: true, residentCompiles, residentFrames };
       } else {
-        invalidateResident('dynamic_projection');
+        invalidateResident(allowResident ? 'dynamic_projection' : 'authoring_dynamic_projection');
         stats = renderer.flush(cameraRight(), cameraUp(), performance.now() / 1000);
         stats = { ...stats, resident: false, residentCompiles, residentFrames };
       }
