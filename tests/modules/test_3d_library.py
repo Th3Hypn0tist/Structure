@@ -142,21 +142,42 @@ class ThreeDLibraryTests(unittest.TestCase):
         self.assertIn("renderer.begin(viewProjection())", source)
         self.assertIn("renderer.flush(cameraRight(), cameraUp())", source)
 
-    def test_dynamic_adapter_renderer_and_real_benchmark_assets_are_served(self):
+    def test_structure_frame_cache_memoizes_expensive_projection_work_once_per_frame(self):
+        source = (STATIC / "structure_frame_cache.js").read_text(encoding="utf-8")
+        for token in (
+            "canonicalIndexCached",
+            "linkPropertiesCached",
+            "activeLinkPropertiesCached",
+            "visibleEntityIdsCached",
+            "buildSceneLayoutsCached",
+            "linkSlotsCached",
+            "allEventRoutesCached",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, source)
+        self.assertIn("function resetFrame()", source)
+        self.assertIn("render = function renderWithFrameCache()", source)
+        self.assertIn("window.StructureFrameCache", source)
+
+    def test_dynamic_adapter_renderer_cache_and_real_benchmark_assets_are_served(self):
         app = (ROOT / "app.py").read_text(encoding="utf-8")
         playback = (STATIC / "playback_runtime.js").read_text(encoding="utf-8")
-        for path in (
+        paths = (
             "/static/3d/renderer.js",
             "/static/structure_s3d_adapter.js",
+            "/static/structure_frame_cache.js",
             "/static/3d/render_store.js",
             "/static/3d/webgl_batch_renderer.js",
             "/static/structure_render_batch.js",
             "/static/3d/benchmark.js",
             "/static/structure_benchmark.js",
             "/static/3d/benchmark_panel.js",
-        ):
+        )
+        for path in paths:
             self.assertIn(path, app)
             self.assertIn(path, playback)
+        self.assertLess(playback.index("/static/structure_s3d_adapter.js"), playback.index("/static/structure_frame_cache.js"))
+        self.assertLess(playback.index("/static/structure_frame_cache.js"), playback.index("/static/structure_render_batch.js"))
         self.assertNotIn("loadStructureScript('/static/3d/benchmark_webgl.js')", playback)
 
     def test_gpu_microbenchmark_remains_instanced_batched_baseline(self):
