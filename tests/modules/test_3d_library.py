@@ -109,49 +109,70 @@ class ThreeDLibraryTests(unittest.TestCase):
         self.assertNotIn("propertyDisplayName", library)
         self.assertNotIn("activeLinkProperties", library)
 
-    def test_dynamic_adapter_and_benchmark_assets_are_served(self):
+    def test_dynamic_adapter_and_real_benchmark_assets_are_served(self):
         app = (ROOT / "app.py").read_text(encoding="utf-8")
         playback = (STATIC / "playback_runtime.js").read_text(encoding="utf-8")
         for path in (
             "/static/3d/renderer.js",
             "/static/structure_s3d_adapter.js",
             "/static/3d/benchmark.js",
-            "/static/3d/benchmark_webgl.js",
+            "/static/structure_benchmark.js",
             "/static/3d/benchmark_panel.js",
         ):
             self.assertIn(path, app)
             self.assertIn(path, playback)
+        self.assertNotIn("loadStructureScript('/static/3d/benchmark_webgl.js')", playback)
 
-    def test_20k_benchmark_is_instanced_batched_and_camera_static_upload_free(self):
+    def test_gpu_microbenchmark_remains_instanced_batched_baseline(self):
         source = (LIB / "benchmark_webgl.js").read_text(encoding="utf-8")
         benchmark = (LIB / "benchmark.js").read_text(encoding="utf-8")
         self.assertIn("nodes: 20000", benchmark)
         self.assertIn("gl.drawArraysInstanced", source)
         self.assertIn("gl.vertexAttribDivisor(1, 1)", source)
         self.assertIn("gl.drawArrays(gl.LINES", source)
-        self.assertIn("this.frameUploads = 0", source)
         self.assertIn("camera-only frame: 0 object uploads", source)
 
-    def test_benchmark_is_hidden_in_settings_with_100_to_20k_slider(self):
+    def test_real_benchmark_builds_normal_structure_nodes_props_events_effects_and_links(self):
+        source = (STATIC / "structure_benchmark.js").read_text(encoding="utf-8")
+        self.assertIn("workspace.entities = [trigger, ...nodes.map(item => item.entity)]", source)
+        self.assertIn("'data', 'RULESET_DATA'", source)
+        self.assertIn("'event', 'RULESET_EVENT'", source)
+        self.assertIn("'effect', 'RULESET_EFFECT'", source)
+        self.assertIn("'RULESET_LINK_EVENT_EFFECT'", source)
+        self.assertIn("'RULESET_LINK_EFFECT_TARGET'", source)
+        self.assertIn("'RULESET_LINK_EVENT_CAUSE'", source)
+        self.assertIn("'RULESET_LINK_DEPENDENCY'", source)
+        self.assertNotIn("new S3D.WebGLBenchmark", source)
+
+    def test_real_benchmark_has_left_trigger_entity_and_uses_normal_causal_trigger(self):
+        source = (STATIC / "structure_benchmark.js").read_text(encoding="utf-8")
+        self.assertIn("const triggerId = 'BENCH_TRIGGER'", source)
+        self.assertIn("'BENCH_TRIGGER', [minX - 5.0, 0, 0]", source)
+        self.assertIn("triggerEventRef: 'EVENT_BENCH_TRIGGER'", source)
+        self.assertIn("triggerCausalProjection(BENCH.triggerEventRef)", source)
+        self.assertIn("RULESET_LINK_EVENT_CAUSE", source)
+        self.assertIn("causalProjection.maxDepth", source)
+
+    def test_real_benchmark_is_temporary_and_restores_original_workspace(self):
+        source = (STATIC / "structure_benchmark.js").read_text(encoding="utf-8")
+        self.assertIn("workspace: ws", source)
+        self.assertIn("ws = built.workspace", source)
+        self.assertIn("ws = previous.workspace", source)
+        self.assertIn("benchmark stopped · workspace restored", source)
+
+    def test_benchmark_is_hidden_in_settings_with_100_to_20k_slider_and_live_metrics(self):
         panel = (LIB / "benchmark_panel.js").read_text(encoding="utf-8")
         self.assertIn("document.querySelector('#settings')", panel)
         self.assertIn("S3D Benchmark", panel)
         self.assertIn("min: '100'", panel)
         self.assertIn("max: '20000'", panel)
         self.assertIn("step: '100'", panel)
-        self.assertIn("Run benchmark", panel)
-        self.assertIn("canvas.hidden = true", panel)
-
-    def test_benchmark_suspends_other_canvases_and_restores_previous_state(self):
-        panel = (LIB / "benchmark_panel.js").read_text(encoding="utf-8")
-        self.assertIn("function suspendStructureScene", panel)
-        self.assertIn("document.querySelectorAll('canvas')", panel)
-        self.assertIn("if (canvas === benchmarkCanvas) continue", panel)
-        self.assertIn("state.suspendedCanvases.set(canvas, canvas.hidden)", panel)
-        self.assertIn("canvas.hidden = true", panel)
-        self.assertIn("function restoreStructureScene", panel)
-        self.assertIn("canvas.hidden = wasHidden", panel)
-        self.assertIn("#gizmoLabels", panel)
+        self.assertIn("Run real Structure benchmark", panel)
+        self.assertIn("STRUCTURE BENCHMARK", panel)
+        self.assertIn("fps", panel)
+        self.assertIn("draw_calls", panel)
+        self.assertIn("buffer uploads", panel)
+        self.assertNotIn("s3dBenchmarkCanvas", panel)
 
 
 if __name__ == "__main__":
