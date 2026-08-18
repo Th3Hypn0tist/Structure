@@ -1,6 +1,5 @@
-// Transient Event playback clock and controls.
-// Playback timing is view/runtime configuration only. It never changes canonical
-// Entity/Property/Link semantics.
+// Structure adapter for the generic S3D playback clock.
+// Timing remains transient view/runtime configuration and never changes canonical semantics.
 
 const PLAYBACK_DEFAULTS = Object.freeze({
   event_activation_duration: 0.30,
@@ -13,14 +12,7 @@ const PLAYBACK_DEFAULTS = Object.freeze({
   playback_speed: 1.00,
 });
 
-const playbackRuntime = {
-  startedAt: 0,
-  paused: false,
-  pausedAt: 0,
-  pausedAccumulatedMs: 0,
-  manualAdvanceMs: 0,
-  boundaryProvider: null,
-};
+if (!window.S3D?.Playback) throw new Error('S3D Playback library must load before Structure playback adapter');
 
 function playbackNumber(field) {
   if (!ws) return PLAYBACK_DEFAULTS[field];
@@ -35,6 +27,10 @@ function playbackNumber(field) {
   }
   return value;
 }
+
+const playbackClock = new window.S3D.Playback({ speed: () => playbackNumber('playback_speed') });
+const playbackRuntime = playbackClock.state;
+
 function playbackTimingMs() {
   return {
     activation: playbackNumber('event_activation_duration') * 1000,
@@ -46,58 +42,18 @@ function playbackTimingMs() {
     fade: playbackNumber('fade_out_duration') * 1000,
   };
 }
-function playbackElapsed(now = performance.now()) {
-  if (!playbackRuntime.startedAt) return 0;
-  const effectiveNow = playbackRuntime.paused ? playbackRuntime.pausedAt : now;
-  const wallElapsed = Math.max(0, effectiveNow - playbackRuntime.startedAt - playbackRuntime.pausedAccumulatedMs);
-  return wallElapsed * playbackNumber('playback_speed') + playbackRuntime.manualAdvanceMs;
-}
-function startPlayback(now = performance.now()) {
-  playbackRuntime.startedAt = now;
-  playbackRuntime.paused = false;
-  playbackRuntime.pausedAt = 0;
-  playbackRuntime.pausedAccumulatedMs = 0;
-  playbackRuntime.manualAdvanceMs = 0;
-  syncPlaybackButtons();
-}
-function resetPlayback() {
-  playbackRuntime.startedAt = 0;
-  playbackRuntime.paused = false;
-  playbackRuntime.pausedAt = 0;
-  playbackRuntime.pausedAccumulatedMs = 0;
-  playbackRuntime.manualAdvanceMs = 0;
-  syncPlaybackButtons();
-}
-function setPlaybackPaused(paused, now = performance.now()) {
-  if (!playbackRuntime.startedAt || playbackRuntime.paused === paused) return;
-  if (paused) {
-    playbackRuntime.paused = true;
-    playbackRuntime.pausedAt = now;
-  } else {
-    playbackRuntime.pausedAccumulatedMs += Math.max(0, now - playbackRuntime.pausedAt);
-    playbackRuntime.paused = false;
-    playbackRuntime.pausedAt = 0;
-  }
-  syncPlaybackButtons();
-}
-function togglePlaybackPause() { setPlaybackPaused(!playbackRuntime.paused); }
-function normalizePlaybackBoundaries(values) {
-  return [...new Set((values ?? []).filter(value => Number.isFinite(value) && value >= 0).map(value => Math.round(value * 1000) / 1000))].sort((a, b) => a - b);
-}
+function playbackElapsed(now = performance.now()) { return playbackClock.elapsed(now); }
+function startPlayback(now = performance.now()) { playbackClock.start(now); syncPlaybackButtons(); }
+function resetPlayback() { playbackClock.reset(); syncPlaybackButtons(); }
+function setPlaybackPaused(paused, now = performance.now()) { playbackClock.pause(paused, now); syncPlaybackButtons(); }
+function togglePlaybackPause() { playbackClock.togglePause(); syncPlaybackButtons(); }
+function normalizePlaybackBoundaries(values) { return window.S3D.normalizePlaybackBoundaries(values); }
 function stepPlayback() {
   if (!playbackRuntime.startedAt) return;
-  if (!playbackRuntime.paused) setPlaybackPaused(true);
-  const current = playbackElapsed();
-  const boundaries = normalizePlaybackBoundaries(playbackRuntime.boundaryProvider?.() ?? []);
-  const next = boundaries.find(value => value > current + 0.5);
-  if (next === undefined) return;
-  playbackRuntime.manualAdvanceMs += next - current;
+  playbackClock.step();
   syncPlaybackButtons();
 }
-function setPlaybackBoundaryProvider(provider) {
-  if (provider !== null && typeof provider !== 'function') throw new Error('playback boundary provider must be a function or null');
-  playbackRuntime.boundaryProvider = provider;
-}
+function setPlaybackBoundaryProvider(provider) { playbackClock.setBoundaryProvider(provider); }
 
 function installPlaybackControls() {
   const right = document.querySelector('#rightControls');
@@ -189,6 +145,7 @@ function syncPlaybackTimingControls() {
 
 window.StructurePlayback = Object.freeze({
   state: playbackRuntime,
+  clock: playbackClock,
   defaults: PLAYBACK_DEFAULTS,
   elapsed: playbackElapsed,
   timingMs: playbackTimingMs,
@@ -201,8 +158,6 @@ window.StructurePlayback = Object.freeze({
   syncControls: syncPlaybackTimingControls,
 });
 
-// Extend the existing canonical settings sync rather than creating a second
-// workspace/settings lifecycle.
 const syncSettingsBeforePlayback = syncSettings;
 syncSettings = function syncSettingsWithPlayback() {
   syncSettingsBeforePlayback();
