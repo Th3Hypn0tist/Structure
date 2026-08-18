@@ -173,7 +173,7 @@ function enhanceLinkDeleteControls() {
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'canonical-link-delete';
-    remove.dataset.canonicalLinkDelete = entry.property.id;
+    remove.setAttribute('data-canonical-link-delete', entry.property.id);
     remove.title = `Delete ${entry.property.id}`;
     remove.textContent = '×';
     remove.addEventListener('click', event => {
@@ -195,7 +195,7 @@ function enhanceEventDeleteControls() {
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'canonical-event-delete';
-    remove.dataset.canonicalEventDelete = open.dataset.eventRuleOpen;
+    remove.setAttribute('data-canonical-event-delete', open.dataset.eventRuleOpen);
     remove.title = `Delete ${open.dataset.eventRuleOpen}`;
     remove.textContent = '×';
     remove.addEventListener('click', event => {
