@@ -14,6 +14,9 @@ class ThreeDLibraryTests(unittest.TestCase):
             "core.js",
             "math.js",
             "renderer.js",
+            "benchmark.js",
+            "benchmark_webgl.js",
+            "benchmark_panel.js",
             "objects/object.js",
             "objects/primitives.js",
             "objects/anchors.js",
@@ -30,7 +33,11 @@ class ThreeDLibraryTests(unittest.TestCase):
                 self.assertTrue((LIB / name).is_file())
 
     def test_library_does_not_own_structure_canonical_semantics(self):
-        source = "\n".join(path.read_text(encoding="utf-8") for path in LIB.rglob("*.js"))
+        semantic_library_files = [
+            path for path in LIB.rglob("*.js")
+            if path.name != "benchmark_panel.js"
+        ]
+        source = "\n".join(path.read_text(encoding="utf-8") for path in semantic_library_files)
         forbidden = (
             "property_type_ref",
             "ruleset_ref",
@@ -92,18 +99,59 @@ class ThreeDLibraryTests(unittest.TestCase):
 
     def test_structure_semantics_stay_outside_library_boundary(self):
         adapter = (STATIC / "structure_s3d_adapter.js").read_text(encoding="utf-8")
-        library = "\n".join(path.read_text(encoding="utf-8") for path in LIB.rglob("*.js"))
+        library = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in LIB.rglob("*.js")
+            if path.name != "benchmark_panel.js"
+        )
         self.assertIn("propertyDisplayName", adapter)
         self.assertIn("activeLinkProperties", adapter)
         self.assertNotIn("propertyDisplayName", library)
         self.assertNotIn("activeLinkProperties", library)
 
-    def test_dynamic_adapter_assets_are_served(self):
+    def test_dynamic_adapter_and_benchmark_assets_are_served(self):
         app = (ROOT / "app.py").read_text(encoding="utf-8")
         playback = (STATIC / "playback_runtime.js").read_text(encoding="utf-8")
-        for path in ("/static/3d/renderer.js", "/static/structure_s3d_adapter.js"):
+        for path in (
+            "/static/3d/renderer.js",
+            "/static/structure_s3d_adapter.js",
+            "/static/3d/benchmark.js",
+            "/static/3d/benchmark_webgl.js",
+            "/static/3d/benchmark_panel.js",
+        ):
             self.assertIn(path, app)
             self.assertIn(path, playback)
+
+    def test_20k_benchmark_is_instanced_batched_and_camera_static_upload_free(self):
+        source = (LIB / "benchmark_webgl.js").read_text(encoding="utf-8")
+        benchmark = (LIB / "benchmark.js").read_text(encoding="utf-8")
+        self.assertIn("nodes: 20000", benchmark)
+        self.assertIn("gl.drawArraysInstanced", source)
+        self.assertIn("gl.vertexAttribDivisor(1, 1)", source)
+        self.assertIn("gl.drawArrays(gl.LINES", source)
+        self.assertIn("this.frameUploads = 0", source)
+        self.assertIn("camera-only frame: 0 object uploads", source)
+
+    def test_benchmark_is_hidden_in_settings_with_100_to_20k_slider(self):
+        panel = (LIB / "benchmark_panel.js").read_text(encoding="utf-8")
+        self.assertIn("document.querySelector('#settings')", panel)
+        self.assertIn("S3D Benchmark", panel)
+        self.assertIn("min: '100'", panel)
+        self.assertIn("max: '20000'", panel)
+        self.assertIn("step: '100'", panel)
+        self.assertIn("Run benchmark", panel)
+        self.assertIn("canvas.hidden = true", panel)
+
+    def test_benchmark_suspends_other_canvases_and_restores_previous_state(self):
+        panel = (LIB / "benchmark_panel.js").read_text(encoding="utf-8")
+        self.assertIn("function suspendStructureScene", panel)
+        self.assertIn("document.querySelectorAll('canvas')", panel)
+        self.assertIn("if (canvas === benchmarkCanvas) continue", panel)
+        self.assertIn("state.suspendedCanvases.set(canvas, canvas.hidden)", panel)
+        self.assertIn("canvas.hidden = true", panel)
+        self.assertIn("function restoreStructureScene", panel)
+        self.assertIn("canvas.hidden = wasHidden", panel)
+        self.assertIn("#gizmoLabels", panel)
 
 
 if __name__ == "__main__":
