@@ -9,6 +9,7 @@
     nodes: 1000,
     suspendedCanvases: new Map(),
     suspendedOverlays: new Map(),
+    renderGateInstalled: false,
   };
 
   function create(tag, attrs = {}, text = '') {
@@ -23,6 +24,20 @@
 
   function currentPreset() {
     return { id: `nodes-${state.nodes}`, nodes: state.nodes, links: 0 };
+  }
+
+  function installRenderGate() {
+    if (state.renderGateInstalled) return;
+    if (typeof globalThis.render !== 'function') throw new Error('Structure render loop unavailable for benchmark gate');
+    const structureRender = globalThis.render;
+    globalThis.render = function renderWithBenchmarkGate() {
+      if (state.enabled) {
+        requestAnimationFrame(globalThis.render);
+        return;
+      }
+      structureRender();
+    };
+    state.renderGateInstalled = true;
   }
 
   function suspendStructureScene(benchmarkCanvas) {
@@ -89,6 +104,7 @@
     const settings = document.querySelector('#settings');
     const scene = document.querySelector('#scene');
     if (!settings || !scene) throw new Error('S3D benchmark requires Structure settings and scene canvas');
+    installRenderGate();
 
     const canvas = create('canvas', { id: 's3dBenchmarkCanvas', 'aria-label': 'S3D benchmark canvas' });
     canvas.hidden = true;
@@ -111,7 +127,7 @@
     const nodeCount = create('output', { id: 's3dBenchmarkNodeCount' }, state.nodes.toLocaleString());
     nodeLabel.append(nodes, document.createTextNode(' '), nodeCount);
 
-    const note = create('small', { className: 'muted' }, 'Continuous WebGL2 orbit benchmark. Node count 100–20,000. Structure scene canvases are suspended while running.');
+    const note = create('small', { className: 'muted' }, 'Continuous WebGL2 orbit benchmark. Node count 100–20,000. Structure scene rendering is paused while running.');
     const metrics = create('pre', { id: 's3dBenchmarkMetrics' }, 'benchmark stopped');
 
     enable.addEventListener('change', () => setEnabled(enable.checked));
