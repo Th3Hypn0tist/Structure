@@ -104,9 +104,7 @@
       const index = code - this.first;
       const col = index % this.cols;
       const row = Math.floor(index / this.cols);
-      const u0 = col / this.cols;
-      const v0 = row / this.rows;
-      return [u0, v0, (col + 1) / this.cols, (row + 1) / this.rows];
+      return [col / this.cols, row / this.rows, (col + 1) / this.cols, (row + 1) / this.rows];
     }
   }
 
@@ -129,7 +127,8 @@
       this.boxVao = gl.createVertexArray();
       this.boxVertexBuffer = gl.createBuffer();
       this.boxInstanceBuffer = gl.createBuffer();
-      this.boxIndexBuffer = gl.createBuffer();
+      this.boxFaceIndexBuffer = gl.createBuffer();
+      this.boxEdgeIndexBuffer = gl.createBuffer();
       const vertices = new Float32Array([-1,-1,-1, 1,-1,-1, 1,1,-1, -1,1,-1, -1,-1,1, 1,-1,1, 1,1,1, -1,1,1]);
       this.boxFaces = new Uint16Array([0,2,1,0,3,2,4,5,6,4,6,7,0,4,7,0,7,3,1,2,6,1,6,5,0,1,5,0,5,4,3,7,6,3,6,2]);
       this.boxEdges = new Uint16Array([0,1,1,2,2,3,3,0,4,5,5,6,6,7,7,4,0,4,1,5,2,6,3,7]);
@@ -145,7 +144,10 @@
         gl.vertexAttribPointer(attr, 3, gl.FLOAT, false, stride, (attr - 1) * 3 * 4);
         gl.vertexAttribDivisor(attr, 1);
       }
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.boxIndexBuffer);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.boxFaceIndexBuffer);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, this.boxFaces, gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.boxEdgeIndexBuffer);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, this.boxEdges, gl.STATIC_DRAW);
       gl.bindVertexArray(null);
     }
     initLines() {
@@ -211,11 +213,8 @@
       gl.uniformMatrix4fv(gl.getUniformLocation(this.boxProgram, 'vp'), false, new Float32Array(vp));
       gl.bindVertexArray(this.boxVao);
       this.upload(this.boxInstanceBuffer, data);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.boxIndexBuffer);
-      const indices = outline ? this.boxEdges : this.boxFaces;
-      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
-      this.stats.uploads += 1;
-      gl.drawElementsInstanced(outline ? gl.LINES : gl.TRIANGLES, indices.length, gl.UNSIGNED_SHORT, 0, count);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, outline ? this.boxEdgeIndexBuffer : this.boxFaceIndexBuffer);
+      gl.drawElementsInstanced(outline ? gl.LINES : gl.TRIANGLES, outline ? this.boxEdges.length : this.boxFaces.length, gl.UNSIGNED_SHORT, 0, count);
       this.stats.drawCalls += 1;
     }
     drawLines(data, vertexCount, vp) {
