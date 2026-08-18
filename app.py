@@ -23,6 +23,7 @@ STATIC = {
     "/static/3d/renderer.js": ("3d/renderer.js", "application/javascript; charset=utf-8"),
     "/static/3d/render_store.js": ("3d/render_store.js", "application/javascript; charset=utf-8"),
     "/static/3d/webgl_batch_renderer.js": ("3d/webgl_batch_renderer.js", "application/javascript; charset=utf-8"),
+    "/static/3d/text_camera_baseline.js": ("3d/text_camera_baseline.js", "application/javascript; charset=utf-8"),
     "/static/3d/persistent_gpu.js": ("3d/persistent_gpu.js", "application/javascript; charset=utf-8"),
     "/static/3d/benchmark.js": ("3d/benchmark.js", "application/javascript; charset=utf-8"),
     "/static/3d/benchmark_webgl.js": ("3d/benchmark_webgl.js", "application/javascript; charset=utf-8"),
