@@ -77,8 +77,9 @@
 
   function setEnabled(enabled) {
     const canvas = document.querySelector('#s3dBenchmarkCanvas');
+    const metrics = document.querySelector('#s3dBenchmarkMetrics');
     const toggle = document.querySelector('#s3dBenchmarkEnabled');
-    if (!canvas || !toggle) return;
+    if (!canvas || !metrics || !toggle) return;
 
     const next = Boolean(enabled);
     if (next === state.enabled) return;
@@ -88,13 +89,14 @@
     if (state.enabled) {
       suspendStructureScene(canvas);
       canvas.hidden = false;
-      const metrics = document.querySelector('#s3dBenchmarkMetrics');
+      metrics.hidden = false;
       if (!state.benchmark) state.benchmark = new S3D.WebGLBenchmark(canvas, metrics);
       state.benchmark.loadPreset(currentPreset());
       state.benchmark.start();
     } else {
       state.benchmark?.stop();
       canvas.hidden = true;
+      metrics.hidden = true;
       restoreStructureScene();
     }
   }
@@ -113,6 +115,28 @@
     });
     document.body.insertBefore(canvas, document.body.firstChild);
 
+    const metrics = create('pre', { id: 's3dBenchmarkMetrics', 'aria-live': 'polite' }, 'benchmark stopped');
+    metrics.hidden = true;
+    Object.assign(metrics.style, {
+      position: 'fixed',
+      right: '16px',
+      bottom: '16px',
+      zIndex: '12000',
+      margin: '0',
+      padding: '10px 12px',
+      minWidth: '250px',
+      maxWidth: 'calc(100vw - 32px)',
+      whiteSpace: 'pre',
+      pointerEvents: 'none',
+      background: 'rgba(5, 8, 13, .88)',
+      border: '1px solid rgba(90, 125, 170, .55)',
+      borderRadius: '6px',
+      color: '#dbe9ff',
+      font: '12px/1.35 ui-monospace, SFMono-Regular, Consolas, monospace',
+      boxShadow: '0 8px 28px rgba(0,0,0,.35)',
+    });
+    document.body.appendChild(metrics);
+
     const details = create('details', { id: 's3dBenchmarkSettings' });
     const summary = create('summary', {}, 'S3D Benchmark');
     const body = create('div', { className: 'benchmark-settings-body' });
@@ -127,13 +151,12 @@
     const nodeCount = create('output', { id: 's3dBenchmarkNodeCount' }, state.nodes.toLocaleString());
     nodeLabel.append(nodes, document.createTextNode(' '), nodeCount);
 
-    const note = create('small', { className: 'muted' }, 'Continuous WebGL2 orbit benchmark. Node count 100–20,000. Structure scene rendering is paused while running.');
-    const metrics = create('pre', { id: 's3dBenchmarkMetrics' }, 'benchmark stopped');
+    const note = create('small', { className: 'muted' }, 'Continuous WebGL2 orbit benchmark. Node count 100–20,000. Live metrics stay visible over the benchmark scene.');
 
     enable.addEventListener('change', () => setEnabled(enable.checked));
     nodes.addEventListener('input', () => setNodes(nodes.value));
 
-    body.append(enableLabel, nodeLabel, note, metrics);
+    body.append(enableLabel, nodeLabel, note);
     details.append(summary, body);
     settings.append(document.createElement('hr'), details);
   }
