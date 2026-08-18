@@ -1,13 +1,30 @@
 // Structure -> S3D projection adapter.
 // This is the semantic boundary: Structure resolves canonical CW meaning,
 // while S3D receives only generic objects, anchors, links and presentation metadata.
+//
+// Scene objects are persistent. Rendering may reconcile presentation state, but
+// it must not destroy/recreate the S3D object graph every animation frame.
 
 const structureS3D = {
   scene: new S3D.Scene(),
   entities: new Map(),
+  eventGroups: new Map(),
+  propGroups: new Map(),
   events: new Map(),
   props: new Map(),
   links: new Map(),
+  routePulses: new Map(),
+  lifecycle: {
+    reconciles: 0,
+    entitiesCreated: 0,
+    eventGroupsCreated: 0,
+    propGroupsCreated: 0,
+    eventsCreated: 0,
+    propsCreated: 0,
+    anchorsCreated: 0,
+    linksCreated: 0,
+    pulsesCreated: 0,
+  },
 };
 
 const structureS3DRenderer = new S3D.Renderer({
@@ -16,12 +33,31 @@ const structureS3DRenderer = new S3D.Renderer({
   point: (position, scale, color) => drawBox(position, scale, color),
 });
 
+function assignVec3(object, field, value) {
+  const current = object[field];
+  if (Array.isArray(current) && current.length === 3) {
+    current[0] = Number(value[0]);
+    current[1] = Number(value[1]);
+    current[2] = Number(value[2]);
+  } else {
+    object[field] = [Number(value[0]), Number(value[1]), Number(value[2])];
+  }
+  return object[field];
+}
+
+function removeChildObject(object) {
+  if (object?.parent?.remove) object.parent.remove(object);
+}
+
 function resetStructureS3DScene() {
   structureS3D.scene.clear();
   structureS3D.entities.clear();
+  structureS3D.eventGroups.clear();
+  structureS3D.propGroups.clear();
   structureS3D.events.clear();
   structureS3D.props.clear();
   structureS3D.links.clear();
+  structureS3D.routePulses.clear();
 }
 
 function ensureS3DEntity(entity) {
@@ -30,102 +66,238 @@ function ensureS3DEntity(entity) {
     object = new S3D.SceneObject({ id: `entity:${entity.id}`, position: entity.position, metadata: { sourceRef: entity.id } });
     structureS3D.entities.set(entity.id, object);
     structureS3D.scene.add(object);
+    structureS3D.lifecycle.entitiesCreated += 1;
   }
-  object.position = [...entity.position];
+  assignVec3(object, 'position', entity.position);
+  object.metadata.sourceRef = entity.id;
   return object;
 }
 
-function makeEventGroup(entity, layout) {
+function ensureEventGroup(entity) {
   const host = ensureS3DEntity(entity);
-  const group = new S3D.Events({ id: `events:${entity.id}`, attachTo: host, metadata: { sourceRef: entity.id } });
+  let group = structureS3D.eventGroups.get(entity.id);
+  if (!group) {
+    group = new S3D.Events({ id: `events:${entity.id}`, attachTo: host, metadata: { sourceRef: entity.id } });
+    structureS3D.eventGroups.set(entity.id, group);
+    structureS3D.lifecycle.eventGroupsCreated += 1;
+  }
+  group.attachTo = host;
+  group.metadata.sourceRef = entity.id;
+  return group;
+}
+
+function syncEventGroup(entity, layout, seenEvents) {
+  const group = ensureEventGroup(entity);
   for (const row of layout.rows) {
-    const item = new S3D.EventItem({
-      id: `event:${row.ref}`,
-      label: propertyDisplayName(row.property, entity),
-      color: SCENE_COLORS.event,
-      metadata: { sourceRef: row.ref },
-    });
-    item.position = row.center.map((value, index) => value - entity.position[index]);
-    item.scale = [...row.halfScale];
+    seenEvents.add(row.ref);
+    let item = structureS3D.events.get(row.ref);
+    if (!item) {
+      item = new S3D.EventItem({
+        id: `event:${row.ref}`,
+        label: propertyDisplayName(row.property, entity),
+        color: SCENE_COLORS.event,
+        metadata: { sourceRef: row.ref },
+      });
+      group.addItem(item);
+      structureS3D.events.set(row.ref, item);
+      structureS3D.lifecycle.eventsCreated += 1;
+    } else if (item.parent !== group) {
+      group.addItem(item);
+    }
+    item.label = propertyDisplayName(row.property, entity);
+    item.metadata.sourceRef = row.ref;
+    assignVec3(item, 'position', row.center.map((value, index) => value - entity.position[index]));
+    assignVec3(item, 'scale', row.halfScale);
     item.layoutWidth = row.width;
     item.layoutHeight = row.height;
-    group.addItem(item);
-    structureS3D.events.set(row.ref, item);
   }
   return group;
 }
 
-function makePropsGroup(entity, layout) {
+function ensurePropsGroup(entity, layout) {
+  const host = ensureS3DEntity(entity);
+  let group = structureS3D.propGroups.get(entity.id);
+  if (!group) {
+    group = new S3D.Props({
+      id: `props:${entity.id}`,
+      attachTo: host,
+      collapsed: layout.collapsed,
+      metadata: { sourceRef: entity.id },
+    });
+    structureS3D.propGroups.set(entity.id, group);
+    structureS3D.lifecycle.propGroupsCreated += 1;
+  }
+  group.attachTo = host;
+  group.collapsed = layout.collapsed;
+  group.metadata.sourceRef = entity.id;
+  assignVec3(group, 'position', layout.center.map((value, index) => value - entity.position[index]));
+  assignVec3(group, 'scale', layout.frameScale);
+  return group;
+}
+
+function syncPropsGroup(entity, layout, seenProps) {
   if (!layout) return null;
-  const host = ensureS3DEntity(entity);
-  const group = new S3D.Props({
-    id: `props:${entity.id}`,
-    attachTo: host,
-    collapsed: layout.collapsed,
-    metadata: { sourceRef: entity.id },
-  });
-  group.position = layout.center.map((value, index) => value - entity.position[index]);
-  group.scale = [...layout.frameScale];
+  const group = ensurePropsGroup(entity, layout);
   for (const row of layout.rows) {
-    const item = new S3D.PropsItem({
-      id: `prop:${row.ref}`,
-      label: `${row.item.propertyType.toUpperCase()} · ${displayName(row.item)}`,
-      color: SCENE_COLORS[row.item.propertyType] ?? SCENE_COLORS.generic,
-      metadata: { sourceRef: row.ref, propertyType: row.item.propertyType },
-    });
-    item.position = row.center.map((value, index) => value - entity.position[index]);
-    item.scale = [...row.halfScale];
+    seenProps.add(row.ref);
+    let item = structureS3D.props.get(row.ref);
+    if (!item) {
+      item = new S3D.PropsItem({
+        id: `prop:${row.ref}`,
+        label: `${row.item.propertyType.toUpperCase()} · ${displayName(row.item)}`,
+        color: SCENE_COLORS[row.item.propertyType] ?? SCENE_COLORS.generic,
+        metadata: { sourceRef: row.ref, propertyType: row.item.propertyType },
+      });
+      group.addItem(item);
+      structureS3D.props.set(row.ref, item);
+      structureS3D.lifecycle.propsCreated += 1;
+    } else if (item.parent !== group) {
+      group.addItem(item);
+    }
+    item.label = `${row.item.propertyType.toUpperCase()} · ${displayName(row.item)}`;
+    item.metadata.sourceRef = row.ref;
+    item.metadata.propertyType = row.item.propertyType;
+    assignVec3(item, 'position', row.center.map((value, index) => value - entity.position[index]));
+    assignVec3(item, 'scale', row.halfScale);
     item.layoutWidth = row.width;
     item.layoutHeight = row.height;
-    group.addItem(item);
-    structureS3D.props.set(row.ref, item);
   }
   return group;
 }
 
-function attachEventIoAnchors(entity, eventIo) {
-  if (!eventIo) return null;
+function ensureS3DAnchor(object, name, worldPosition, metadata = {}) {
+  let anchor = object.anchor(name);
+  if (!anchor) {
+    anchor = object.addAnchor(new S3D.Anchor({ name, metadata }));
+    structureS3D.lifecycle.anchorsCreated += 1;
+  }
+  const base = object.worldPosition();
+  assignVec3(anchor, 'position', worldPosition.map((value, index) => value - base[index]));
+  anchor.metadata = { ...anchor.metadata, ...metadata };
+  return anchor;
+}
+
+function syncEventIoAnchors(entity, eventIo) {
   const host = ensureS3DEntity(entity);
-  const incoming = host.addAnchor(new S3D.Anchor({
-    name: 'event_in',
-    position: eventIo.inCenter.map((value, index) => value - entity.position[index]),
-  }));
-  const outgoing = host.addAnchor(new S3D.Anchor({
-    name: 'event_out',
-    position: eventIo.outCenter.map((value, index) => value - entity.position[index]),
-  }));
-  return { incoming, outgoing, halfScale: [...eventIo.halfScale] };
+  if (!eventIo) {
+    host.anchors.delete('event_in');
+    host.anchors.delete('event_out');
+    return null;
+  }
+  const incoming = ensureS3DAnchor(host, 'event_in', eventIo.inCenter, { role: 'event_in' });
+  const outgoing = ensureS3DAnchor(host, 'event_out', eventIo.outCenter, { role: 'event_out' });
+  const current = host.metadata.eventIo ?? { incoming, outgoing, halfScale: [0, 0, 0] };
+  current.incoming = incoming;
+  current.outgoing = outgoing;
+  assignVec3(current, 'halfScale', eventIo.halfScale);
+  return current;
+}
+
+function prunePersistentObjects(seenEntities, seenEventGroups, seenPropGroups, seenEvents, seenProps) {
+  for (const [ref, item] of [...structureS3D.events]) {
+    if (seenEvents.has(ref)) continue;
+    removeChildObject(item);
+    structureS3D.events.delete(ref);
+  }
+  for (const [ref, item] of [...structureS3D.props]) {
+    if (seenProps.has(ref)) continue;
+    removeChildObject(item);
+    structureS3D.props.delete(ref);
+  }
+  for (const [entityId] of [...structureS3D.eventGroups]) {
+    if (!seenEventGroups.has(entityId)) structureS3D.eventGroups.delete(entityId);
+  }
+  for (const [entityId] of [...structureS3D.propGroups]) {
+    if (!seenPropGroups.has(entityId)) structureS3D.propGroups.delete(entityId);
+  }
+  for (const [entityId, object] of [...structureS3D.entities]) {
+    if (seenEntities.has(entityId)) continue;
+    structureS3D.scene.remove(object);
+    structureS3D.entities.delete(entityId);
+  }
 }
 
 function buildStructureS3DObjects(layouts) {
-  resetStructureS3DScene();
+  structureS3D.lifecycle.reconciles += 1;
+  const seenEntities = new Set();
+  const seenEventGroups = new Set();
+  const seenPropGroups = new Set();
+  const seenEvents = new Set();
+  const seenProps = new Set();
+
   for (const entity of assertWorkspace().entities) {
     const local = layouts.entities.get(entity.id);
     if (!local) continue;
+    seenEntities.add(entity.id);
     const host = ensureS3DEntity(entity);
-    host.metadata.events = makeEventGroup(entity, local.eventLayout);
-    host.metadata.props = makePropsGroup(entity, local.propsLayout);
-    host.metadata.eventIo = attachEventIoAnchors(entity, local.eventIo);
+    seenEventGroups.add(entity.id);
+    host.metadata.events = syncEventGroup(entity, local.eventLayout, seenEvents);
+    if (local.propsLayout) {
+      seenPropGroups.add(entity.id);
+      host.metadata.props = syncPropsGroup(entity, local.propsLayout, seenProps);
+    } else {
+      host.metadata.props = null;
+    }
+    host.metadata.eventIo = syncEventIoAnchors(entity, local.eventIo);
   }
+
+  prunePersistentObjects(seenEntities, seenEventGroups, seenPropGroups, seenEvents, seenProps);
   return structureS3D;
 }
 
-function setS3DAnchor(object, name, worldPosition) {
-  object.anchors.delete(name);
-  return object.addAnchor(new S3D.Anchor({
-    name,
-    position: worldPosition.map((value, index) => value - object.worldPosition()[index]),
-  }));
+function setS3DAnchor(object, name, worldPosition, metadata = {}) {
+  return ensureS3DAnchor(object, name, worldPosition, metadata);
 }
 
 function buildStructureS3DLink(id, sourceObject, sourceAnchorName, targetObject, targetAnchorName, options = {}) {
   const from = sourceObject.anchor(sourceAnchorName);
   const to = targetObject.anchor(targetAnchorName);
   if (!from || !to) throw new Error(`S3D Link anchors unresolved: ${id}`);
-  const link = new S3D.Link({ id: `link:${id}`, from, to, ...options, metadata: { ...(options.metadata ?? {}), sourceRef: id } });
-  structureS3D.links.set(id, link);
-  structureS3D.scene.add(link);
+  let link = structureS3D.links.get(id);
+  if (!link) {
+    link = new S3D.Link({ id: `link:${id}`, from, to, ...options, metadata: { ...(options.metadata ?? {}), sourceRef: id } });
+    structureS3D.links.set(id, link);
+    structureS3D.scene.add(link);
+    structureS3D.lifecycle.linksCreated += 1;
+  }
+  link.from = from;
+  link.to = to;
+  if (options.color) assignVec3(link, 'color', options.color);
+  if (options.flowColor) assignVec3(link, 'flowColor', options.flowColor);
+  if (options.pulseScale) assignVec3(link, 'pulseScale', options.pulseScale);
+  if (options.speed !== undefined) link.speed = Number(options.speed);
+  if (options.flow !== undefined) link.flow = Boolean(options.flow);
+  link.metadata = { ...link.metadata, ...(options.metadata ?? {}), sourceRef: id };
   return link;
+}
+
+function pruneStructureS3DLinks(seenLinks) {
+  for (const [id, link] of [...structureS3D.links]) {
+    if (seenLinks.has(id)) continue;
+    structureS3D.scene.remove(link);
+    structureS3D.links.delete(id);
+  }
+  for (const object of structureS3D.entities.values()) {
+    for (const [name, anchor] of [...object.anchors]) {
+      const sourceLinkRef = anchor.metadata?.sourceLinkRef;
+      if (sourceLinkRef && !seenLinks.has(sourceLinkRef)) object.anchors.delete(name);
+    }
+  }
+}
+
+function ensureRoutePulse(routeKey, start, end, progress, color, scale) {
+  let pulse = structureS3D.routePulses.get(routeKey);
+  if (!pulse) {
+    pulse = new S3D.Pulse({ id: `event-route:${routeKey}`, from: start, to: end, progress, color, scale });
+    structureS3D.routePulses.set(routeKey, pulse);
+    structureS3D.lifecycle.pulsesCreated += 1;
+  }
+  assignVec3(pulse, 'from', start);
+  assignVec3(pulse, 'to', end);
+  assignVec3(pulse, 'color', color);
+  assignVec3(pulse, 'scale', scale);
+  pulse.progress = Number(progress);
+  return pulse;
 }
 
 const buildSceneLayoutsBeforeS3D = buildSceneLayouts;
@@ -135,8 +307,8 @@ buildSceneLayouts = function buildSceneLayoutsWithS3D(index) {
   return layouts;
 };
 
-// Render Event/Props rows through their actual S3D instances while Structure
-// retains the semantic activation, labels and hit-target policy.
+// Render Event/Props rows through their actual persistent S3D instances while
+// Structure retains semantic activation, labels and hit-target policy.
 drawSceneProjection3D = function drawSceneProjectionViaS3D() {
   if (!ws) return;
   const globalElapsed = playbackApi().state.startedAt ? playbackApi().elapsed() : 0;
@@ -213,6 +385,7 @@ drawSceneProjection3D = function drawSceneProjectionViaS3D() {
   if (viewSettings().event_routes_visible) {
     const now = performance.now();
     const pulseRadius = Math.max(.018, linkSettings().flow_width * .10) * nodeMasterSize();
+    const seenRoutePulses = new Set();
     for (const route of allEventRoutes(layouts)) {
       const sourceObject = structureS3D.entities.get(route.sourceOwner.id);
       const targetObject = structureS3D.entities.get(route.targetOwner.id);
@@ -221,18 +394,24 @@ drawSceneProjection3D = function drawSceneProjectionViaS3D() {
       const projectedRoute = { ...route, start, end };
       drawLine(start, end, SCENE_COLORS.causal);
       const progress = eventRouteFlowProgress(route.key, now);
-      new S3D.Pulse({ id: `event-route:${route.key}`, from: start, to: end, progress, color: SCENE_COLORS.causalFlow, scale: [pulseRadius*.65,pulseRadius*.65,pulseRadius*.65] }).draw(structureS3DRenderer, { now });
+      const pulse = ensureRoutePulse(route.key, start, end, progress, SCENE_COLORS.causalFlow, [pulseRadius*.65,pulseRadius*.65,pulseRadius*.65]);
+      pulse.draw(structureS3DRenderer, { now });
+      seenRoutePulses.add(route.key);
       for (const trace of causalProjection.currentEvents) {
         const edges = traceRouteEdges(trace).get(route.key);
         if (edges?.length) drawTransientTraceRoute(projectedRoute, trace, edges, globalElapsed, pulseRadius);
       }
     }
+    for (const key of [...structureS3D.routePulses.keys()]) if (!seenRoutePulses.has(key)) structureS3D.routePulses.delete(key);
+  } else {
+    structureS3D.routePulses.clear();
   }
 };
 
 const linkSlotsBeforeS3D = linkSlots;
 linkSlots = function linkSlotsWithS3D() {
   const slots = linkSlotsBeforeS3D();
+  const seenLinks = new Set();
   for (const { property } of activeLinkProperties()) {
     const sourceEntity = entityForCanonicalRef(property.value.child_ref);
     const targetEntity = entityForCanonicalRef(property.value.parent_ref);
@@ -241,14 +420,16 @@ linkSlots = function linkSlotsWithS3D() {
     if (!sourceObject || !targetObject) throw new Error(`S3D Link endpoint object unresolved: ${property.id}`);
     const outName = `link:${property.id}:out`;
     const inName = `link:${property.id}:in`;
-    setS3DAnchor(sourceObject, outName, slots.get(`${property.id}:out`));
-    setS3DAnchor(targetObject, inName, slots.get(`${property.id}:in`));
+    setS3DAnchor(sourceObject, outName, slots.get(`${property.id}:out`), { sourceLinkRef: property.id, role: 'out' });
+    setS3DAnchor(targetObject, inName, slots.get(`${property.id}:in`), { sourceLinkRef: property.id, role: 'in' });
     buildStructureS3DLink(property.id, sourceObject, outName, targetObject, inName, {
       color: linkProjectionRgb(property, 'base'),
       flowColor: linkProjectionRgb(property, 'flow'),
       speed: requiredNumber(linkSettings(), 'base_flow_speed', 'settings.link_visualization'),
     });
+    seenLinks.add(property.id);
   }
+  pruneStructureS3DLinks(seenLinks);
   return slots;
 };
 
@@ -262,10 +443,10 @@ drawGenericLinks3D = function drawGenericLinksViaS3D(time) {
     const link = structureS3D.links.get(property.id);
     if (!link) throw new Error(`S3D Link instance unresolved: ${property.id}`);
     const amount = activationAmount(property.id);
-    link.color = mixedLinkRgb(property, amount);
-    link.flowColor = amount > 0 ? brightenedLinkRgb(property) : linkProjectionRgb(property, 'flow');
+    assignVec3(link, 'color', mixedLinkRgb(property, amount));
+    assignVec3(link, 'flowColor', amount > 0 ? brightenedLinkRgb(property) : linkProjectionRgb(property, 'flow'));
     link.phase = flowProgress(property, time);
-    link.pulseScale = [pulseRadius, pulseRadius, pulseRadius];
+    assignVec3(link, 'pulseScale', [pulseRadius, pulseRadius, pulseRadius]);
     link.draw(structureS3DRenderer, { now: time });
   }
   const portRadius = .055 * nodeMasterSize();
@@ -281,4 +462,5 @@ window.StructureS3D = Object.freeze({
   reset: resetStructureS3DScene,
   buildObjects: buildStructureS3DObjects,
   buildLink: buildStructureS3DLink,
+  lifecycle: () => ({ ...structureS3D.lifecycle }),
 });
