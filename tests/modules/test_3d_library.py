@@ -16,6 +16,7 @@ class ThreeDLibraryTests(unittest.TestCase):
             "renderer.js",
             "render_store.js",
             "webgl_batch_renderer.js",
+            "persistent_gpu.js",
             "benchmark.js",
             "benchmark_webgl.js",
             "benchmark_panel.js",
@@ -35,10 +36,7 @@ class ThreeDLibraryTests(unittest.TestCase):
                 self.assertTrue((LIB / name).is_file())
 
     def test_library_does_not_own_structure_canonical_semantics(self):
-        semantic_library_files = [
-            path for path in LIB.rglob("*.js")
-            if path.name != "benchmark_panel.js"
-        ]
+        semantic_library_files = [path for path in LIB.rglob("*.js") if path.name != "benchmark_panel.js"]
         source = "\n".join(path.read_text(encoding="utf-8") for path in semantic_library_files)
         forbidden = (
             "property_type_ref",
@@ -102,11 +100,7 @@ class ThreeDLibraryTests(unittest.TestCase):
 
     def test_structure_semantics_stay_outside_library_boundary(self):
         adapter = (STATIC / "structure_s3d_adapter.js").read_text(encoding="utf-8")
-        library = "\n".join(
-            path.read_text(encoding="utf-8")
-            for path in LIB.rglob("*.js")
-            if path.name != "benchmark_panel.js"
-        )
+        library = "\n".join(path.read_text(encoding="utf-8") for path in LIB.rglob("*.js") if path.name != "benchmark_panel.js")
         self.assertIn("propertyDisplayName", adapter)
         self.assertIn("activeLinkProperties", adapter)
         self.assertNotIn("propertyDisplayName", library)
@@ -114,12 +108,8 @@ class ThreeDLibraryTests(unittest.TestCase):
 
     def test_render_store_collects_boxes_lines_glyphs_and_gpu_flows_without_semantics(self):
         source = (LIB / "render_store.js").read_text(encoding="utf-8")
-        self.assertIn("class RenderStore", source)
-        self.assertIn("solidBoxes", source)
-        self.assertIn("outlineBoxes", source)
-        self.assertIn("lineVertices", source)
-        self.assertIn("glyphs", source)
-        self.assertIn("flowPulses", source)
+        for token in ("class RenderStore", "solidBoxes", "outlineBoxes", "lineVertices", "glyphs", "flowPulses"):
+            self.assertIn(token, source)
         self.assertIn("box(position, scale, color", source)
         self.assertIn("line(start, end, color)", source)
         self.assertIn("glyph(center, size, uvRect, color)", source)
@@ -138,15 +128,30 @@ class ThreeDLibraryTests(unittest.TestCase):
         self.assertNotIn("property_type_ref", source)
         self.assertNotIn("ruleset_ref", source)
 
-    def test_structure_render_bridge_batches_existing_projection_calls(self):
+    def test_persistent_gpu_path_uploads_once_and_camera_frames_only_draw(self):
+        source = (LIB / "persistent_gpu.js").read_text(encoding="utf-8")
+        self.assertIn("commitPersistent", source)
+        self.assertIn("drawPersistent", source)
+        self.assertIn("flushPersistent", source)
+        self.assertIn("gl.STATIC_DRAW", source)
+        self.assertIn("this.stats.uploads = 0", source)
+        self.assertIn("gl.uniformMatrix4fv", source)
+        self.assertIn("gl.uniform1f(loc.flowTime", source)
+        self.assertNotIn("property_type_ref", source)
+        self.assertNotIn("canonicalIndex", source)
+
+    def test_structure_render_bridge_uses_resident_static_frames_and_dynamic_fallback(self):
         source = (STATIC / "structure_render_batch.js").read_text(encoding="utf-8")
         self.assertIn("new S3D.WebGLBatchRenderer(gl)", source)
         self.assertIn("drawBox = function drawBoxBatched", source)
         self.assertIn("drawLine = function drawLineBatched", source)
         self.assertIn("drawSceneText3D = function drawSceneText3DBatched", source)
         self.assertIn("function drawFlowBatched", source)
-        self.assertIn("renderer.begin(viewProjection())", source)
+        self.assertIn("dynamicProjectionActive", source)
+        self.assertIn("renderer.drawPersistent", source)
+        self.assertIn("renderer.flushPersistent", source)
         self.assertIn("renderer.flush(cameraRight(), cameraUp(), performance.now() / 1000)", source)
+        self.assertIn("requestAnimationFrame(render)", source)
 
     def test_structure_frame_cache_memoizes_expensive_projection_work_once_per_frame(self):
         source = (STATIC / "structure_frame_cache.js").read_text(encoding="utf-8")
@@ -165,7 +170,7 @@ class ThreeDLibraryTests(unittest.TestCase):
         self.assertIn("render = function renderWithFrameCache()", source)
         self.assertIn("window.StructureFrameCache", source)
 
-    def test_dynamic_adapter_renderer_cache_and_real_benchmark_assets_are_served(self):
+    def test_dynamic_adapter_renderer_cache_residency_and_real_benchmark_assets_are_served(self):
         app = (ROOT / "app.py").read_text(encoding="utf-8")
         playback = (STATIC / "playback_runtime.js").read_text(encoding="utf-8")
         paths = (
@@ -174,6 +179,7 @@ class ThreeDLibraryTests(unittest.TestCase):
             "/static/structure_frame_cache.js",
             "/static/3d/render_store.js",
             "/static/3d/webgl_batch_renderer.js",
+            "/static/3d/persistent_gpu.js",
             "/static/structure_render_batch.js",
             "/static/3d/benchmark.js",
             "/static/structure_benchmark.js",
@@ -183,7 +189,8 @@ class ThreeDLibraryTests(unittest.TestCase):
             self.assertIn(path, app)
             self.assertIn(path, playback)
         self.assertLess(playback.index("/static/structure_s3d_adapter.js"), playback.index("/static/structure_frame_cache.js"))
-        self.assertLess(playback.index("/static/structure_frame_cache.js"), playback.index("/static/structure_render_batch.js"))
+        self.assertLess(playback.index("/static/structure_frame_cache.js"), playback.index("/static/3d/persistent_gpu.js"))
+        self.assertLess(playback.index("/static/3d/persistent_gpu.js"), playback.index("/static/structure_render_batch.js"))
         self.assertNotIn("loadStructureScript('/static/3d/benchmark_webgl.js')", playback)
 
     def test_gpu_microbenchmark_remains_instanced_batched_baseline(self):
@@ -223,7 +230,7 @@ class ThreeDLibraryTests(unittest.TestCase):
         self.assertIn("ws = previous.workspace", source)
         self.assertIn("benchmark stopped · workspace restored", source)
 
-    def test_benchmark_is_hidden_in_settings_with_100_to_20k_slider_and_live_metrics(self):
+    def test_benchmark_is_hidden_in_settings_with_100_to_20k_slider_and_residency_metrics(self):
         panel = (LIB / "benchmark_panel.js").read_text(encoding="utf-8")
         self.assertIn("document.querySelector('#settings')", panel)
         self.assertIn("S3D Benchmark", panel)
@@ -232,9 +239,10 @@ class ThreeDLibraryTests(unittest.TestCase):
         self.assertIn("step: '100'", panel)
         self.assertIn("Run real Structure benchmark", panel)
         self.assertIn("STRUCTURE BENCHMARK", panel)
-        self.assertIn("fps", panel)
-        self.assertIn("draw_calls", panel)
-        self.assertIn("buffer uploads", panel)
+        self.assertIn("GPU resident", panel)
+        self.assertIn("resident compiles", panel)
+        self.assertIn("upload bytes", panel)
+        self.assertIn("camera-only = 0 uploads/frame", panel)
         self.assertNotIn("s3dBenchmarkCanvas", panel)
 
 
