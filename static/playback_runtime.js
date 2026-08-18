@@ -180,6 +180,11 @@ async function bootstrapStructureS3DProjection() {
     await loadStructureScript('/static/3d/renderer.js');
     await loadStructureScript('/static/structure_s3d_adapter.js');
   }
+  if (!window.StructureRenderBatch) {
+    await loadStructureScript('/static/3d/render_store.js');
+    await loadStructureScript('/static/3d/webgl_batch_renderer.js');
+    await loadStructureScript('/static/structure_render_batch.js');
+  }
   if (!window.S3DBenchmarkSettings) {
     await loadStructureScript('/static/3d/benchmark.js');
     await loadStructureScript('/static/structure_benchmark.js');
