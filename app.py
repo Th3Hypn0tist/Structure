@@ -35,6 +35,7 @@ STATIC = {
     "/static/3d/objects/pulse.js": ("3d/objects/pulse.js", "application/javascript; charset=utf-8"),
     "/static/3d/objects/highlight.js": ("3d/objects/highlight.js", "application/javascript; charset=utf-8"),
     "/static/structure_s3d_adapter.js": ("structure_s3d_adapter.js", "application/javascript; charset=utf-8"),
+    "/static/structure_benchmark.js": ("structure_benchmark.js", "application/javascript; charset=utf-8"),
     "/static/app.js": ("app.js", "application/javascript; charset=utf-8"),
     "/static/scene_ui_3d.js": ("scene_ui_3d.js", "application/javascript; charset=utf-8"),
     "/static/entity_editor.js": ("entity_editor.js", "application/javascript; charset=utf-8"),
