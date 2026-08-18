@@ -186,6 +186,7 @@ async function bootstrapStructureS3DProjection() {
   if (!window.StructureRenderBatch) {
     await loadStructureScript('/static/3d/render_store.js');
     await loadStructureScript('/static/3d/webgl_batch_renderer.js');
+    await loadStructureScript('/static/3d/text_camera_baseline.js');
     await loadStructureScript('/static/3d/persistent_gpu.js');
     await loadStructureScript('/static/structure_render_batch.js');
   }
