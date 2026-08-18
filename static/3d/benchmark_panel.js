@@ -111,7 +111,7 @@
     const canvas = create('canvas', { id: 's3dBenchmarkCanvas', 'aria-label': 'S3D benchmark canvas' });
     canvas.hidden = true;
     Object.assign(canvas.style, {
-      position: 'fixed', inset: '0', width: '100%', height: '100%', zIndex: '1', pointerEvents: 'none',
+      position: 'fixed', inset: '0', width: '100%', height: '100%', zIndex: '1', pointerEvents: 'auto', touchAction: 'none',
     });
     document.body.insertBefore(canvas, document.body.firstChild);
 
@@ -151,7 +151,7 @@
     const nodeCount = create('output', { id: 's3dBenchmarkNodeCount' }, state.nodes.toLocaleString());
     nodeLabel.append(nodes, document.createTextNode(' '), nodeCount);
 
-    const note = create('small', { className: 'muted' }, 'Continuous WebGL2 orbit benchmark. Node count 100–20,000. Live metrics stay visible over the benchmark scene.');
+    const note = create('small', { className: 'muted' }, 'Continuous WebGL2 benchmark. LMB pan · RMB orbit · wheel zoom. Node count 100–20,000.');
 
     enable.addEventListener('change', () => setEnabled(enable.checked));
     nodes.addEventListener('input', () => setNodes(nodes.value));
