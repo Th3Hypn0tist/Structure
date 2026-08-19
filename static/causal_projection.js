@@ -658,11 +658,10 @@ canvas.addEventListener('click', event => {
   status(`${fresh.propertyType}: ${displayName(fresh)}`);
 });
 
-const renderSceneBase = render;
-render = function renderSceneWith3dChildren() {
-  renderSceneBase();
+if (!window.StructureRenderPipeline) throw new Error('Structure render pipeline must load before causal projection');
+window.StructureRenderPipeline.addPass('causal-projection', () => {
   if (ws) drawSceneProjection3D();
-};
+}, 100);
 
 window.addEventListener('keydown', event => {
   if (event.key === 'Escape' && causalProjection.currentEvents.length) clearCausalProjection();
