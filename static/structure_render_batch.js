@@ -73,10 +73,18 @@
     ensureBatchFrame();
     renderer.line(start, end, color);
   };
+
+  // Entity names are view labels: keep them camera-facing through the batched
+  // billboard text renderer. Node-internal labels (Props/Event rows) are surface
+  // UI and must stay attached to the node plane instead of following the camera.
   drawSceneText3D = function drawSceneText3DBatched(text, center, width, height, tint = [.93,.96,1]) {
     ensureBatchFrame();
     renderer.text(text, center, width, height, tint);
   };
+  window.drawSceneSurfaceText3D = function drawSceneSurfaceText3D(text, center, width, height, tint = [.93,.96,1]) {
+    return legacy.drawSceneText3D(text, center, width, height, tint);
+  };
+
   function drawFlowBatched(start, end, scale, color, phase = 0, speed = 0) {
     ensureBatchFrame();
     renderer.flow(start, end, scale, color, phase, speed);
@@ -150,6 +158,7 @@
     renderer,
     legacy,
     flow: drawFlowBatched,
+    surfaceText: window.drawSceneSurfaceText3D,
     invalidate: invalidateResident,
     stats: () => ({ ...(window.StructureRenderBatchStats ?? renderer.stats) }),
     residency: () => ({ residentValid, residentCompiles, residentFrames, reason: window.StructureRenderResidentReason ?? null }),
