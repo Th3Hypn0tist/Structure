@@ -193,6 +193,9 @@ async function bootstrapStructureS3DProjection() {
   if (!window.StructureInteractionPerf) {
     await loadStructureScript('/static/structure_interaction_perf.js');
   }
+  if (!window.StructureFrameRateLimit) {
+    await loadStructureScript('/static/frame_rate_limit.js');
+  }
   if (!window.S3DBenchmarkSettings) {
     await loadStructureScript('/static/3d/benchmark.js');
     await loadStructureScript('/static/structure_benchmark.js');
