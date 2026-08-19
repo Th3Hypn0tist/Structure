@@ -241,6 +241,7 @@ function drawGrid() {
     drawLine([-half,0,v],[half,0,v],color); drawLine([v,0,-half],[v,0,half],color);
   }
 }
+// One-shot core renderer. StructureRenderPipeline owns frame scheduling.
 function render() {
   resize();
   gl.viewport(0,0,canvas.width,canvas.height); gl.clearColor(.035,.045,.065,1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT); gl.enable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
@@ -257,7 +258,7 @@ function render() {
     drawBox(entity.position,[half,half,half],color);
     if (selected.has(entity.id) || entity.id === linkSource || entity.id === linkTarget) drawBox(entity.position,[half+.01*nodeMasterSize(),half+.01*nodeMasterSize(),half+.01*nodeMasterSize()],entity.id===activeEntityId?[.95,.98,1]:[.7,.9,1],true);
   }
-  drawGizmo(); requestAnimationFrame(render);
+  drawGizmo();
 }
 function resize() {
   const density = devicePixelRatio || 1;
@@ -412,4 +413,4 @@ function bindUi(){
   $('#setCameraDefault').onclick=()=>{const camera=cameraSettings();camera.position=[...assertWorkspace().camera.position];camera.reference=[...cameraReference()];camera.yaw=assertWorkspace().camera.yaw;camera.pitch=assertWorkspace().camera.pitch;camera.fov=assertWorkspace().camera.fov;status('camera default set');}; $('#resetCamera').onclick=()=>{const camera=cameraSettings();lookAtEntityId=null;assertWorkspace().camera={position:[...camera.position],reference:[...camera.reference],yaw:camera.yaw,pitch:camera.pitch,fov:camera.fov};syncCameraAnglesToActive();syncSettings();status('camera reset');};
 }
 
-window.addEventListener('load',async()=>{try{bindUi();await loadStartingScene();render();requestAnimationFrame(tick);}catch(error){reportUiError(error);}});
+window.addEventListener('load',async()=>{try{bindUi();await loadStartingScene();requestAnimationFrame(tick);}catch(error){reportUiError(error);}});
