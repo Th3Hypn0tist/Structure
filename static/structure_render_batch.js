@@ -42,8 +42,10 @@
 
   function dynamicProjectionActive() {
     if (!ws) return true;
+    // Selection itself is transient view state and must not evict the entire
+    // benchmark scene from GPU residency. Actual geometry mutation/authoring and
+    // causal playback still use the safe dynamic path.
     return Boolean(
-      selected?.size ||
       linkSource ||
       linkTarget ||
       dragAxis ||
