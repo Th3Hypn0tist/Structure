@@ -138,7 +138,7 @@ function flowProgress(property, time) {
     state = { phase: 0, time };
     linkProjection.flowPhases.set(property.id, state);
   }
-  const dt = Math.max(0, Math.min(.05, (time - state.time) / 1000));
+  const dt = Math.max(0, (time - state.time) / 1000);
   const active = activationAmount(property.id) > 0;
   const speed = active ? requiredNumber(eventSettings(), 'active_link_speed', 'settings.event_playback') : requiredNumber(linkSettings(), 'base_flow_speed', 'settings.link_visualization');
   if (!Number.isFinite(speed) || speed < 0) throw new Error('Link flow speed must be a non-negative number');
@@ -266,8 +266,7 @@ function drawLinkProjection3D(time) {
   if (linkPlayback().state.startedAt) drawNodeEventFlashes3D();
 }
 
-const renderSceneBeforeLinks = render;
-render = function renderSceneWith3dLinks() {
-  renderSceneBeforeLinks();
-  if (ws) drawLinkProjection3D(performance.now());
-};
+if (!window.StructureRenderPipeline) throw new Error('Structure render pipeline must load before link projection');
+window.StructureRenderPipeline.addPass('link-projection', context => {
+  if (ws) drawLinkProjection3D(context.timestamp);
+}, 200);
