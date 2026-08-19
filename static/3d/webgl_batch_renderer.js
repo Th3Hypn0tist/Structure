@@ -114,6 +114,7 @@
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
       gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.canvas);
     }
@@ -125,9 +126,11 @@
       const row = Math.floor(index / this.cols);
       const u0 = col / this.cols;
       const u1 = (col + 1) / this.cols;
-      const v0 = 1 - (row + 1) / this.rows;
-      const v1 = 1 - row / this.rows;
-      return [u0, v0, u1, v1];
+      // The atlas canvas is top-origin. Keep the same character row and reverse
+      // only the V direction inside that cell, matching the original Text3D quad.
+      const vTop = row / this.rows;
+      const vBottom = (row + 1) / this.rows;
+      return [u0, vBottom, u1, vTop];
     }
   }
 
