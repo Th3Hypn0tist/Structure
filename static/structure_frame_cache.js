@@ -3,7 +3,7 @@
 // hundreds of times inside one frame. The cache is deliberately frame-scoped:
 // authoring may mutate the workspace between frames without explicit invalidation.
 (() => {
-  if (typeof render !== 'function' || typeof canonicalIndex !== 'function') throw new Error('Structure frame cache requires the loaded render/canonical runtime');
+  if (!window.StructureRenderPipeline || typeof canonicalIndex !== 'function') throw new Error('Structure frame cache requires render pipeline and canonical runtime');
 
   const state = {
     frame: 0,
@@ -157,11 +157,7 @@
     };
   }
 
-  const renderBase = render;
-  render = function renderWithFrameCache() {
-    resetFrame();
-    return renderBase();
-  };
+  window.StructureRenderPipeline.addBeforeFrame('frame-cache-reset', resetFrame, -1000);
 
   window.StructureFrameCache = Object.freeze({
     state,
