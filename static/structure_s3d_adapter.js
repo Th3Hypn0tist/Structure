@@ -33,6 +33,13 @@ const structureS3DRenderer = new S3D.Renderer({
   point: (position, scale, color) => drawBox(position, scale, color),
 });
 
+function drawNodeSurfaceText(text, center, width, height, tint) {
+  if (typeof window.drawSceneSurfaceText3D === 'function') {
+    return window.drawSceneSurfaceText3D(text, center, width, height, tint);
+  }
+  return drawSceneText3D(text, center, width, height, tint);
+}
+
 function assignVec3(object, field, value) {
   const current = object[field];
   if (Array.isArray(current) && current.length === 3) {
@@ -333,6 +340,7 @@ drawSceneProjection3D = function drawSceneProjectionViaS3D() {
       drawBox(entity.position, [overlayHalf, overlayHalf, overlayHalf], fadedColor(entityTrace.trace.color, entityTrace.alpha, .28), true);
     }
 
+    // Entity name is a view label and deliberately faces the camera.
     const labelCenter = [entity.position[0], entity.position[1] + nodeHalfSize() + .28 * nodeMasterSize(), entity.position[2] + .012];
     drawSceneText3D(entity.name, labelCenter, 1.75 * nodeMasterSize(), .32 * nodeMasterSize(), selected.has(entity.id) ? [.62,.82,1] : [.94,.97,1]);
 
@@ -344,7 +352,7 @@ drawSceneProjection3D = function drawSceneProjectionViaS3D() {
       object.draw(structureS3DRenderer, { now: performance.now() });
       const center = object.worldPosition();
       drawBox(center, object.scale.map(value => value + .008), active ? object.color : SCENE_COLORS.outline, true);
-      drawSceneText3D(object.label, [center[0], center[1], center[2] + object.scale[2] + .012], row.width * .88, row.height * .68, [.98,.92,.82]);
+      drawNodeSurfaceText(object.label, [center[0], center[1], center[2] + object.scale[2] + .012], row.width * .88, row.height * .68, [.98,.92,.82]);
       causalProjection.eventHitTargets.push({ ref: row.ref, center, halfWidth: object.scale[0], halfHeight: object.scale[1] });
     }
 
@@ -353,7 +361,7 @@ drawSceneProjection3D = function drawSceneProjectionViaS3D() {
     if (props && propsObject) {
       if (props.collapsed) {
         drawBox(props.center, props.frameScale, SCENE_COLORS.propsFrame, true);
-        drawSceneText3D('+', [props.center[0],props.center[1],props.center[2]+props.frameScale[2]+.012], props.width*.62, props.height*.62, [.82,.88,.95]);
+        drawNodeSurfaceText('+', [props.center[0],props.center[1],props.center[2]+props.frameScale[2]+.012], props.width*.62, props.height*.62, [.82,.88,.95]);
         causalProjection.propertyHitTargets.push({ kind: 'toggle', ownerId: entity.id, center: props.center, halfWidth: props.frameScale[0], halfHeight: props.frameScale[1] });
       } else {
         drawBox(props.center, props.frameScale, SCENE_COLORS.propsFrame, true);
@@ -365,12 +373,12 @@ drawSceneProjection3D = function drawSceneProjectionViaS3D() {
           object.draw(structureS3DRenderer, { now: performance.now() });
           const center = object.worldPosition();
           drawBox(center, object.scale.map(value => value + .008), active ? object.color : SCENE_COLORS.outline, true);
-          drawSceneText3D(object.label, [center[0], center[1], center[2] + object.scale[2] + .012], row.width*.90, row.height*.68, [.92,.95,.99]);
+          drawNodeSurfaceText(object.label, [center[0], center[1], center[2] + object.scale[2] + .012], row.width*.90, row.height*.68, [.92,.95,.99]);
           causalProjection.propertyHitTargets.push({ kind: 'property', ref: row.ref, center, halfWidth: object.scale[0], halfHeight: object.scale[1] });
         }
         const toggleHalf = props.toggleSize / 2;
         drawBox(props.toggleCenter, [toggleHalf, toggleHalf, props.frameScale[2]*1.45], [.18,.22,.29]);
-        drawSceneText3D('×', [props.toggleCenter[0],props.toggleCenter[1],props.toggleCenter[2]+props.frameScale[2]*1.5], props.toggleSize*.72, props.toggleSize*.72, [.88,.92,.98]);
+        drawNodeSurfaceText('×', [props.toggleCenter[0],props.toggleCenter[1],props.toggleCenter[2]+props.frameScale[2]*1.5], props.toggleSize*.72, props.toggleSize*.72, [.88,.92,.98]);
         causalProjection.propertyHitTargets.push({ kind: 'toggle', ownerId: entity.id, center: props.toggleCenter, halfWidth: toggleHalf, halfHeight: toggleHalf });
       }
     }
