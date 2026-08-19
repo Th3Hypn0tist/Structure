@@ -1,10 +1,10 @@
-// Production Structure -> S3D batched rendering bridge.
+// Production Structure -> S3D batched rendering backend.
 // Static projection data can be compiled to GPU-resident batches and reused on
-// camera-only frames. Until all authoring overlays are resident-aware, the fast
-// path is intentionally enabled only for the benchmark workspace.
+// camera-only frames. This module registers one explicit pipeline backend; it
+// never wraps or replaces global render().
 (() => {
-  if (!globalThis.S3D?.WebGLBatchRenderer) throw new Error('S3D WebGLBatchRenderer must load before Structure batch bridge');
-  if (typeof gl === 'undefined' || typeof render !== 'function') throw new Error('Structure GL/render runtime unavailable for batch bridge');
+  if (!globalThis.S3D?.WebGLBatchRenderer) throw new Error('S3D WebGLBatchRenderer must load before Structure batch backend');
+  if (!window.StructureRenderPipeline || typeof gl === 'undefined') throw new Error('Structure render pipeline/GL runtime unavailable for batch backend');
 
   const renderer = new S3D.WebGLBatchRenderer(gl);
   const legacy = Object.freeze({ drawBox, drawLine, drawSceneText3D });
@@ -109,11 +109,11 @@
     residentFrames += 1;
     window.StructureRenderBatchStats = { ...stats, resident: true, residentCompiles, residentFrames };
     requestAnimationFrame(render);
+    return stats;
   }
 
-  const renderBeforeBatch = render;
-  render = function renderWithS3DBatches() {
-    if (!ws) return renderBeforeBatch();
+  function renderBackend(context) {
+    if (!ws) return context.renderContent(context);
 
     const allowResident = residentFastPathEnabled();
     const dynamic = !allowResident || dynamicProjectionActive();
@@ -137,7 +137,7 @@
     renderer.begin(viewProjection());
     frameOpen = true;
     try {
-      const result = renderBeforeBatch();
+      const result = context.renderContent(context);
       let stats;
       if (!dynamic) {
         stats = renderer.flushPersistent(cameraRight(), cameraUp(), performance.now() / 1000);
@@ -154,7 +154,9 @@
     } finally {
       frameOpen = false;
     }
-  };
+  }
+
+  window.StructureRenderPipeline.setBackend('s3d-batch', renderBackend);
 
   window.StructureRenderBatch = Object.freeze({
     renderer,
@@ -162,6 +164,7 @@
     flow: drawFlowBatched,
     surfaceText: window.drawSceneSurfaceText3D,
     invalidate: invalidateResident,
+    backend: renderBackend,
     stats: () => ({ ...(window.StructureRenderBatchStats ?? renderer.stats) }),
     residency: () => ({ residentValid, residentCompiles, residentFrames, reason: window.StructureRenderResidentReason ?? null }),
   });
