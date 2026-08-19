@@ -190,6 +190,9 @@ async function bootstrapStructureS3DProjection() {
     await loadStructureScript('/static/3d/persistent_gpu.js');
     await loadStructureScript('/static/structure_render_batch.js');
   }
+  if (!window.StructureInteractionPerf) {
+    await loadStructureScript('/static/structure_interaction_perf.js');
+  }
   if (!window.S3DBenchmarkSettings) {
     await loadStructureScript('/static/3d/benchmark.js');
     await loadStructureScript('/static/structure_benchmark.js');
