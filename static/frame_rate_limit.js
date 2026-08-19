@@ -1,6 +1,9 @@
-// Structure render-loop frame-rate cap.
-// This is local view/runtime policy only: it never changes CW/canonical semantics.
+// Structure frame-rate setting.
+// The render pipeline owns scheduling; this module only owns the Settings control
+// and persisted local preference. It never wraps or replaces global render().
 (() => {
+  if (!window.StructureRenderPipeline) throw new Error('Structure render pipeline must load before frame-rate settings');
+
   const STORAGE_KEY = 'structure.frame_rate_limit';
   const DEFAULT_FPS = 25;
   const OPTIONS = Object.freeze([15, 25, 30, 60, 120, 0]); // 0 = display / uncapped rAF
@@ -20,13 +23,15 @@
   }
 
   let frameRateLimit = loadLimit();
-  let lastRenderedAt = 0;
-  let skippedFrames = 0;
-  let renderedFrames = 0;
+
+  function syncControl() {
+    const select = document.querySelector('#frameRateLimit');
+    if (select) select.value = String(frameRateLimit);
+  }
 
   function saveLimit(value) {
     frameRateLimit = normalize(value);
-    lastRenderedAt = 0;
+    window.StructureRenderPipeline.setFpsLimit(frameRateLimit);
     try { localStorage.setItem(STORAGE_KEY, String(frameRateLimit)); } catch (_) {}
     syncControl();
     return frameRateLimit;
@@ -56,70 +61,17 @@
     syncControl();
   }
 
-  function syncControl() {
-    const select = document.querySelector('#frameRateLimit');
-    if (select) select.value = String(frameRateLimit);
-  }
-
-  function installRenderCap() {
-    if (typeof render !== 'function') throw new Error('Structure render loop unavailable for frame-rate cap');
-    if (render.__structureFrameRateLimited) return;
-
-    const renderBeforeFrameRateLimit = render;
-    const capped = function renderWithFrameRateLimit(timestamp = performance.now()) {
-      const limit = frameRateLimit;
-      if (limit === 0) {
-        lastRenderedAt = timestamp;
-        renderedFrames += 1;
-        return renderBeforeFrameRateLimit();
-      }
-
-      const interval = 1000 / limit;
-      if (!lastRenderedAt) {
-        lastRenderedAt = timestamp;
-        renderedFrames += 1;
-        return renderBeforeFrameRateLimit();
-      }
-
-      const elapsed = timestamp - lastRenderedAt;
-      if (elapsed + 0.25 >= interval) {
-        // Preserve the target cadence instead of resetting to the display tick;
-        // this avoids a 25 FPS cap collapsing to 20 FPS on a 60 Hz display.
-        const intervals = Math.max(1, Math.floor((elapsed + 0.25) / interval));
-        lastRenderedAt += intervals * interval;
-        renderedFrames += 1;
-        return renderBeforeFrameRateLimit();
-      }
-
-      skippedFrames += 1;
-      requestAnimationFrame(render);
-    };
-    capped.__structureFrameRateLimited = true;
-    capped.__uncappedRender = renderBeforeFrameRateLimit;
-    render = capped;
-  }
-
-  function installWhenRendererReady() {
-    const tryInstall = () => {
-      if (!window.StructureRenderBatch) {
-        setTimeout(tryInstall, 10);
-        return;
-      }
-      installRenderCap();
-      installControl();
-    };
-    tryInstall();
-  }
+  window.StructureRenderPipeline.setFpsLimit(frameRateLimit);
 
   window.StructureFrameRateLimit = Object.freeze({
     defaultFps: DEFAULT_FPS,
     options: OPTIONS,
     get: () => frameRateLimit,
     set: saveLimit,
-    stats: () => ({ limit: frameRateLimit, renderedFrames, skippedFrames }),
+    stats: () => ({ limit: frameRateLimit, ...window.StructureRenderPipeline.stats() }),
     installControl,
   });
 
-  if (document.readyState === 'complete') installWhenRendererReady();
-  else window.addEventListener('load', installWhenRendererReady, { once: true });
+  if (document.readyState === 'loading') window.addEventListener('load', installControl, { once: true });
+  else installControl();
 })();
