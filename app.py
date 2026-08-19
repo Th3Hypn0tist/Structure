@@ -42,6 +42,7 @@ STATIC = {
     "/static/structure_frame_cache.js": ("structure_frame_cache.js", "application/javascript; charset=utf-8"),
     "/static/structure_render_batch.js": ("structure_render_batch.js", "application/javascript; charset=utf-8"),
     "/static/structure_interaction_perf.js": ("structure_interaction_perf.js", "application/javascript; charset=utf-8"),
+    "/static/frame_rate_limit.js": ("frame_rate_limit.js", "application/javascript; charset=utf-8"),
     "/static/structure_benchmark.js": ("structure_benchmark.js", "application/javascript; charset=utf-8"),
     "/static/app.js": ("app.js", "application/javascript; charset=utf-8"),
     "/static/scene_ui_3d.js": ("scene_ui_3d.js", "application/javascript; charset=utf-8"),
