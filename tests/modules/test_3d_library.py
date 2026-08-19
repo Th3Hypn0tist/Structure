@@ -142,7 +142,7 @@ class ThreeDLibraryTests(unittest.TestCase):
         self.assertNotIn("property_type_ref", source)
         self.assertNotIn("canonicalIndex", source)
 
-    def test_structure_render_bridge_uses_resident_static_frames_and_dynamic_fallback(self):
+    def test_structure_render_bridge_uses_pipeline_backend_and_residency(self):
         source = (STATIC / "structure_render_batch.js").read_text(encoding="utf-8")
         self.assertIn("new S3D.WebGLBatchRenderer(gl)", source)
         self.assertIn("drawBox = function drawBoxBatched", source)
@@ -152,8 +152,9 @@ class ThreeDLibraryTests(unittest.TestCase):
         self.assertIn("dynamicProjectionActive", source)
         self.assertIn("renderer.drawPersistent", source)
         self.assertIn("renderer.flushPersistent", source)
-        self.assertIn("renderer.flush(cameraRight(), cameraUp(), performance.now() / 1000)", source)
-        self.assertIn("requestAnimationFrame(render)", source)
+        self.assertIn("context.renderContent(context)", source)
+        self.assertIn("StructureRenderPipeline.setBackend('s3d-batch'", source)
+        self.assertNotIn("render = function", source)
 
     def test_structure_frame_cache_memoizes_expensive_projection_work_once_per_frame(self):
         source = (STATIC / "structure_frame_cache.js").read_text(encoding="utf-8")
@@ -169,13 +170,42 @@ class ThreeDLibraryTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, source)
         self.assertIn("function resetFrame()", source)
-        self.assertIn("render = function renderWithFrameCache()", source)
+        self.assertIn("addBeforeFrame('frame-cache-reset'", source)
+        self.assertNotIn("render = function renderWithFrameCache", source)
         self.assertIn("window.StructureFrameCache", source)
+
+    def test_render_pipeline_is_single_render_composition_owner(self):
+        pipeline = (STATIC / "render_pipeline.js").read_text(encoding="utf-8")
+        causal = (STATIC / "causal_projection.js").read_text(encoding="utf-8")
+        links = (STATIC / "link_projection.js").read_text(encoding="utf-8")
+        cache = (STATIC / "structure_frame_cache.js").read_text(encoding="utf-8")
+        batch = (STATIC / "structure_render_batch.js").read_text(encoding="utf-8")
+        fps = (STATIC / "frame_rate_limit.js").read_text(encoding="utf-8")
+
+        self.assertIn("render = renderDispatcher", pipeline)
+        self.assertIn("addPass('causal-projection'", causal)
+        self.assertIn("addPass('link-projection'", links)
+        self.assertIn("addBeforeFrame('frame-cache-reset'", cache)
+        self.assertIn("setBackend('s3d-batch'", batch)
+        self.assertIn("StructureRenderPipeline.setFpsLimit", fps)
+
+        for name, source in {
+            "causal": causal,
+            "links": links,
+            "cache": cache,
+            "batch": batch,
+            "fps": fps,
+        }.items():
+            with self.subTest(name=name):
+                self.assertNotIn("render = function", source)
+                self.assertNotIn("renderBefore", source)
+                self.assertNotIn("renderBase = render", source)
 
     def test_dynamic_adapter_renderer_cache_residency_and_real_benchmark_assets_are_served(self):
         app = (ROOT / "app.py").read_text(encoding="utf-8")
         playback = (STATIC / "playback_runtime.js").read_text(encoding="utf-8")
-        paths = (
+        html = (STATIC / "structure.html").read_text(encoding="utf-8")
+        dynamic_paths = (
             "/static/3d/renderer.js",
             "/static/structure_s3d_adapter.js",
             "/static/structure_frame_cache.js",
@@ -187,9 +217,13 @@ class ThreeDLibraryTests(unittest.TestCase):
             "/static/structure_benchmark.js",
             "/static/3d/benchmark_panel.js",
         )
-        for path in paths:
+        for path in dynamic_paths:
             self.assertIn(path, app)
             self.assertIn(path, playback)
+        self.assertIn('/static/render_pipeline.js', app)
+        self.assertIn('<script src="/static/render_pipeline.js"></script>', html)
+        self.assertLess(html.index('/static/app.js'), html.index('/static/render_pipeline.js'))
+        self.assertLess(html.index('/static/render_pipeline.js'), html.index('/static/causal_projection.js'))
         self.assertLess(playback.index("/static/structure_s3d_adapter.js"), playback.index("/static/structure_frame_cache.js"))
         self.assertLess(playback.index("/static/structure_frame_cache.js"), playback.index("/static/3d/persistent_gpu.js"))
         self.assertLess(playback.index("/static/3d/persistent_gpu.js"), playback.index("/static/structure_render_batch.js"))
