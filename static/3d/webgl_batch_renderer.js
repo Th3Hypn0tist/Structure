@@ -70,7 +70,7 @@
   out vec3 color;
   void main(){
     vec3 world=center
-      + cameraRight*(baselineOffset + corner.x*size.x)
+      - cameraRight*(baselineOffset + corner.x*size.x)
       + cameraUp*(corner.y*size.y);
     uv=mix(uvRect.xy,uvRect.zw,corner*.5+.5);
     color=inputColor;
