@@ -55,30 +55,79 @@ function stepPlayback() {
 }
 function setPlaybackBoundaryProvider(provider) { playbackClock.setBoundaryProvider(provider); }
 
+function syncPlaybackSpeedControl() {
+  const input = document.querySelector('#playbackSpeed');
+  const output = document.querySelector('#playbackSpeedValue');
+  if (!input || !output) return;
+  const value = playbackNumber('playback_speed');
+  input.value = String(value);
+  output.value = `${value.toFixed(2)}×`;
+  output.textContent = `${value.toFixed(2)}×`;
+}
+
 function installPlaybackControls() {
   const right = document.querySelector('#rightControls');
   if (!right || document.querySelector('#playbackPause')) return;
+
+  const reset = document.querySelector('#resetEvents');
   const group = document.createElement('details');
   group.className = 'right-control-group';
   group.open = true;
+
   const summary = document.createElement('summary');
   summary.textContent = 'PLAYBACK';
+
   const body = document.createElement('div');
   body.className = 'right-control-body';
+
+  const speed = document.createElement('label');
+  speed.className = 'node-size-control playback-speed-control';
+  const speedLabel = document.createElement('span');
+  speedLabel.textContent = 'SPEED';
+  const speedInput = document.createElement('input');
+  speedInput.id = 'playbackSpeed';
+  speedInput.type = 'range';
+  speedInput.min = '0.10';
+  speedInput.max = '4.00';
+  speedInput.step = '0.05';
+  speedInput.value = String(PLAYBACK_DEFAULTS.playback_speed);
+  const speedValue = document.createElement('output');
+  speedValue.id = 'playbackSpeedValue';
+  speedValue.textContent = '1.00×';
+  speed.append(speedLabel, speedInput, speedValue);
+
+  speedInput.addEventListener('input', () => {
+    if (!ws) return;
+    const value = Number(speedInput.value);
+    if (!Number.isFinite(value) || value <= 0) {
+      syncPlaybackSpeedControl();
+      return;
+    }
+    eventSettings().playback_speed = value;
+    speedValue.value = `${value.toFixed(2)}×`;
+    speedValue.textContent = `${value.toFixed(2)}×`;
+  });
+
   const pause = document.createElement('button');
   pause.id = 'playbackPause';
   pause.type = 'button';
   pause.textContent = 'PAUSE';
+
   const step = document.createElement('button');
   step.id = 'playbackStep';
   step.type = 'button';
   step.textContent = 'STEP';
-  body.append(pause, step);
+
+  body.append(speed, pause, step);
+  if (reset) body.append(reset);
   group.append(summary, body);
-  const reset = document.querySelector('#resetEvents');
-  right.insertBefore(group, reset ?? null);
+
+  if (reset) right.insertBefore(group, reset);
+  else right.appendChild(group);
+
   pause.addEventListener('click', togglePlaybackPause);
   step.addEventListener('click', stepPlayback);
+  syncPlaybackSpeedControl();
 }
 function syncPlaybackButtons() {
   const pause = document.querySelector('#playbackPause');
@@ -100,7 +149,6 @@ function installPlaybackTimingControls() {
     ['branch_delay', 'branchDelay', 'Branch delay (s)'],
     ['completion_hold', 'completionHold', 'Completion hold (s)'],
     ['fade_out_duration', 'fadeOutDuration', 'Fade out (s)'],
-    ['playback_speed', 'playbackSpeed', 'Playback speed'],
   ];
   for (const [field, id, label] of fields) {
     const wrapper = document.createElement('label');
@@ -108,13 +156,13 @@ function installPlaybackTimingControls() {
     const input = document.createElement('input');
     input.id = id;
     input.type = 'number';
-    input.min = field === 'playback_speed' ? '0.05' : '0';
+    input.min = '0';
     input.step = '0.05';
     input.value = String(PLAYBACK_DEFAULTS[field]);
     input.addEventListener('change', () => {
       if (!ws) return;
       const value = Number(input.value);
-      if (!Number.isFinite(value) || (field === 'playback_speed' ? value <= 0 : value < 0)) {
+      if (!Number.isFinite(value) || value < 0) {
         input.value = String(playbackNumber(field));
         return;
       }
@@ -135,12 +183,12 @@ function syncPlaybackTimingControls() {
     branchDelay: 'branch_delay',
     completionHold: 'completion_hold',
     fadeOutDuration: 'fade_out_duration',
-    playbackSpeed: 'playback_speed',
   };
   for (const [id, field] of Object.entries(fields)) {
     const input = document.querySelector(`#${id}`);
     if (input) input.value = String(playbackNumber(field));
   }
+  syncPlaybackSpeedControl();
 }
 
 window.StructurePlayback = Object.freeze({
