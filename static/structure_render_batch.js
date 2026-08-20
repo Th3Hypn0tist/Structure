@@ -1,7 +1,7 @@
 // Production Structure -> S3D batched rendering backend.
 // Static projection data can be compiled to GPU-resident batches and reused on
 // camera-only frames. This module registers one explicit pipeline backend; it
-// never wraps or replaces global render().
+// never wraps, replaces, or schedules global render().
 (() => {
   if (!globalThis.S3D?.WebGLBatchRenderer) throw new Error('S3D WebGLBatchRenderer must load before Structure batch backend');
   if (!window.StructureRenderPipeline || typeof gl === 'undefined') throw new Error('Structure render pipeline/GL runtime unavailable for batch backend');
@@ -42,9 +42,6 @@
 
   function dynamicProjectionActive() {
     if (!ws) return true;
-    // Selection itself is transient view state and must not evict the entire
-    // benchmark scene from GPU residency. Actual geometry mutation/authoring and
-    // causal playback still use the safe dynamic path.
     return Boolean(
       linkSource ||
       linkTarget ||
@@ -76,9 +73,6 @@
     renderer.line(start, end, color);
   };
 
-  // Entity names are view labels: keep them camera-facing through the batched
-  // billboard text renderer. Node-internal labels (Props/Event rows) are surface
-  // UI and must stay attached to the node plane instead of following the camera.
   drawSceneText3D = function drawSceneText3DBatched(text, center, width, height, tint = [.93,.96,1]) {
     ensureBatchFrame();
     renderer.text(text, center, width, height, tint);
@@ -108,7 +102,6 @@
     const stats = renderer.drawPersistent(viewProjection(), cameraRight(), cameraUp(), performance.now() / 1000);
     residentFrames += 1;
     window.StructureRenderBatchStats = { ...stats, resident: true, residentCompiles, residentFrames };
-    requestAnimationFrame(render);
     return stats;
   }
 
