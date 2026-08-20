@@ -180,6 +180,9 @@ async function bootstrapStructureS3DProjection() {
     await loadStructureScript('/static/3d/renderer.js');
     await loadStructureScript('/static/structure_s3d_adapter.js');
   }
+  if (!window.StructureCausalPerf) {
+    await loadStructureScript('/static/causal_perf.js');
+  }
   if (!window.StructureFrameCache) {
     await loadStructureScript('/static/structure_frame_cache.js');
   }
