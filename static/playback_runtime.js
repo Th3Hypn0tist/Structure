@@ -119,11 +119,14 @@ function installPlaybackControls() {
   step.textContent = 'STEP';
 
   body.append(speed, pause, step);
-  if (reset) body.append(reset);
   group.append(summary, body);
 
-  if (reset) right.insertBefore(group, reset);
-  else right.appendChild(group);
+  if (reset) {
+    right.insertBefore(group, reset);
+    body.append(reset);
+  } else {
+    right.appendChild(group);
+  }
 
   pause.addEventListener('click', togglePlaybackPause);
   step.addEventListener('click', stepPlayback);
