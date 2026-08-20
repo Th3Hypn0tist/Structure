@@ -108,6 +108,17 @@
     return root;
   }
 
+  function isEventTarget(graph, ref) {
+    const item = graph.index.get(ref);
+    return Boolean(item && item.kind === 'property' && item.propertyType === 'event');
+  }
+
+  // Playback policy:
+  // - Events are the sequencing boundaries.
+  // - event_cause is structural: it gates the next Event but has no transient
+  //   travel animation of its own; the canonical route remains visible.
+  // - non-Event chains (Data/Effect/Function/Entity etc.) flow continuously and
+  //   do not pay next_event_delay at every intermediate canonical edge.
   causalEdgeSchedules = function causalEdgeSchedulesHeap(graph) {
     const timing = playbackApi().timingMs();
     const outgoing = new Map();
@@ -133,15 +144,23 @@
       for (let branchIndex = 0; branchIndex < siblings.length; branchIndex++) {
         const edge = siblings[branchIndex];
         const start = current.readyAt + branchIndex * timing.branch;
-        const arrival = start + timing.travel;
-        const effectEnd = arrival + timing.target;
-        const nextAt = effectEnd + timing.next;
+        const targetIsEvent = isEventTarget(graph, edge.to);
+        const staticCause = edge.linkType === 'event_cause';
+
+        // Cause is already represented by the canonical route, so do not animate
+        // a pulse along the complete cause chain. It still schedules the target
+        // Event activation at this boundary.
+        const arrival = staticCause ? start : start + timing.travel;
+        const effectEnd = arrival + (targetIsEvent ? timing.activation : timing.target);
+        const nextAt = effectEnd + (targetIsEvent ? timing.next : 0);
         const order = edgeOrder.get(edge.id);
         schedules.set(edge.id, {
           start, arrival, effectEnd, nextAt,
           sourceReadyAt: current.readyAt,
           branchIndex,
           order,
+          targetIsEvent,
+          staticCause,
         });
 
         if (edge.cycle) continue;
@@ -208,6 +227,10 @@
     if (trace.__routeEdges) return trace.__routeEdges;
     const grouped = new Map();
     for (const edge of trace.graph.edges) {
+      // event_cause is structural. The canonical cause route is already visible;
+      // transient playback only animates the work performed between Event
+      // boundaries.
+      if (edge.linkType === 'event_cause') continue;
       const sourceOwner = ownerForRef(edge.from, trace.graph.index);
       const targetOwner = ownerForRef(edge.to, trace.graph.index);
       if (!sourceOwner || !targetOwner || sourceOwner.id === targetOwner.id) continue;
