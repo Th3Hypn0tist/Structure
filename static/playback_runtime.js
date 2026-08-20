@@ -1,6 +1,5 @@
-// Transient Event playback clock and controls.
-// Playback timing is view/runtime configuration only. It never changes canonical
-// Entity/Property/Link semantics.
+// Structure adapter for the generic S3D playback clock.
+// Timing remains transient view/runtime configuration and never changes canonical semantics.
 
 const PLAYBACK_DEFAULTS = Object.freeze({
   event_activation_duration: 0.30,
@@ -13,14 +12,7 @@ const PLAYBACK_DEFAULTS = Object.freeze({
   playback_speed: 1.00,
 });
 
-const playbackRuntime = {
-  startedAt: 0,
-  paused: false,
-  pausedAt: 0,
-  pausedAccumulatedMs: 0,
-  manualAdvanceMs: 0,
-  boundaryProvider: null,
-};
+if (!window.S3D?.Playback) throw new Error('S3D Playback library must load before Structure playback adapter');
 
 function playbackNumber(field) {
   if (!ws) return PLAYBACK_DEFAULTS[field];
@@ -35,6 +27,10 @@ function playbackNumber(field) {
   }
   return value;
 }
+
+const playbackClock = new window.S3D.Playback({ speed: () => playbackNumber('playback_speed') });
+const playbackRuntime = playbackClock.state;
+
 function playbackTimingMs() {
   return {
     activation: playbackNumber('event_activation_duration') * 1000,
@@ -46,83 +42,95 @@ function playbackTimingMs() {
     fade: playbackNumber('fade_out_duration') * 1000,
   };
 }
-function playbackElapsed(now = performance.now()) {
-  if (!playbackRuntime.startedAt) return 0;
-  const effectiveNow = playbackRuntime.paused ? playbackRuntime.pausedAt : now;
-  const wallElapsed = Math.max(0, effectiveNow - playbackRuntime.startedAt - playbackRuntime.pausedAccumulatedMs);
-  return wallElapsed * playbackNumber('playback_speed') + playbackRuntime.manualAdvanceMs;
-}
-function startPlayback(now = performance.now()) {
-  playbackRuntime.startedAt = now;
-  playbackRuntime.paused = false;
-  playbackRuntime.pausedAt = 0;
-  playbackRuntime.pausedAccumulatedMs = 0;
-  playbackRuntime.manualAdvanceMs = 0;
-  syncPlaybackButtons();
-}
-function resetPlayback() {
-  playbackRuntime.startedAt = 0;
-  playbackRuntime.paused = false;
-  playbackRuntime.pausedAt = 0;
-  playbackRuntime.pausedAccumulatedMs = 0;
-  playbackRuntime.manualAdvanceMs = 0;
-  syncPlaybackButtons();
-}
-function setPlaybackPaused(paused, now = performance.now()) {
-  if (!playbackRuntime.startedAt || playbackRuntime.paused === paused) return;
-  if (paused) {
-    playbackRuntime.paused = true;
-    playbackRuntime.pausedAt = now;
-  } else {
-    playbackRuntime.pausedAccumulatedMs += Math.max(0, now - playbackRuntime.pausedAt);
-    playbackRuntime.paused = false;
-    playbackRuntime.pausedAt = 0;
-  }
-  syncPlaybackButtons();
-}
-function togglePlaybackPause() { setPlaybackPaused(!playbackRuntime.paused); }
-function normalizePlaybackBoundaries(values) {
-  return [...new Set((values ?? []).filter(value => Number.isFinite(value) && value >= 0).map(value => Math.round(value * 1000) / 1000))].sort((a, b) => a - b);
-}
+function playbackElapsed(now = performance.now()) { return playbackClock.elapsed(now); }
+function startPlayback(now = performance.now()) { playbackClock.start(now); syncPlaybackButtons(); }
+function resetPlayback() { playbackClock.reset(); syncPlaybackButtons(); }
+function setPlaybackPaused(paused, now = performance.now()) { playbackClock.pause(paused, now); syncPlaybackButtons(); }
+function togglePlaybackPause() { playbackClock.togglePause(); syncPlaybackButtons(); }
+function normalizePlaybackBoundaries(values) { return window.S3D.normalizePlaybackBoundaries(values); }
 function stepPlayback() {
   if (!playbackRuntime.startedAt) return;
-  if (!playbackRuntime.paused) setPlaybackPaused(true);
-  const current = playbackElapsed();
-  const boundaries = normalizePlaybackBoundaries(playbackRuntime.boundaryProvider?.() ?? []);
-  const next = boundaries.find(value => value > current + 0.5);
-  if (next === undefined) return;
-  playbackRuntime.manualAdvanceMs += next - current;
+  playbackClock.step();
   syncPlaybackButtons();
 }
-function setPlaybackBoundaryProvider(provider) {
-  if (provider !== null && typeof provider !== 'function') throw new Error('playback boundary provider must be a function or null');
-  playbackRuntime.boundaryProvider = provider;
+function setPlaybackBoundaryProvider(provider) { playbackClock.setBoundaryProvider(provider); }
+
+function syncPlaybackSpeedControl() {
+  const input = document.querySelector('#playbackSpeed');
+  const output = document.querySelector('#playbackSpeedValue');
+  if (!input || !output) return;
+  const value = playbackNumber('playback_speed');
+  input.value = String(value);
+  output.value = `${value.toFixed(2)}×`;
+  output.textContent = `${value.toFixed(2)}×`;
 }
 
 function installPlaybackControls() {
   const right = document.querySelector('#rightControls');
   if (!right || document.querySelector('#playbackPause')) return;
+
+  const reset = document.querySelector('#resetEvents');
   const group = document.createElement('details');
   group.className = 'right-control-group';
   group.open = true;
+
   const summary = document.createElement('summary');
   summary.textContent = 'PLAYBACK';
+
   const body = document.createElement('div');
   body.className = 'right-control-body';
+
+  const speed = document.createElement('label');
+  speed.className = 'node-size-control playback-speed-control';
+  const speedLabel = document.createElement('span');
+  speedLabel.textContent = 'SPEED';
+  const speedInput = document.createElement('input');
+  speedInput.id = 'playbackSpeed';
+  speedInput.type = 'range';
+  speedInput.min = '0.10';
+  speedInput.max = '4.00';
+  speedInput.step = '0.05';
+  speedInput.value = String(PLAYBACK_DEFAULTS.playback_speed);
+  const speedValue = document.createElement('output');
+  speedValue.id = 'playbackSpeedValue';
+  speedValue.textContent = '1.00×';
+  speed.append(speedLabel, speedInput, speedValue);
+
+  speedInput.addEventListener('input', () => {
+    if (!ws) return;
+    const value = Number(speedInput.value);
+    if (!Number.isFinite(value) || value <= 0) {
+      syncPlaybackSpeedControl();
+      return;
+    }
+    eventSettings().playback_speed = value;
+    speedValue.value = `${value.toFixed(2)}×`;
+    speedValue.textContent = `${value.toFixed(2)}×`;
+  });
+
   const pause = document.createElement('button');
   pause.id = 'playbackPause';
   pause.type = 'button';
   pause.textContent = 'PAUSE';
+
   const step = document.createElement('button');
   step.id = 'playbackStep';
   step.type = 'button';
   step.textContent = 'STEP';
-  body.append(pause, step);
+
+  body.append(speed, pause, step);
   group.append(summary, body);
-  const reset = document.querySelector('#resetEvents');
-  right.insertBefore(group, reset ?? null);
+
+  if (reset) {
+    right.insertBefore(group, reset);
+    body.append(reset);
+  } else {
+    right.appendChild(group);
+  }
+
   pause.addEventListener('click', togglePlaybackPause);
   step.addEventListener('click', stepPlayback);
+  syncPlaybackSpeedControl();
 }
 function syncPlaybackButtons() {
   const pause = document.querySelector('#playbackPause');
@@ -144,7 +152,6 @@ function installPlaybackTimingControls() {
     ['branch_delay', 'branchDelay', 'Branch delay (s)'],
     ['completion_hold', 'completionHold', 'Completion hold (s)'],
     ['fade_out_duration', 'fadeOutDuration', 'Fade out (s)'],
-    ['playback_speed', 'playbackSpeed', 'Playback speed'],
   ];
   for (const [field, id, label] of fields) {
     const wrapper = document.createElement('label');
@@ -152,13 +159,13 @@ function installPlaybackTimingControls() {
     const input = document.createElement('input');
     input.id = id;
     input.type = 'number';
-    input.min = field === 'playback_speed' ? '0.05' : '0';
+    input.min = '0';
     input.step = '0.05';
     input.value = String(PLAYBACK_DEFAULTS[field]);
     input.addEventListener('change', () => {
       if (!ws) return;
       const value = Number(input.value);
-      if (!Number.isFinite(value) || (field === 'playback_speed' ? value <= 0 : value < 0)) {
+      if (!Number.isFinite(value) || value < 0) {
         input.value = String(playbackNumber(field));
         return;
       }
@@ -179,16 +186,17 @@ function syncPlaybackTimingControls() {
     branchDelay: 'branch_delay',
     completionHold: 'completion_hold',
     fadeOutDuration: 'fade_out_duration',
-    playbackSpeed: 'playback_speed',
   };
   for (const [id, field] of Object.entries(fields)) {
     const input = document.querySelector(`#${id}`);
     if (input) input.value = String(playbackNumber(field));
   }
+  syncPlaybackSpeedControl();
 }
 
 window.StructurePlayback = Object.freeze({
   state: playbackRuntime,
+  clock: playbackClock,
   defaults: PLAYBACK_DEFAULTS,
   elapsed: playbackElapsed,
   timingMs: playbackTimingMs,
@@ -201,8 +209,6 @@ window.StructurePlayback = Object.freeze({
   syncControls: syncPlaybackTimingControls,
 });
 
-// Extend the existing canonical settings sync rather than creating a second
-// workspace/settings lifecycle.
 const syncSettingsBeforePlayback = syncSettings;
 syncSettings = function syncSettingsWithPlayback() {
   syncSettingsBeforePlayback();
@@ -210,9 +216,51 @@ syncSettings = function syncSettingsWithPlayback() {
   syncPlaybackButtons();
 };
 
+function loadStructureScript(src) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = false;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error(`Failed to load ${src}`));
+    document.head.appendChild(script);
+  });
+}
+async function bootstrapStructureS3DProjection() {
+  if (!window.StructureS3D) {
+    await loadStructureScript('/static/3d/renderer.js');
+    await loadStructureScript('/static/structure_s3d_adapter.js');
+  }
+  if (!window.StructureCausalPerf) {
+    await loadStructureScript('/static/causal_perf.js');
+  }
+  if (!window.StructureFrameCache) {
+    await loadStructureScript('/static/structure_frame_cache.js');
+  }
+  if (!window.StructureRenderBatch) {
+    await loadStructureScript('/static/3d/render_store.js');
+    await loadStructureScript('/static/3d/webgl_batch_renderer.js');
+    await loadStructureScript('/static/3d/text_camera_baseline.js');
+    await loadStructureScript('/static/3d/persistent_gpu.js');
+    await loadStructureScript('/static/structure_render_batch.js');
+  }
+  if (!window.StructureInteractionPerf) {
+    await loadStructureScript('/static/structure_interaction_perf.js');
+  }
+  if (!window.StructureFrameRateLimit) {
+    await loadStructureScript('/static/frame_rate_limit.js');
+  }
+  if (!window.S3DBenchmarkSettings) {
+    await loadStructureScript('/static/3d/benchmark.js');
+    await loadStructureScript('/static/structure_benchmark.js');
+    await loadStructureScript('/static/3d/benchmark_panel.js');
+  }
+}
+
 window.addEventListener('load', () => {
   installPlaybackControls();
   installPlaybackTimingControls();
   syncPlaybackTimingControls();
   syncPlaybackButtons();
+  bootstrapStructureS3DProjection().catch(error => window.reportStructureError?.(error, { type: 's3d_bootstrap' }));
 });

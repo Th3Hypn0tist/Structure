@@ -43,6 +43,8 @@ CW_TEST_COVERAGE = {
     "CW-028": {"test_every_cw_property_primitive_has_explicit_normal_authoring_path", "test_no_authoring_feature_requires_raw_json_as_only_semantic_editor"},
     "CW-029": {"test_event_editor_writes_canonical_properties_and_links", "test_event_effect_authoring_uses_ruleset_roles_not_hardcoded_endpoint_guessing"},
     "CW-030": {"test_client_canonical_index_reads_entities_and_properties_without_parallel_model", "test_semantic_export_boundary_is_entities_rulesets_colors_only"},
+    "CW-031": {"test_coordinate_space_ref_resolves_to_entity_and_preserves_xyz", "test_coordinate_space_ref_must_resolve_to_entity_not_property", "test_coordinate_space_ref_rejects_self_reference_and_cycles", "test_recursive_coordinate_spaces_support_nested_site_building_abstraction", "test_workspace_validation_enforces_spatial_contract"},
+    "CW-032": {"test_entity_deletion_preflights_before_mutating_entities", "test_surviving_function_and_coordinate_space_refs_block_deletion", "test_event_deletion_removes_incident_links_only_after_preflight", "test_direct_link_delete_does_not_rewrite_other_canonical_semantics", "test_left_panel_exposes_link_and_event_delete_actions"},
 }
 
 

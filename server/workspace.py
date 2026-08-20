@@ -7,6 +7,7 @@ import tempfile
 from typing import Any
 
 from server.semantics import DEFAULT_COLOR_SPACES, DEFAULT_RULESETS, validate_color_spaces, validate_properties, validate_rulesets
+from server.spatial import validate_spatial_entities
 from server.starting_scene import starting_entities
 
 WORKSPACE_VERSION = "0.3.0"
@@ -108,6 +109,9 @@ def _validate_entity(entity: dict[str, Any]) -> None:
     if not isinstance(name, str) or not name.strip():
         raise ValueError(f"entity {entity_id} requires non-empty name")
     entity["position"] = _require_vector(entity, "position", f"entity {entity_id}")
+    coordinate_space = entity.get("coordinate_space_ref")
+    if coordinate_space is not None and (not isinstance(coordinate_space, str) or not coordinate_space.strip()):
+        raise ValueError(f"entity {entity_id}.coordinate_space_ref must be a non-empty Entity ref")
     properties = _require_array(entity, "properties", f"entity {entity_id}")
     if "description" in entity and not isinstance(entity["description"], str):
         raise ValueError(f"entity {entity_id}.description must be a string")
@@ -215,6 +219,7 @@ class WorkspaceStore:
                 raise ValueError(f"duplicate entity id: {entity['id']}")
             seen.add(entity["id"])
 
+        validate_spatial_entities(entities)
         color_index = validate_color_spaces(color_spaces)
         ruleset_index = validate_rulesets(rulesets, color_index)
         validate_properties(entities, ruleset_index)
