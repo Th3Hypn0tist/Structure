@@ -7,6 +7,9 @@
 
   const BENCH = {
     active: false,
+    building: false,
+    buildGeneration: 0,
+    buildProgress: { phase: 'idle', completed: 0, total: 0, percent: 0 },
     nodeCount: 1000,
     original: null,
     metrics: new S3D.Benchmark.FrameMetrics(300),
@@ -81,7 +84,25 @@
     return Math.abs(mixed | 0) % parentCount;
   }
 
-  function buildWorkspace(count) {
+  function progress(phase, completed, total, percent, callback) {
+    BENCH.buildProgress = {
+      phase,
+      completed: Number(completed) || 0,
+      total: Number(total) || 0,
+      percent: Math.max(0, Math.min(100, Number(percent) || 0)),
+    };
+    callback?.({ ...BENCH.buildProgress });
+  }
+
+  function yieldToBrowser() {
+    return new Promise(resolve => requestAnimationFrame(() => resolve()));
+  }
+
+  function assertBuildCurrent(generation) {
+    if (generation !== BENCH.buildGeneration) throw new Error('benchmark build cancelled');
+  }
+
+  async function buildWorkspace(count, callback = null, generation = BENCH.buildGeneration) {
     if (!ws) throw new Error('Structure workspace must be loaded before benchmark');
     const started = performance.now();
     const workspace = clone(ws);
@@ -89,16 +110,27 @@
     const side = Math.ceil(Math.cbrt(Math.max(1, count)));
     const nodes = [];
     const layers = Array.from({ length: side }, () => []);
+    const entityChunk = 500;
+    let minX = Infinity;
+
+    progress('Entities + Props + Events + Effects', 0, count, 0, callback);
+    await yieldToBrowser();
 
     for (let index = 0; index < count; index++) {
       const offset = index * 3;
       const item = benchmarkNode(index, [positions[offset], positions[offset + 1], positions[offset + 2]]);
       nodes.push(item);
       layers[index % side].push(item);
+      minX = Math.min(minX, item.entity.position[0]);
+
+      const completed = index + 1;
+      if (completed % entityChunk === 0 || completed === count) {
+        progress('Entities + Props + Events + Effects', completed, count, (completed / count) * 55, callback);
+        await yieldToBrowser();
+        assertBuildCurrent(generation);
+      }
     }
 
-    let minX = Infinity;
-    for (const item of nodes) minX = Math.min(minX, item.entity.position[0]);
     const triggerId = 'BENCH_TRIGGER';
     const triggerEffectRef = 'EFFECT_BENCH_TRIGGER';
     const trigger = entity(triggerId, 'TRIGGER', [minX - 5.0, 0, 0], [
@@ -111,7 +143,12 @@
     ]);
 
     let linkCount = 2 + count * 2;
+    let linkedChildren = 0;
+    const linkWorkTotal = Math.max(1, count);
+    const linkChunk = 500;
     const firstLayer = layers.find(layer => layer.length) ?? [];
+
+    progress('Canonical Links', 0, linkWorkTotal, 55, callback);
     for (let index = 0; index < firstLayer.length; index++) {
       const child = firstLayer[index];
       trigger.properties.push(linkProperty(
@@ -123,6 +160,7 @@
         { benchmark_layer: 0 },
       ));
       linkCount += 1;
+      linkedChildren += 1;
     }
 
     for (let layerIndex = 1; layerIndex < layers.length; layerIndex++) {
@@ -166,8 +204,20 @@
             linkCount += 1;
           }
         }
+
+        linkedChildren += 1;
+        if (linkedChildren % linkChunk === 0 || linkedChildren >= count) {
+          const ratio = Math.min(1, linkedChildren / linkWorkTotal);
+          progress('Canonical Links', Math.min(linkedChildren, linkWorkTotal), linkWorkTotal, 55 + ratio * 40, callback);
+          await yieldToBrowser();
+          assertBuildCurrent(generation);
+        }
       }
     }
+
+    progress('Finalize workspace', count, count, 96, callback);
+    await yieldToBrowser();
+    assertBuildCurrent(generation);
 
     workspace.entities = [trigger, ...nodes.map(item => item.entity)];
     workspace.settings.view_defaults.ruleset_ref = 'ALL';
@@ -192,6 +242,7 @@
 
     BENCH.buildMs = performance.now() - started;
     BENCH.canonicalLinkCount = linkCount;
+    progress('Ready', count, count, 100, callback);
     return { workspace, side };
   }
 
@@ -230,10 +281,12 @@
     status(label);
   }
 
-  function activate(count = BENCH.nodeCount) {
+  async function activate(count = BENCH.nodeCount, progressCallback = null) {
     if (BENCH.active) deactivate();
     if (!Number.isInteger(count) || count < 100 || count > 20000) throw new Error('Structure benchmark node count must be 100..20000');
     BENCH.nodeCount = count;
+    const generation = ++BENCH.buildGeneration;
+    BENCH.building = true;
     BENCH.original = {
       workspace: ws,
       selected: [...selected],
@@ -242,22 +295,36 @@
       hovered,
       maxDepth: typeof causalProjection !== 'undefined' ? causalProjection.maxDepth : null,
     };
-    const built = buildWorkspace(count);
-    BENCH.active = true;
-    BENCH.metrics = new S3D.Benchmark.FrameMetrics(300);
-    BENCH.previousMaxDepth = BENCH.original.maxDepth;
-    ws = built.workspace;
-    resetRuntime();
-    if (typeof causalProjection !== 'undefined') causalProjection.maxDepth = built.side * 3 + 8;
-    suspendOtherCanvases();
-    syncUi(`benchmark ${count.toLocaleString()} Structure nodes · click TRIGGER Event`);
-    fitWorkspaceToView();
-    window.StructureRenderBatch?.invalidate?.('benchmark_workspace_built');
-    return built.workspace;
+
+    try {
+      const built = await buildWorkspace(count, progressCallback, generation);
+      assertBuildCurrent(generation);
+      BENCH.active = true;
+      BENCH.metrics = new S3D.Benchmark.FrameMetrics(300);
+      BENCH.previousMaxDepth = BENCH.original.maxDepth;
+      ws = built.workspace;
+      resetRuntime();
+      if (typeof causalProjection !== 'undefined') causalProjection.maxDepth = built.side * 3 + 8;
+      suspendOtherCanvases();
+      syncUi(`benchmark ${count.toLocaleString()} Structure nodes · click TRIGGER Event`);
+      fitWorkspaceToView();
+      window.StructureRenderBatch?.invalidate?.('benchmark_workspace_built');
+      return built.workspace;
+    } finally {
+      if (generation === BENCH.buildGeneration) BENCH.building = false;
+    }
   }
 
   function deactivate() {
-    if (!BENCH.active) return;
+    if (BENCH.building) {
+      BENCH.buildGeneration += 1;
+      BENCH.building = false;
+      BENCH.buildProgress = { phase: 'cancelled', completed: 0, total: 0, percent: 0 };
+    }
+    if (!BENCH.active) {
+      BENCH.original = null;
+      return;
+    }
     resetRuntime();
     restoreOtherCanvases();
     const previous = BENCH.original;
@@ -277,12 +344,11 @@
   function setNodeCount(count) {
     const normalized = Math.max(100, Math.min(20000, Math.round(Number(count) / 100) * 100));
     BENCH.nodeCount = normalized;
-    if (BENCH.active) activate(normalized);
     return normalized;
   }
 
   function fire() {
-    if (!BENCH.active) throw new Error('Structure benchmark is not active');
+    if (!BENCH.active || BENCH.building) throw new Error('Structure benchmark is not ready');
     triggerCausalProjection(BENCH.triggerEventRef);
   }
 
@@ -335,6 +401,8 @@
       draw_calls: BENCH.lastDrawCalls,
       uploads: BENCH.lastUploads,
       build_ms: BENCH.buildMs,
+      building: BENCH.building,
+      build_progress: { ...BENCH.buildProgress },
       entities: BENCH.active ? assertWorkspace().entities.length : 0,
       nodes: BENCH.nodeCount,
       links: BENCH.canonicalLinkCount,
