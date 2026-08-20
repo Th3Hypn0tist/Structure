@@ -19,6 +19,7 @@
     const batch = globalThis.StructureRenderBatch?.stats?.() ?? {};
     const residency = globalThis.StructureRenderBatch?.residency?.() ?? {};
     const memory = performance.memory ? `${(performance.memory.usedJSHeapSize / 1048576).toFixed(1)} MB` : 'n/a';
+    const uploadBytes = Number(batch.uploadBytes ?? 0);
     return [
       'STRUCTURE BENCHMARK',
       `nodes         ${metric.nodes.toLocaleString()}`,
@@ -32,6 +33,7 @@
       `render CPU    ${metric.render_ms.toFixed(2)} ms`,
       `draw calls    ${batch.drawCalls ?? metric.draw_calls}`,
       `buffer uploads ${batch.uploads ?? metric.uploads}`,
+      `upload bytes  ${uploadBytes.toLocaleString()}`,
       `GPU resident  ${batch.resident ? 'YES' : 'NO'}`,
       `resident compiles ${residency.residentCompiles ?? 0}`,
       `resident frames ${residency.residentFrames ?? 0}`,
@@ -39,6 +41,8 @@
       `workspace build ${metric.build_ms.toFixed(1)} ms`,
       `benchmark cap Display`,
       `JS heap       ${memory}`,
+      '',
+      'Target: camera-only = 0 uploads/frame.',
     ].join('\n');
   }
 
