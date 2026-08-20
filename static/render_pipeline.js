@@ -128,6 +128,15 @@
     rafId = 0;
   }
 
+  function startWhenWorkspaceReady() {
+    if (running) return;
+    if (typeof ws !== 'undefined' && ws) {
+      start();
+      return;
+    }
+    requestAnimationFrame(startWhenWorkspaceReady);
+  }
+
   // This is the only global render assignment in the architecture. All modules
   // below this boundary register stages/backends instead of wrapping render().
   render = renderDispatcher;
@@ -158,4 +167,6 @@
       running,
     }),
   });
+
+  window.addEventListener('load', startWhenWorkspaceReady, { once: true });
 })();
