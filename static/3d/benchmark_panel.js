@@ -3,7 +3,7 @@
 (() => {
   if (!globalThis.StructureBenchmark) throw new Error('Structure benchmark must load before benchmark panel');
 
-  const state = { enabled: false, nodes: 1000, metricsFrame: 0 };
+  const state = { enabled: false, nodes: 1000, metricsFrame: 0, previousFpsLimit: null };
 
   function create(tag, attrs = {}, text = '') {
     const element = document.createElement(tag);
@@ -38,7 +38,9 @@
       `GPU resident  ${batch.resident ? 'YES' : 'NO'}`,
       `resident compiles ${residency.residentCompiles ?? 0}`,
       `resident frames ${residency.residentFrames ?? 0}`,
+      `resident reason ${residency.reason ?? 'n/a'}`,
       `workspace build ${metric.build_ms.toFixed(1)} ms`,
+      `benchmark cap Display`,
       `JS heap       ${memory}`,
       '',
       'Real Structure path:',
@@ -65,6 +67,18 @@
     if (output) output.textContent = normalized.toLocaleString();
   }
 
+  function enableBenchmarkCapacityMode() {
+    if (!globalThis.StructureFrameRateLimit) throw new Error('Structure benchmark requires frame-rate settings');
+    if (state.previousFpsLimit === null) state.previousFpsLimit = StructureFrameRateLimit.get();
+    StructureFrameRateLimit.set(0);
+  }
+
+  function restoreUserFrameRateLimit() {
+    if (state.previousFpsLimit === null) return;
+    StructureFrameRateLimit.set(state.previousFpsLimit);
+    state.previousFpsLimit = null;
+  }
+
   function setEnabled(enabled) {
     const toggle = document.querySelector('#s3dBenchmarkEnabled');
     const metrics = document.querySelector('#structureBenchmarkMetrics');
@@ -74,14 +88,26 @@
     state.enabled = next;
     toggle.checked = next;
     if (next) {
-      StructureBenchmark.activate(state.nodes);
+      enableBenchmarkCapacityMode();
+      try {
+        StructureBenchmark.activate(state.nodes);
+      } catch (error) {
+        state.enabled = false;
+        toggle.checked = false;
+        restoreUserFrameRateLimit();
+        throw error;
+      }
       metrics.hidden = false;
       cancelAnimationFrame(state.metricsFrame);
       updateMetrics();
     } else {
       cancelAnimationFrame(state.metricsFrame);
       state.metricsFrame = 0;
-      StructureBenchmark.deactivate();
+      try {
+        StructureBenchmark.deactivate();
+      } finally {
+        restoreUserFrameRateLimit();
+      }
       metrics.hidden = true;
     }
   }
@@ -120,7 +146,7 @@
 
     const fire = create('button', { id: 'structureBenchmarkFire', type: 'button' }, 'FIRE TRIGGER EVENT');
     const note = create('small', { className: 'muted' },
-      'Creates a temporary real Structure workspace. The TRIGGER Entity is left of the blue cube; its Event starts the normal causal chain. Original workspace is restored when stopped.');
+      'Creates a temporary real Structure workspace. Performance benchmark runs uncapped; your FPS limit is restored when stopped. The TRIGGER Entity is left of the blue cube; its Event starts the normal causal chain.');
 
     enable.addEventListener('change', () => setEnabled(enable.checked));
     nodes.addEventListener('change', () => setNodes(nodes.value));
