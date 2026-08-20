@@ -1,7 +1,7 @@
 // High-density interaction path for Structure.
-// Keep rendering GPU-resident while avoiding the legacy O(N * 8 projections)
-// hover path on dense scenes. Structure semantics stay unchanged: this module
-// only accelerates candidate picking and throttles passive hover work.
+// Keep rendering GPU-resident while avoiding dense-scene full scans on passive
+// hover, Entity selection and Event Rule summaries. Canonical semantics stay
+// unchanged; this module only replaces lookup strategy.
 (() => {
   if (typeof pickEntity !== 'function' || typeof entityScreenBounds !== 'function') {
     throw new Error('Structure interaction primitives must load before structure_interaction_perf');
@@ -15,6 +15,8 @@
     exactCandidates: 0,
     hoverPicks: 0,
     hoverEventsCoalesced: 0,
+    entitySceneTargetScansSkipped: 0,
+    eventRuleLinkIndexBuilds: 0,
   };
 
   function densePickEntity(clientX, clientY) {
@@ -120,9 +122,74 @@
     return legacyMouseMove?.(event);
   };
 
+  // app.js selects Entities on mousedown. causal_projection.js also listens for
+  // the following canvas click to resolve Event/Props world-space targets. On a
+  // dense scene that legacy target resolver can scan tens of thousands of rows.
+  // If the click is still inside the Entity selected by mousedown, Entity wins
+  // and the Event/Props scan is provably unnecessary.
+  function selectedEntityUnderPointer(clientX, clientY) {
+    if (!ws || selected.size !== 1 || !activeEntityId) return false;
+    const entity = assertWorkspace().entities.find(item => item.id === activeEntityId);
+    if (!entity) return false;
+    const density = devicePixelRatio || 1;
+    const bounds = entityScreenBounds(entity, viewProjection());
+    if (!bounds) return false;
+    const x = clientX * density;
+    const y = clientY * density;
+    return x >= bounds.minX && x <= bounds.maxX && y >= bounds.minY && y <= bounds.maxY;
+  }
+
+  canvas.addEventListener('click', event => {
+    if (event.button !== 0 || !selectedEntityUnderPointer(event.clientX, event.clientY)) return;
+    stats.entitySceneTargetScansSkipped += 1;
+    event.stopImmediatePropagation();
+  }, true);
+
+  // Event Rule summaries used to rebuild and rescan the complete canonical link
+  // collection separately for every Ruleset. Reuse Structure's frame-local
+  // linkProperties() collection and build endpoint indexes once for that source.
+  if (typeof eventRuleLinks === 'function' && typeof eventRuleSubjectLinks === 'function' && typeof linkProperties === 'function') {
+    let cachedSource = null;
+    let cachedRows = null;
+    let parentIndex = null;
+    let childIndex = null;
+
+    function ensureEventRuleLinkIndexes() {
+      const source = linkProperties();
+      if (source === cachedSource && cachedRows && parentIndex && childIndex) return;
+      cachedSource = source;
+      cachedRows = source.map(({ owner, property }) => ({ owner, property, value: property.value }));
+      parentIndex = new Map();
+      childIndex = new Map();
+      for (const entry of cachedRows) {
+        const rulesetRef = entry.property.ruleset_ref;
+        const parentKey = `${rulesetRef}\u0000${entry.value.parent_ref}`;
+        const childKey = `${rulesetRef}\u0000${entry.value.child_ref}`;
+        if (!parentIndex.has(parentKey)) parentIndex.set(parentKey, []);
+        if (!childIndex.has(childKey)) childIndex.set(childKey, []);
+        parentIndex.get(parentKey).push(entry);
+        childIndex.get(childKey).push(entry);
+      }
+      stats.eventRuleLinkIndexBuilds += 1;
+    }
+
+    eventRuleLinks = function eventRuleLinksIndexed() {
+      ensureEventRuleLinkIndexes();
+      return cachedRows;
+    };
+
+    eventRuleSubjectLinks = function eventRuleSubjectLinksIndexed(ruleset, role, subjectRef) {
+      ensureEventRuleLinkIndexes();
+      const endpoint = eventRuleEndpointField(ruleset, role);
+      const key = `${ruleset.id}\u0000${subjectRef}`;
+      return (endpoint === 'parent_ref' ? parentIndex : childIndex).get(key) ?? [];
+    };
+  }
+
   window.StructureInteractionPerf = Object.freeze({
     stats: () => ({ ...stats }),
     legacyPickEntity,
     densePickEntity,
+    selectedEntityUnderPointer,
   });
 })();
