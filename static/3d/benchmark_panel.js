@@ -1,5 +1,4 @@
 // Settings integration for the real Structure high-density benchmark.
-// The benchmark uses the normal Structure scene, canonical objects and Event path.
 (() => {
   if (!globalThis.StructureBenchmark) throw new Error('Structure benchmark must load before benchmark panel');
 
@@ -20,7 +19,6 @@
     const batch = globalThis.StructureRenderBatch?.stats?.() ?? {};
     const residency = globalThis.StructureRenderBatch?.residency?.() ?? {};
     const memory = performance.memory ? `${(performance.memory.usedJSHeapSize / 1048576).toFixed(1)} MB` : 'n/a';
-    const uploadBytes = Number(batch.uploadBytes ?? 0);
     return [
       'STRUCTURE BENCHMARK',
       `nodes         ${metric.nodes.toLocaleString()}`,
@@ -34,7 +32,6 @@
       `render CPU    ${metric.render_ms.toFixed(2)} ms`,
       `draw calls    ${batch.drawCalls ?? metric.draw_calls}`,
       `buffer uploads ${batch.uploads ?? metric.uploads}`,
-      `upload bytes  ${uploadBytes.toLocaleString()}`,
       `GPU resident  ${batch.resident ? 'YES' : 'NO'}`,
       `resident compiles ${residency.residentCompiles ?? 0}`,
       `resident frames ${residency.residentFrames ?? 0}`,
@@ -42,12 +39,6 @@
       `workspace build ${metric.build_ms.toFixed(1)} ms`,
       `benchmark cap Display`,
       `JS heap       ${memory}`,
-      '',
-      'Real Structure path:',
-      'Entity + Props + Event + Effect + Links',
-      'TRIGGER Event -> normal causal playback',
-      '',
-      'Target: camera-only = 0 uploads/frame.',
     ].join('\n');
   }
 
@@ -79,36 +70,71 @@
     state.previousFpsLimit = null;
   }
 
-  function setEnabled(enabled) {
+  function showBuildProgress(info) {
+    const wrap = document.querySelector('#benchmarkBuildProgress');
+    const bar = document.querySelector('#benchmarkBuildBar');
+    const text = document.querySelector('#benchmarkBuildText');
+    if (!wrap || !bar || !text) return;
+    wrap.hidden = false;
+    bar.value = info.percent;
+    text.textContent = `${info.phase} · ${Math.round(info.percent)}%`;
+  }
+
+  function hideBuildProgress() {
+    const wrap = document.querySelector('#benchmarkBuildProgress');
+    if (wrap) wrap.hidden = true;
+  }
+
+  async function setEnabled(enabled) {
     const toggle = document.querySelector('#s3dBenchmarkEnabled');
     const metrics = document.querySelector('#structureBenchmarkMetrics');
-    if (!toggle || !metrics) return;
+    const nodes = document.querySelector('#s3dBenchmarkNodes');
+    const fire = document.querySelector('#structureBenchmarkFire');
+    if (!toggle || !metrics || !nodes || !fire) return;
+
     const next = Boolean(enabled);
-    if (next === state.enabled) return;
-    state.enabled = next;
-    toggle.checked = next;
-    if (next) {
-      enableBenchmarkCapacityMode();
-      try {
-        StructureBenchmark.activate(state.nodes);
-      } catch (error) {
-        state.enabled = false;
-        toggle.checked = false;
-        restoreUserFrameRateLimit();
-        throw error;
-      }
-      metrics.hidden = false;
-      cancelAnimationFrame(state.metricsFrame);
-      updateMetrics();
-    } else {
+    if (!next) {
+      state.enabled = false;
+      toggle.checked = false;
+      toggle.disabled = false;
+      nodes.disabled = false;
+      fire.disabled = true;
       cancelAnimationFrame(state.metricsFrame);
       state.metricsFrame = 0;
-      try {
-        StructureBenchmark.deactivate();
-      } finally {
-        restoreUserFrameRateLimit();
-      }
+      StructureBenchmark.deactivate();
+      restoreUserFrameRateLimit();
+      hideBuildProgress();
       metrics.hidden = true;
+      return;
+    }
+
+    if (state.enabled || StructureBenchmark.state.building) return;
+    toggle.checked = true;
+    toggle.disabled = true;
+    nodes.disabled = true;
+    fire.disabled = true;
+    metrics.hidden = true;
+    showBuildProgress({ phase: 'Preparing benchmark', percent: 0 });
+
+    try {
+      await StructureBenchmark.activate(state.nodes, showBuildProgress);
+      enableBenchmarkCapacityMode();
+      state.enabled = true;
+      metrics.hidden = false;
+      hideBuildProgress();
+      fire.disabled = false;
+      cancelAnimationFrame(state.metricsFrame);
+      updateMetrics();
+    } catch (error) {
+      state.enabled = false;
+      toggle.checked = false;
+      hideBuildProgress();
+      restoreUserFrameRateLimit();
+      window.reportStructureError?.(error, { type: 'benchmark_build' });
+      throw error;
+    } finally {
+      toggle.disabled = false;
+      nodes.disabled = false;
     }
   }
 
@@ -121,10 +147,8 @@
     metrics.hidden = true;
     Object.assign(metrics.style, {
       position: 'fixed', right: '16px', bottom: '16px', zIndex: '12000', margin: '0', padding: '10px 12px',
-      minWidth: '285px', maxWidth: 'calc(100vw - 32px)', whiteSpace: 'pre', pointerEvents: 'none',
-      background: 'rgba(5, 8, 13, .88)', border: '1px solid rgba(90, 125, 170, .55)', borderRadius: '6px',
-      color: '#dbe9ff', font: '12px/1.35 ui-monospace, SFMono-Regular, Consolas, monospace',
-      boxShadow: '0 8px 28px rgba(0,0,0,.35)',
+      minWidth: '285px', background: 'rgba(5, 8, 13, .88)', border: '1px solid rgba(90, 125, 170, .55)',
+      borderRadius: '6px', color: '#dbe9ff', font: '12px/1.35 ui-monospace, SFMono-Regular, Consolas, monospace',
     });
     document.body.appendChild(metrics);
 
@@ -138,21 +162,26 @@
 
     const nodeLabel = create('label');
     nodeLabel.append(document.createTextNode('Nodes '));
-    const nodes = create('input', {
-      id: 's3dBenchmarkNodes', type: 'range', min: '100', max: '20000', step: '100', value: String(state.nodes),
-    });
+    const nodes = create('input', { id: 's3dBenchmarkNodes', type: 'range', min: '100', max: '20000', step: '100', value: String(state.nodes) });
     const nodeCount = create('output', { id: 's3dBenchmarkNodeCount' }, state.nodes.toLocaleString());
     nodeLabel.append(nodes, document.createTextNode(' '), nodeCount);
 
-    const fire = create('button', { id: 'structureBenchmarkFire', type: 'button' }, 'FIRE TRIGGER EVENT');
-    const note = create('small', { className: 'muted' },
-      'Creates a temporary real Structure workspace. Performance benchmark runs uncapped; your FPS limit is restored when stopped. The TRIGGER Entity is left of the blue cube; its Event starts the normal causal chain.');
+    const progressWrap = create('div', { id: 'benchmarkBuildProgress' });
+    progressWrap.hidden = true;
+    const progressBar = create('progress', { id: 'benchmarkBuildBar', max: '100', value: '0' });
+    progressBar.style.width = '100%';
+    const progressText = create('small', { id: 'benchmarkBuildText', className: 'muted' }, 'Preparing benchmark');
+    progressWrap.append(progressBar, progressText);
 
-    enable.addEventListener('change', () => setEnabled(enable.checked));
+    const fire = create('button', { id: 'structureBenchmarkFire', type: 'button' }, 'FIRE TRIGGER EVENT');
+    fire.disabled = true;
+    const note = create('small', { className: 'muted' }, 'Benchmark workspace is generated in chunks so large tests do not block the tab. Rendering starts only after the workspace is complete.');
+
+    enable.addEventListener('change', () => setEnabled(enable.checked).catch(error => window.reportStructureError?.(error, { type: 'benchmark_toggle' })));
     nodes.addEventListener('change', () => setNodes(nodes.value));
     fire.addEventListener('click', () => StructureBenchmark.fire());
 
-    body.append(enableLabel, nodeLabel, fire, note);
+    body.append(enableLabel, nodeLabel, progressWrap, fire, note);
     details.append(summary, body);
     settings.append(document.createElement('hr'), details);
   }
