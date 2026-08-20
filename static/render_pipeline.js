@@ -1,12 +1,13 @@
 // Explicit Structure render pipeline.
-// The app owns one core render function. Projection/cache/backend modules register
-// stages here; they never replace global render() themselves.
+// The app owns one core render function. Projection/cache/backend/metrics modules
+// register stages here; they never replace global render() themselves.
 (() => {
   if (typeof render !== 'function') throw new Error('Structure core render must exist before render_pipeline');
 
   const coreRenderer = render;
   const beforeFrame = new Map();
   const passes = new Map();
+  const afterFrame = new Map();
   let backend = null;
   let backendName = 'direct';
   let frame = 0;
@@ -14,6 +15,8 @@
   let lastRenderedAt = 0;
   let renderedFrames = 0;
   let skippedFrames = 0;
+  let running = false;
+  let rafId = 0;
 
   function ordered(map) {
     return [...map.values()].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
@@ -60,10 +63,19 @@
       frame: ++frame,
       renderContent,
       backend: backendName,
+      result: undefined,
+      error: null,
     };
     for (const stage of ordered(beforeFrame)) stage.fn(context);
-    if (backend) return backend(context);
-    return renderContent(context);
+    try {
+      context.result = backend ? backend(context) : renderContent(context);
+      return context.result;
+    } catch (error) {
+      context.error = error;
+      throw error;
+    } finally {
+      for (const stage of ordered(afterFrame)) stage.fn(context);
+    }
   }
 
   function frameDue(timestamp) {
@@ -80,19 +92,40 @@
     return true;
   }
 
+  function scheduleNext() {
+    if (!running || rafId) return;
+    rafId = requestAnimationFrame(render);
+  }
+
   function renderDispatcher(timestamp = performance.now()) {
-    if (!frameDue(timestamp)) {
-      skippedFrames += 1;
-      requestAnimationFrame(render);
-      return;
-    }
-    renderedFrames += 1;
+    rafId = 0;
+    if (!running) running = true;
     try {
+      if (!frameDue(timestamp)) {
+        skippedFrames += 1;
+        return;
+      }
+      renderedFrames += 1;
       return renderFrame(timestamp);
     } catch (error) {
       window.reportStructureError?.(error, { type: 'render_pipeline' });
+      running = false;
       throw error;
+    } finally {
+      scheduleNext();
     }
+  }
+
+  function start() {
+    if (running) return;
+    running = true;
+    scheduleNext();
+  }
+
+  function stop() {
+    running = false;
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = 0;
   }
 
   // This is the only global render assignment in the architecture. All modules
@@ -102,14 +135,27 @@
   window.StructureRenderPipeline = Object.freeze({
     addBeforeFrame: (name, fn, order = 0) => register(beforeFrame, name, fn, order),
     addPass: (name, fn, order = 0) => register(passes, name, fn, order),
+    addAfterFrame: (name, fn, order = 0) => register(afterFrame, name, fn, order),
     removeBeforeFrame: name => beforeFrame.delete(name),
     removePass: name => passes.delete(name),
+    removeAfterFrame: name => afterFrame.delete(name),
     setBackend,
     clearBackend,
     setFpsLimit,
     getFpsLimit: () => fpsLimit,
     renderFrame,
+    start,
+    stop,
+    isRunning: () => running,
     coreRenderer: () => coreRenderer,
-    stats: () => ({ frame, fpsLimit, renderedFrames, skippedFrames, backend: backendName, passes: ordered(passes).map(item => item.name) }),
+    stats: () => ({
+      frame,
+      fpsLimit,
+      renderedFrames,
+      skippedFrames,
+      backend: backendName,
+      passes: ordered(passes).map(item => item.name),
+      running,
+    }),
   });
 })();
