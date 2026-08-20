@@ -3,6 +3,7 @@
 // projection, camera and causal Event mechanisms. No benchmark renderer exists.
 (() => {
   if (!globalThis.S3D?.Benchmark) throw new Error('S3D benchmark metrics must load before Structure benchmark');
+  if (!window.StructureRenderPipeline) throw new Error('Structure render pipeline must load before Structure benchmark');
 
   const BENCH = {
     active: false,
@@ -12,6 +13,7 @@
     lastDrawCalls: 0,
     lastUploads: 0,
     lastRenderMs: 0,
+    frameStartedAt: 0,
     buildMs: 0,
     canonicalLinkCount: 0,
     triggerEventRef: 'EVENT_BENCH_TRIGGER',
@@ -250,6 +252,7 @@
     suspendOtherCanvases();
     syncUi(`benchmark ${count.toLocaleString()} Structure nodes · click TRIGGER Event`);
     fitWorkspaceToView();
+    window.StructureRenderBatch?.invalidate?.('benchmark_workspace_built');
     return built.workspace;
   }
 
@@ -267,6 +270,7 @@
     if (typeof causalProjection !== 'undefined' && previous.maxDepth !== null) causalProjection.maxDepth = previous.maxDepth;
     BENCH.active = false;
     BENCH.original = null;
+    window.StructureRenderBatch?.invalidate?.('benchmark_stopped');
     syncUi('benchmark stopped · workspace restored');
   }
 
@@ -306,20 +310,20 @@
 
   function installRenderMetrics() {
     if (globalThis.__structureBenchmarkRenderMetricsInstalled) return;
-    if (typeof globalThis.render !== 'function') throw new Error('Structure render function unavailable for benchmark metrics');
     patchGlCounters();
-    const baseRender = globalThis.render;
-    globalThis.render = function renderWithStructureBenchmarkMetrics() {
-      if (!BENCH.active) return baseRender();
+    window.StructureRenderPipeline.addBeforeFrame('benchmark-metrics-start', () => {
+      if (!BENCH.active) return;
       BENCH.lastDrawCalls = 0;
       BENCH.lastUploads = 0;
-      const started = performance.now();
-      const result = baseRender();
+      BENCH.frameStartedAt = performance.now();
+    }, -1000);
+    window.StructureRenderPipeline.addAfterFrame('benchmark-metrics-end', () => {
+      if (!BENCH.active || !BENCH.frameStartedAt) return;
       const ended = performance.now();
-      BENCH.lastRenderMs = ended - started;
+      BENCH.lastRenderMs = ended - BENCH.frameStartedAt;
       BENCH.metrics.push(ended);
-      return result;
-    };
+      BENCH.frameStartedAt = 0;
+    }, 1000);
     globalThis.__structureBenchmarkRenderMetricsInstalled = true;
   }
 
